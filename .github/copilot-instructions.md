@@ -49,23 +49,29 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Copyright stored in TCOP frame via `tag.set_text("TCOP", value)`
   - Lyrics stored in USLT frame (Unsynchronised lyrics) with language code "spa" and Content::Lyrics
   - URL stored in WOAR frame (Official artist webpage) with Content::Link
+  - Apple metadata: TCMP (compilation flag, "1" = compilation), TSOA (album sort), TSOP (artist sort), TSOT (title sort)
   - Cover art MIME types auto-detected from file extension: .jpg/.jpeg → image/jpeg, .png → image/png, .webp → image/webp
   - `detect_mime_type()` function validates image formats and returns appropriate MIME type
   - `add_cover_art()` now accepts `&Path` to detect format before embedding
   - `add_lyrics()` creates Frame with Content::Lyrics and adds to tag
+  - `add_url()` creates Frame with Content::Link for WOAR frame
+  - `add_apple_metadata()` handles all Apple-specific frames (TCMP, TSOA, TSOP, TSOT)
   - No network or external credentials discovered — changes are local filesystem operations
 
 - **Supported features (as of current version):**
   - Basic metadata: title, artist(s), album, year, genre, track
   - Extended metadata: date (recorded), copyright, lyrics (USLT frame), url (WOAR frame)
+  - Standard ID3v2 tags: composer (TCOM), subtitle (TIT3), original artist (TOPE), album artist (TPE2)
+  - Apple metadata: compilation flag (TCMP), sort orders (TSOA, TSOP, TSOT)
   - Cover art: JPG, PNG, and WEBP files as front cover with MIME type auto-detection
   - Display: `--show` flag to view all tags (lyrics preview shows first 3 lines)
   - Tag removal: `--remove` flag to delete specific tags (supports English/Spanish names)
   - Multiple artists: specify `--artist` multiple times, joined with "; "
+  - **Perfect for podcasts:** All recommended tags for podcast episodes supported
 
 - **What an AI helper should do first:**
   1. Run `cargo build` to ensure the toolchain and dependencies are available
-  2. Run `cargo test` to verify all 35 tests pass
+  2. Run `cargo test` to verify all 92 tests pass (55 unit + 37 integration)
   3. Review [src/main.rs](src/main.rs#L1) to understand the complete implementation
   4. Test with: `cargo run -- -f /tmp/test.mp3 --show`
 
@@ -80,12 +86,15 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - All new features must include tests (both unit and integration)
   - Maintain the pattern of extracting testable functions from `main()`
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing test coverage - currently at 63 tests
-  - When modifying `apply_metadata()`, `add_cover_art()`, `add_lyrics()`, or `add_url()`, update ALL tests that call them
+  - Preserve existing test coverage - currently at 92 tests (55 unit + 37 integration)
+  - When modifying `apply_metadata()`, `add_cover_art()`, `add_lyrics()`, `add_url()`, or `add_apple_metadata()`, update ALL tests that call them
+  - apply_metadata() now takes 13 parameters: title, artists, album, year, genre, track, date, copyright, composer, subtitle, original_artist, album_artist
   - Use "; " separator for multiple artists (not " / ")
   - Supported image formats: JPG, PNG, WEBP - validate extensions and return helpful errors
   - Tag names accept both English and Spanish for user-friendly CLI
   - Lyrics use ISO-639-2 language code "spa" for Spanish
+  - Apple metadata: TCMP uses "1" for compilation, TSOA/TSOP/TSOT use set_text() for sort orders
+  - Standard ID3v2: TCOM (composer), TIT3 (subtitle), TOPE (original artist), TPE2 (album artist via set_album_artist())
 
 - **Testing patterns:**
   - Unit tests in `src/main.rs` under `#[cfg(test)] mod tests`

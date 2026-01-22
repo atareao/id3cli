@@ -764,3 +764,308 @@ fn test_cli_remove_url() {
     
     cleanup_file(&mp3_path);
 }
+
+#[test]
+fn test_cli_add_compilation() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--compilation"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Compilación"));
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.get("TCMP").and_then(|f| f.content().text()), Some("1"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_add_sort_orders() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--album-sort", "Sort Album",
+                "--artist-sort", "Sort Artist",
+                "--title-sort", "Sort Title"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.get("TSOA").and_then(|f| f.content().text()), Some("Sort Album"));
+    assert_eq!(tag.get("TSOP").and_then(|f| f.content().text()), Some("Sort Artist"));
+    assert_eq!(tag.get("TSOT").and_then(|f| f.content().text()), Some("Sort Title"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_apple_metadata() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir metadatos de Apple
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--compilation",
+                "--album-sort", "The Album"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Mostrar tags
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "--show"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Compilación"));
+    assert!(stdout.contains("Orden álbum"));
+    assert!(stdout.contains("The Album"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_compilation() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir compilation
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--compilation"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Verificar que se añadió
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(tag.get("TCMP").is_some());
+    
+    // Eliminar compilation
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "-r", "compilation"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    // Verificar que se eliminó
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(tag.get("TCMP").is_none());
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_apple_sort_orders() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir sort orders
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--album-sort", "A", "--artist-sort", "B"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Verificar que se añadieron
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(tag.get("TSOA").is_some());
+    assert!(tag.get("TSOP").is_some());
+    
+    // Eliminar
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "-r", "album_sort", "-r", "artist_sort"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    // Verificar que se eliminaron
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(tag.get("TSOA").is_none());
+    assert!(tag.get("TSOP").is_none());
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_add_composer() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--composer", "John Lennon"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.get("TCOM").and_then(|f| f.content().text()), Some("John Lennon"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_add_subtitle() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--subtitle", "Extended Version"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.get("TIT3").and_then(|f| f.content().text()), Some("Extended Version"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_add_original_artist() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--original-artist", "The Beatles"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.get("TOPE").and_then(|f| f.content().text()), Some("The Beatles"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_add_album_artist() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--album-artist", "Various Artists"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.album_artist(), Some("Various Artists"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_podcast_metadata() {
+    let mp3_path = create_temp_mp3();
+    
+    // Simular metadatos de un podcast
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--title", "Episodio 42",
+                "--subtitle", "Hablando de Rust",
+                "--artist", "Lorenzo",
+                "--album", "atareao con Linux",
+                "--album-artist", "Lorenzo",
+                "--composer", "Lorenzo",
+                "--original-artist", "Lorenzo",
+                "--genre", "Podcast",
+                "--track", "42",
+                "--date", "2026-01-22",
+                "--copyright", "© 2026 CC BY 4.0"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Episodio 42"));
+    assert_eq!(tag.get("TIT3").and_then(|f| f.content().text()), Some("Hablando de Rust"));
+    assert_eq!(tag.artist(), Some("Lorenzo"));
+    assert_eq!(tag.album(), Some("atareao con Linux"));
+    assert_eq!(tag.album_artist(), Some("Lorenzo"));
+    assert_eq!(tag.get("TCOM").and_then(|f| f.content().text()), Some("Lorenzo"));
+    assert_eq!(tag.get("TOPE").and_then(|f| f.content().text()), Some("Lorenzo"));
+    assert_eq!(tag.genre(), Some("Podcast"));
+    assert_eq!(tag.track(), Some(42));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_new_tags() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir todas las etiquetas nuevas
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--composer", "Compositor",
+                "--subtitle", "Subtítulo",
+                "--original-artist", "Artista Original",
+                "--album-artist", "Artista del Álbum"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Mostrar tags
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "--show"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Compositor"));
+    assert!(stdout.contains("Subtítulo"));
+    assert!(stdout.contains("Artista Original"));
+    assert!(stdout.contains("Artista del Álbum"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_new_tags() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir tags
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--composer", "Test",
+                "--subtitle", "Test",
+                "--original-artist", "Test",
+                "--album-artist", "Test"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Eliminar tags
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "-r", "composer", "-r", "subtitle", "-r", "original_artist", "-r", "album_artist"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    // Verificar eliminación
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(tag.get("TCOM").is_none());
+    assert!(tag.get("TIT3").is_none());
+    assert!(tag.get("TOPE").is_none());
+    assert!(tag.album_artist().is_none());
+    
+    cleanup_file(&mp3_path);
+}
