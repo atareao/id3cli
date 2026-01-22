@@ -52,6 +52,10 @@ struct Args {
     /// Mostrar todos los tags del archivo
     #[arg(short, long)]
     show: bool,
+
+    /// Eliminar tags específicos (title, artist, album, year, genre, track, date, copyright, cover)
+    #[arg(short, long)]
+    remove: Vec<String>,
 }
 
 /// Aplica los metadatos especificados al tag ID3
@@ -130,6 +134,63 @@ fn add_cover_art(tag: &mut Tag, cover_data: Vec<u8>) -> Result<(), Box<dyn std::
     let picture = create_picture_frame(cover_data, "image/jpeg");
     tag.add_frame(picture);
     Ok(())
+}
+
+/// Elimina tags específicos del archivo
+fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
+    let mut changed = false;
+    
+    for tag_name in tags_to_remove {
+        let removed = match tag_name.to_lowercase().as_str() {
+            "title" | "título" => {
+                tag.remove_title();
+                true
+            }
+            "artist" | "artista" => {
+                tag.remove_artist();
+                true
+            }
+            "album" | "álbum" => {
+                tag.remove_album();
+                true
+            }
+            "year" | "año" => {
+                tag.remove_year();
+                true
+            }
+            "genre" | "género" | "genero" => {
+                tag.remove_genre();
+                true
+            }
+            "track" | "pista" => {
+                tag.remove_track();
+                true
+            }
+            "date" | "fecha" => {
+                tag.remove_date_recorded();
+                true
+            }
+            "copyright" => {
+                tag.remove("TCOP");
+                true
+            }
+            "cover" | "carátula" | "caratula" => {
+                tag.remove_all_pictures();
+                true
+            }
+            _ => {
+                eprintln!("⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, date, copyright, cover", tag_name);
+                false
+            }
+        };
+        
+        if removed {
+            println!("✓ Eliminado: {}", tag_name);
+            changed = true;
+        }
+    }
+    
+    changed
 }
 
 /// Muestra todos los tags del archivo MP3
@@ -224,6 +285,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // Procesar eliminación de tags si se especificó
+    let mut removed = false;
+    if !args.remove.is_empty() {
+        removed = remove_tags(&mut tag, &args.remove);
+    }
+
     // Aplicar metadatos
     let changed = apply_metadata(
         &mut tag,
@@ -278,7 +345,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Guardar cambios
-    if changed || cover_added {
+    if changed || cover_added || removed {
         tag.write_to_path(&args.file, id3::Version::Id3v24)?;
         println!("\n✅ Tags guardados correctamente en '{}'", args.file.display());
     } else {
@@ -548,5 +615,64 @@ mod tests {
         
         assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026".to_string()));
         assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© Test"));
+    }
+
+    #[test]
+    fn test_remove_title() {
+        let mut tag = Tag::new();
+        tag.set_title("Test Title");
+        assert_eq!(tag.title(), Some("Test Title"));
+        
+        let changed = remove_tags(&mut tag, &["title".to_string()]);
+        assert!(changed);
+        assert_eq!(tag.title(), None);
+    }
+
+    #[test]
+    fn test_remove_multiple_tags() {
+        let mut tag = Tag::new();
+        tag.set_title("Title");
+        tag.set_artist("Artist");
+        tag.set_album("Album");
+        
+        let changed = remove_tags(&mut tag, &["title".to_string(), "artist".to_string()]);
+        assert!(changed);
+        assert_eq!(tag.title(), None);
+        assert_eq!(tag.artist(), None);
+        assert_eq!(tag.album(), Some("Album")); // No eliminado
+    }
+
+    #[test]
+    fn test_remove_unknown_tag() {
+        let mut tag = Tag::new();
+        tag.set_title("Title");
+        
+        let changed = remove_tags(&mut tag, &["invalid_tag".to_string()]);
+        assert!(!changed);
+        assert_eq!(tag.title(), Some("Title")); // No afectado
+    }
+
+    #[test]
+    fn test_remove_tags_spanish() {
+        let mut tag = Tag::new();
+        tag.set_title("Título");
+        tag.set_artist("Artista");
+        
+        let changed = remove_tags(&mut tag, &["título".to_string(), "artista".to_string()]);
+        assert!(changed);
+        assert_eq!(tag.title(), None);
+        assert_eq!(tag.artist(), None);
+    }
+
+    #[test]
+    fn test_remove_cover() {
+        let mut tag = Tag::new();
+        let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        add_cover_art(&mut tag, data).unwrap();
+        assert_eq!(tag.pictures().count(), 1);
+        
+        let changed = remove_tags(&mut tag, &["cover".to_string()]);
+        assert!(changed);
+        assert_eq!(tag.pictures().count(), 0);
     }
 }

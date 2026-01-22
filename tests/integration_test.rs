@@ -385,3 +385,123 @@ fn test_cli_complete_metadata() {
     
     cleanup_file(&mp3_path);
 }
+
+#[test]
+fn test_cli_remove_title() {
+    let mp3_path = create_temp_mp3();
+    
+    // Primero añadir tags
+    Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Remove Me",
+            "--artist", "Keep Me"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Luego eliminar solo el título
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--remove", "title"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None);
+    assert_eq!(tag.artist(), Some("Keep Me")); // Debe preservarse
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_multiple_tags() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir varios tags
+    Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Title",
+            "--artist", "Artist",
+            "--album", "Album",
+            "--year", "2026"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Eliminar varios tags
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--remove", "title",
+            "--remove", "artist"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None);
+    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.album(), Some("Album")); // Debe preservarse
+    assert_eq!(tag.year(), Some(2026)); // Debe preservarse
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_all_tags() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir tags
+    Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Title",
+            "--artist", "Artist",
+            "--album", "Album",
+            "--year", "2026",
+            "--genre", "Rock",
+            "--track", "5"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Eliminar todos
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--remove", "title",
+            "--remove", "artist",
+            "--remove", "album",
+            "--remove", "year",
+            "--remove", "genre",
+            "--remove", "track"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None);
+    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.album(), None);
+    assert_eq!(tag.year(), None);
+    assert_eq!(tag.genre(), None);
+    assert_eq!(tag.track(), None);
+    
+    cleanup_file(&mp3_path);
+}
