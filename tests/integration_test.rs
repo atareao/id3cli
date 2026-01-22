@@ -186,7 +186,7 @@ fn test_cli_multiple_artists() {
     assert!(output.status.success());
     
     let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert_eq!(tag.artist(), Some("Artist 1 / Artist 2 / Artist 3"));
+    assert_eq!(tag.artist(), Some("Artist 1; Artist 2; Artist 3"));
     
     cleanup_file(&mp3_path);
 }
@@ -210,7 +210,178 @@ fn test_cli_multiple_artists_with_title() {
     
     let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
     assert_eq!(tag.title(), Some("Collaboration Song"));
-    assert_eq!(tag.artist(), Some("DJ Snake / Justin Bieber"));
+    assert_eq!(tag.artist(), Some("DJ Snake; Justin Bieber"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_tags() {
+    let mp3_path = create_temp_mp3();
+    
+    // Primero añadir algunos tags
+    Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Show Test",
+            "--artist", "Test Artist",
+            "--album", "Test Album",
+            "--year", "2026"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Ahora mostrar los tags
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--show"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Show Test"));
+    assert!(stdout.contains("Test Artist"));
+    assert!(stdout.contains("Test Album"));
+    assert!(stdout.contains("2026"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_empty_tags() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--show"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_track_number() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Track Test",
+            "--track", "5"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Track Test"));
+    assert_eq!(tag.track(), Some(5));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_all_metadata_with_track() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Complete Song",
+            "--artist", "Complete Artist",
+            "--album", "Complete Album",
+            "--year", "2026",
+            "--genre", "Pop",
+            "--track", "3"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Complete Song"));
+    assert_eq!(tag.artist(), Some("Complete Artist"));
+    assert_eq!(tag.album(), Some("Complete Album"));
+    assert_eq!(tag.year(), Some(2026));
+    assert_eq!(tag.genre(), Some("Pop"));
+    assert_eq!(tag.track(), Some(3));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_date_and_copyright() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Copyright Test",
+            "--date", "2026-01-22",
+            "--copyright", "© 2026 Test Records"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Copyright Test"));
+    assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026-01-22".to_string()));
+    assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© 2026 Test Records"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_complete_metadata() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&[
+            "run", "--quiet", "--",
+            "--file", mp3_path.to_str().unwrap(),
+            "--title", "Complete",
+            "--artist", "Artist One",
+            "--artist", "Artist Two",
+            "--album", "Album",
+            "--year", "2026",
+            "--genre", "Jazz",
+            "--track", "7",
+            "--date", "2026-01",
+            "--copyright", "© All Rights Reserved"
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Complete"));
+    assert_eq!(tag.artist(), Some("Artist One; Artist Two"));
+    assert_eq!(tag.album(), Some("Album"));
+    assert_eq!(tag.year(), Some(2026));
+    assert_eq!(tag.genre(), Some("Jazz"));
+    assert_eq!(tag.track(), Some(7));
+    assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026-01".to_string()));
+    assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© All Rights Reserved"));
     
     cleanup_file(&mp3_path);
 }

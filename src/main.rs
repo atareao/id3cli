@@ -33,9 +33,25 @@ struct Args {
     #[arg(short, long)]
     genre: Option<String>,
 
+    /// Número de pista
+    #[arg(short = 'T', long)]
+    track: Option<u32>,
+
+    /// Fecha de grabación (YYYY-MM-DD o YYYY)
+    #[arg(short = 'd', long)]
+    date: Option<String>,
+
+    /// Copyright
+    #[arg(short = 'C', long)]
+    copyright: Option<String>,
+
     /// Ruta del archivo JPG para la carátula
     #[arg(short, long)]
     cover: Option<PathBuf>,
+
+    /// Mostrar todos los tags del archivo
+    #[arg(short, long)]
+    show: bool,
 }
 
 /// Aplica los metadatos especificados al tag ID3
@@ -46,6 +62,9 @@ fn apply_metadata(
     album: Option<&str>,
     year: Option<i32>,
     genre: Option<&str>,
+    track: Option<u32>,
+    date: Option<&str>,
+    copyright: Option<&str>,
 ) -> bool {
     let mut changed = false;
 
@@ -55,7 +74,7 @@ fn apply_metadata(
     }
 
     if !artists.is_empty() {
-        let artist_string = artists.join(" / ");
+        let artist_string = artists.join("; ");
         tag.set_artist(&artist_string);
         changed = true;
     }
@@ -72,6 +91,24 @@ fn apply_metadata(
 
     if let Some(genre) = genre {
         tag.set_genre(genre);
+        changed = true;
+    }
+
+    if let Some(track) = track {
+        tag.set_track(track);
+        changed = true;
+    }
+
+    if let Some(date) = date {
+        // Intentar parsear la fecha - acepta YYYY, YYYY-MM, YYYY-MM-DD
+        if let Ok(timestamp) = date.parse() {
+            tag.set_date_recorded(timestamp);
+            changed = true;
+        }
+    }
+
+    if let Some(copyright) = copyright {
+        tag.set_text("TCOP", copyright);
         changed = true;
     }
 
@@ -95,6 +132,65 @@ fn add_cover_art(tag: &mut Tag, cover_data: Vec<u8>) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// Muestra todos los tags del archivo MP3
+fn display_tags(tag: &Tag) {
+    println!("\n📋 Tags ID3 encontrados:\n");
+    println!("═══════════════════════════════════════");
+    
+    if let Some(title) = tag.title() {
+        println!("🎵 Título:    {}", title);
+    }
+    
+    if let Some(artist) = tag.artist() {
+        println!("🎤 Artista:   {}", artist);
+    }
+    
+    if let Some(album) = tag.album() {
+        println!("💿 Álbum:     {}", album);
+    }
+    
+    if let Some(year) = tag.year() {
+        println!("📅 Año:       {}", year);
+    }
+    
+    if let Some(date) = tag.date_recorded() {
+        println!("📆 Fecha:     {}", date);
+    }
+    
+    if let Some(genre) = tag.genre() {
+        println!("🎸 Género:    {}", genre);
+    }
+    
+    if let Some(track) = tag.track() {
+        println!("#️⃣  Pista:     {}", track);
+    }
+    
+    if let Some(copyright) = tag.get("TCOP").and_then(|f| f.content().text()) {
+        println!("©️  Copyright: {}", copyright);
+    }
+    
+    if let Some(album_artist) = tag.album_artist() {
+        println!("👥 Artista del álbum: {}", album_artist);
+    }
+    
+    let pictures: Vec<_> = tag.pictures().collect();
+    if !pictures.is_empty() {
+        println!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+        for (i, pic) in pictures.iter().enumerate() {
+            println!("   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes", 
+                i + 1, pic.picture_type, pic.mime_type, pic.data.len());
+        }
+    }
+    
+    // Mostrar otros frames si existen
+    let frame_count = tag.frames().count();
+    if frame_count > 0 {
+        println!("\n📦 Total de frames: {}", frame_count);
+    }
+    
+    println!("═══════════════════════════════════════\n");
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -107,14 +203,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Leer o crear tag
     let mut tag = match Tag::read_from_path(&args.file) {
         Ok(tag) => {
-            println!("Tags existentes encontrados en '{}'", args.file.display());
+            if !args.show {
+                println!("Tags existentes encontrados en '{}'", args.file.display());
+            }
             tag
         }
         Err(_) => {
+            if args.show {
+                eprintln!("⚠️  No se encontraron tags ID3 en '{}'", args.file.display());
+                std::process::exit(0);
+            }
             println!("Creando nuevos tags para '{}'", args.file.display());
             Tag::new()
         }
     };
+
+    // Si solo se quiere mostrar los tags, mostrarlos y salir
+    if args.show {
+        display_tags(&tag);
+        return Ok(());
+    }
 
     // Aplicar metadatos
     let changed = apply_metadata(
@@ -124,6 +232,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.album.as_deref(),
         args.year,
         args.genre.as_deref(),
+        args.track,
+        args.date.as_deref(),
+        args.copyright.as_deref(),
     );
 
     // Imprimir cambios aplicados
@@ -131,7 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("✓ Título: {}", title);
     }
     if !args.artist.is_empty() {
-        println!("✓ Artista(s): {}", args.artist.join(" / "));
+        println!("✓ Artista(s): {}", args.artist.join("; "));
     }
     if let Some(album) = &args.album {
         println!("✓ Álbum: {}", album);
@@ -141,6 +252,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(genre) = &args.genre {
         println!("✓ Género: {}", genre);
+    }
+    if let Some(track) = args.track {
+        println!("✓ Pista: {}", track);
+    }
+    if let Some(date) = &args.date {
+        println!("✓ Fecha: {}", date);
+    }
+    if let Some(copyright) = &args.copyright {
+        println!("✓ Copyright: {}", copyright);
     }
 
     // Añadir carátula
@@ -175,7 +295,7 @@ mod tests {
     #[test]
     fn test_apply_metadata_title_only() {
         let mut tag = Tag::new();
-        let changed = apply_metadata(&mut tag, Some("Test Title"), &[], None, None, None);
+        let changed = apply_metadata(&mut tag, Some("Test Title"), &[], None, None, None, None, None, None);
         
         assert!(changed);
         assert_eq!(tag.title(), Some("Test Title"));
@@ -193,6 +313,9 @@ mod tests {
             Some("Album"),
             Some(2026),
             Some("Rock"),
+            Some(5),
+            Some("2026-01-22"),
+            Some("© 2026 Test Records"),
         );
         
         assert!(changed);
@@ -201,12 +324,15 @@ mod tests {
         assert_eq!(tag.album(), Some("Album"));
         assert_eq!(tag.year(), Some(2026));
         assert_eq!(tag.genre(), Some("Rock"));
+        assert_eq!(tag.track(), Some(5));
+        assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026-01-22".to_string()));
+        assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© 2026 Test Records"));
     }
 
     #[test]
     fn test_apply_metadata_no_changes() {
         let mut tag = Tag::new();
-        let changed = apply_metadata(&mut tag, None, &[], None, None, None);
+        let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None);
         
         assert!(!changed);
     }
@@ -219,6 +345,9 @@ mod tests {
             Some("Title"),
             &[],
             Some("Album"),
+            None,
+            None,
+            None,
             None,
             None,
         );
@@ -261,7 +390,7 @@ mod tests {
         tag.set_artist("Original Artist");
         
         // Solo cambiar el álbum
-        apply_metadata(&mut tag, None, &[], Some("New Album"), None, None);
+        apply_metadata(&mut tag, None, &[], Some("New Album"), None, None, None, None, None);
         
         // El título y artista originales deben preservarse
         assert_eq!(tag.title(), Some("Original Title"));
@@ -274,7 +403,7 @@ mod tests {
         let mut tag = Tag::new();
         tag.set_title("Old Title");
         
-        apply_metadata(&mut tag, Some("New Title"), &[], None, None, None);
+        apply_metadata(&mut tag, Some("New Title"), &[], None, None, None, None, None, None);
         
         assert_eq!(tag.title(), Some("New Title"));
     }
@@ -282,7 +411,7 @@ mod tests {
     #[test]
     fn test_year_negative() {
         let mut tag = Tag::new();
-        apply_metadata(&mut tag, None, &[], None, Some(-1), None);
+        apply_metadata(&mut tag, None, &[], None, Some(-1), None, None, None, None);
         
         assert_eq!(tag.year(), Some(-1));
     }
@@ -290,7 +419,7 @@ mod tests {
     #[test]
     fn test_year_future() {
         let mut tag = Tag::new();
-        apply_metadata(&mut tag, None, &[], None, Some(3000), None);
+        apply_metadata(&mut tag, None, &[], None, Some(3000), None, None, None, None);
         
         assert_eq!(tag.year(), Some(3000));
     }
@@ -299,7 +428,7 @@ mod tests {
     fn test_empty_strings() {
         let mut tag = Tag::new();
         let artists = vec!["".to_string()];
-        let changed = apply_metadata(&mut tag, Some(""), &artists, Some(""), None, Some(""));
+        let changed = apply_metadata(&mut tag, Some(""), &artists, Some(""), None, Some(""), None, None, None);
         
         assert!(changed);
         assert_eq!(tag.title(), Some(""));
@@ -317,6 +446,9 @@ mod tests {
             Some("Álbum 🎵"),
             None,
             None,
+            None,
+            None,
+            None,
         );
         
         assert_eq!(tag.title(), Some("Título con ñ y acentos"));
@@ -328,18 +460,93 @@ mod tests {
     fn test_multiple_artists() {
         let mut tag = Tag::new();
         let artists = vec!["Artist 1".to_string(), "Artist 2".to_string(), "Artist 3".to_string()];
-        let changed = apply_metadata(&mut tag, None, &artists, None, None, None);
+        let changed = apply_metadata(&mut tag, None, &artists, None, None, None, None, None, None);
         
         assert!(changed);
-        assert_eq!(tag.artist(), Some("Artist 1 / Artist 2 / Artist 3"));
+        assert_eq!(tag.artist(), Some("Artist 1; Artist 2; Artist 3"));
     }
 
     #[test]
     fn test_multiple_artists_unicode() {
         let mut tag = Tag::new();
         let artists = vec!["Artista Español".to_string(), "アーティスト".to_string()];
-        apply_metadata(&mut tag, None, &artists, None, None, None);
+        apply_metadata(&mut tag, None, &artists, None, None, None, None, None, None);
         
-        assert_eq!(tag.artist(), Some("Artista Español / アーティスト"));
+        assert_eq!(tag.artist(), Some("Artista Español; アーティスト"));
+    }
+
+    #[test]
+    fn test_display_tags_empty() {
+        let tag = Tag::new();
+        // Este test solo verifica que display_tags no hace panic con un tag vacío
+        display_tags(&tag);
+    }
+
+    #[test]
+    fn test_display_tags_with_data() {
+        let mut tag = Tag::new();
+        tag.set_title("Test Song");
+        tag.set_artist("Test Artist");
+        tag.set_album("Test Album");
+        tag.set_year(2026);
+        tag.set_genre("Rock");
+        
+        // Este test verifica que display_tags no hace panic con datos
+        display_tags(&tag);
+    }
+
+    #[test]
+    fn test_track_number() {
+        let mut tag = Tag::new();
+        let changed = apply_metadata(&mut tag, None, &[], None, None, None, Some(7), None, None);
+        
+        assert!(changed);
+        assert_eq!(tag.track(), Some(7));
+    }
+
+    #[test]
+    fn test_track_number_zero() {
+        let mut tag = Tag::new();
+        apply_metadata(&mut tag, None, &[], None, None, None, Some(0), None, None);
+        
+        assert_eq!(tag.track(), Some(0));
+    }
+
+    #[test]
+    fn test_track_with_other_metadata() {
+        let mut tag = Tag::new();
+        let artists = vec!["Artist".to_string()];
+        apply_metadata(&mut tag, Some("Title"), &artists, None, None, None, Some(3), None, None);
+        
+        assert_eq!(tag.title(), Some("Title"));
+        assert_eq!(tag.artist(), Some("Artist"));
+        assert_eq!(tag.track(), Some(3));
+    }
+
+    #[test]
+    fn test_date_recorded() {
+        let mut tag = Tag::new();
+        let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, Some("2026-01-22"), None);
+        
+        assert!(changed);
+        assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026-01-22".to_string()));
+    }
+
+    #[test]
+    fn test_copyright() {
+        let mut tag = Tag::new();
+        let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, Some("© 2026 Records"));
+        
+        assert!(changed);
+        assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© 2026 Records"));
+    }
+
+    #[test]
+    fn test_date_and_copyright() {
+        let mut tag = Tag::new();
+        apply_metadata(&mut tag, None, &[], None, None, None, None, Some("2026"), Some("© Test"));
+        
+        assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026".to_string()));
+        assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© Test"));
     }
 }

@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-linux:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Build release binary
+        run: cargo build --release --verbose
+      
+      - name: Rename binary
+        run: |
+          cd target/release
+          mv id3cli id3cli-linux-x86_64
+      
+      - name: Upload binary to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./target/release/id3cli-linux-x86_64
+          asset_name: id3cli-linux-x86_64
+          asset_content_type: application/octet-stream
+      
+      - name: Generate SHA256 checksum
+        run: |
+          cd target/release
+          sha256sum id3cli-linux-x86_64 > id3cli-linux-x86_64.sha256
+      
+      - name: Upload checksum to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./target/release/id3cli-linux-x86_64.sha256
+          asset_name: id3cli-linux-x86_64.sha256
+          asset_content_type: text/plain
