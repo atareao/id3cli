@@ -4,6 +4,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write
+
 jobs:
   build-linux:
     name: Build Linux Binary
@@ -26,27 +29,16 @@ jobs:
           cd target/release
           mv id3cli id3cli-linux-x86_64
       
-      - name: Upload binary to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./target/release/id3cli-linux-x86_64
-          asset_name: id3cli-linux-x86_64
-          asset_content_type: application/octet-stream
-      
       - name: Generate SHA256 checksum
         run: |
           cd target/release
           sha256sum id3cli-linux-x86_64 > id3cli-linux-x86_64.sha256
       
-      - name: Upload checksum to release
-        uses: actions/upload-release-asset@v1
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            target/release/id3cli-linux-x86_64
+            target/release/id3cli-linux-x86_64.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./target/release/id3cli-linux-x86_64.sha256
-          asset_name: id3cli-linux-x86_64.sha256
-          asset_content_type: text/plain
