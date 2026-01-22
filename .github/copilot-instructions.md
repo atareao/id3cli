@@ -3,17 +3,23 @@
 
 Purpose: help an AI coding agent become productive quickly in this Rust CLI that manipulates ID3 tags.
 
-- **Big picture:** single-binary Rust CLI for adding ID3 tags and cover art to MP3 files. The program entrypoint is [src/main.rs](src/main.rs#L1). Project metadata and deps are in [Cargo.toml](Cargo.toml#L1-L8). The code uses the `id3` crate (v1.16.4) to read/write MP3 tags and `clap` (v4.5) for CLI argument parsing.
+- **Big picture:** single-binary Rust CLI for adding ID3 tags and cover art to MP3 files. The project is organized as:
+  - [src/lib.rs](src/lib.rs#L1) - Core library with all business logic functions
+  - [src/main.rs](src/main.rs#L1) - CLI application and main() function (264 lines)
+  - [src/tests.rs](src/tests.rs#L1) - Unit tests for library functions (685 lines)
+  - [tests/integration_test.rs](tests/integration_test.rs#L1) - Integration tests for CLI (1071 lines)
+  - [Cargo.toml](Cargo.toml#L1-L8) - Project metadata and dependencies
+  
+  The code uses the `id3` crate (v1.16.4) to read/write MP3 tags and `clap` (v4.5) for CLI argument parsing.
 
 - **Architecture & data flow:** CLI reads paths/arguments via clap's derive macro and delegates to the `id3` crate to parse and mutate ID3 frames. Output is typically to stdout or the mp3 file on disk. There are no web services, databases, or background workers — changes are local file I/O.
 
 - **Key files to reference:**
-  - [src/main.rs](src/main.rs#L1): complete CLI implementation with argument parsing, tag manipulation, and display functions
-  - [tests/integration_test.rs](tests/integration_test.rs#L1): integration tests that verify CLI behavior end-to-end
-  - [Cargo.toml](Cargo.toml#L1-L8): crate name, edition (`2024`) and dependency pins
-  - [README.md](README.md#L1): user-facing documentation with examples
-  - [RELEASE.md](RELEASE.md#L1): release process documentation
-  - [.github/workflows/release.yml](.github/workflows/release.yml#L1): GitHub Actions workflow for automated releases
+  - **src/lib.rs** - Core library (495 lines): All business logic functions (apply_metadata, add_*, remove_*, display_tags)
+  - **src/main.rs** - CLI application (264 lines): Argument parsing with clap and main() function
+  - **src/tests.rs** - Unit tests (685 lines): Tests for all library functions
+  - **tests/integration_test.rs** - Integration tests (1071 lines): End-to-end CLI testing
+  - **Cargo.toml** - Project metadata, edition 2024, and dependencies
 
 - **Developer workflows (explicit commands):**
   - Build debug binary: `cargo build`
@@ -72,14 +78,15 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
 - **What an AI helper should do first:**
   1. Run `cargo build` to ensure the toolchain and dependencies are available
   2. Run `cargo test` to verify all 92 tests pass (55 unit + 37 integration)
-  3. Review [src/main.rs](src/main.rs#L1) to understand the complete implementation
-  4. Test with: `cargo run -- -f /tmp/test.mp3 --show`
+  3. Review **src/lib.rs** for all business logic functions
+  4. Review **src/main.rs** for CLI structure and argument handling
+  5. Test with: `cargo run -- -f /tmp/test.mp3 --show`
 
 - **Examples of small, acceptable changes:**
-  - Add new metadata field: update `Args` struct, add parameter to `apply_metadata()`, update all call sites and tests
-  - Add new display format: modify `display_tags()` function
-  - Add validation: add checks in `main()` before calling `apply_metadata()`
-  - Always update both unit tests and integration tests when adding features
+  - Add new metadata field: update `Args` struct in main.rs, add logic in lib.rs `apply_metadata()`, update tests
+  - Add new display format: modify `display_tags()` function in lib.rs
+  - Add validation: add checks in main.rs `main()` before calling library functions
+  - Always update both unit tests (src/tests.rs) and integration tests (tests/integration_test.rs) when adding features
 
 - **Constraints & cautions for AI PRs:**
   - Do not change `edition` or bump deps without mentioning compatibility reasons

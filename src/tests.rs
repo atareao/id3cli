@@ -1,4 +1,8 @@
+// Tests para la librería id3cli
 use super::*;
+use id3::{Tag, TagLike};
+use id3::frame::{Content, PictureType};
+use std::path::Path;
 
 #[test]
 fn test_apply_metadata_title_only() {
