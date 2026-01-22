@@ -13,7 +13,7 @@ upgrade:
 
 release:
     @git add .
-    @git commit -m "Release v{{version}}"
+    @git commit -m ":bookmark: Release v{{version}}"
     @git tag -a v{{version}} -m "Release v{{version}}"
     @git push origin main
     @git push origin v{{version}}
