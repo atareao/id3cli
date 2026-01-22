@@ -1069,3 +1069,96 @@ fn test_cli_remove_new_tags() {
     
     cleanup_file(&mp3_path);
 }
+
+#[test]
+fn test_cli_add_season() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "--season", "3"])
+        .output()
+        .expect("Failed to execute command");
+    
+    if !output.status.success() {
+        eprintln!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success());
+    
+    // Verificar que season fue guardado
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.disc(), Some(3));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_podcast_with_season() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", 
+                "--file", mp3_path.to_str().unwrap(),
+                "--title", "El camino del héroe",
+                "--artist", "Juan Pérez",
+                "--album", "Mitología Clásica",
+                "--track", "5",
+                "--season", "2",
+                "--genre", "Podcast",
+                "--date", "2026-01-22",
+                "--composer", "Juan Pérez",
+                "--subtitle", "Episodio sobre mitología griega",
+                "--copyright", "© 2026 Podcast Network"])
+        .output()
+        .expect("Failed to execute command");
+    
+    if !output.status.success() {
+        eprintln!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success());
+    
+    // Verificar todos los metadatos del podcast
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("El camino del héroe"));
+    assert_eq!(tag.artist(), Some("Juan Pérez"));
+    assert_eq!(tag.album(), Some("Mitología Clásica"));
+    assert_eq!(tag.track(), Some(5));
+    assert_eq!(tag.disc(), Some(2)); // Season
+    assert_eq!(tag.genre(), Some("Podcast"));
+    assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026-01-22".to_string()));
+    assert_eq!(tag.get("TCOM").and_then(|f| f.content().text()), Some("Juan Pérez"));
+    assert_eq!(tag.get("TIT3").and_then(|f| f.content().text()), Some("Episodio sobre mitología griega"));
+    assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© 2026 Podcast Network"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_season() {
+    let mp3_path = create_temp_mp3();
+    
+    // Primero añadir season
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "--season", "4"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Verificar que se añadió
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.disc(), Some(4));
+    
+    // Ahora eliminar
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "-r", "season"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    // Verificar eliminación
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(tag.disc().is_none());
+    
+    cleanup_file(&mp3_path);
+}

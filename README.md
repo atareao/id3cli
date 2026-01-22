@@ -3,15 +3,15 @@
 CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-92%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
+[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
 
 ✨ **Completo y fácil de usar**
 
-- 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, fecha, copyright
-- 🎵 **Soporte completo para podcasts:** compositor, subtítulo, artista original, artista del álbum
+- 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, temporada, fecha, copyright
+- 🎙️ **Soporte completo para podcasts:** compositor, subtítulo, artista original, artista del álbum, temporada (TPOS)
 - 📃 Soporte para letras de canciones (lyrics) en formato USLT
 - 🌐 Soporte para URL (sitio web oficial del artista) en formato WOAR
 - 🍎 Soporte para metadatos de Apple: compilation, album sort, artist sort, title sort
@@ -59,6 +59,7 @@ id3cli [OPTIONS] --file <FILE>
 | `-y, --year <YEAR>` | Año |
 | `-g, --genre <GENRE>` | Género |
 | `-T, --track <TRACK>` | Número de pista |
+| `-S, --season <SEASON>` | Temporada (TPOS - útil para podcasts) |
 | `-d, --date <DATE>` | Fecha de grabación (YYYY-MM-DD o YYYY) |
 | `-C, --copyright <COPYRIGHT>` | Copyright |
 | `--composer <COMPOSER>` | Compositor (TCOM) |
@@ -105,6 +106,27 @@ id3cli -f cancion.mp3 --show
 ═══════════════════════════════════════
 ```
 
+**Ejemplo de podcast con temporada:**
+
+```text
+📋 Tags ID3 encontrados:
+
+═══════════════════════════════════════
+🎵 Título:    La historia del TCP/IP
+🎤 Artista:   Tech Podcast
+💿 Álbum:     Historia de Internet
+📆 Fecha:     2026-01-22
+🎸 Género:    Podcast
+#️⃣  Pista:     5
+📺 Temporada: 2
+©️  Copyright: © 2026 CC BY 4.0
+🎼 Compositor: Tech Podcast
+📄 Subtítulo: Cómo se creó el protocolo TCP/IP
+
+📦 Total de frames: 10
+═══════════════════════════════════════
+```
+
 ### ✏️ Añadir metadatos básicos
 
 ```bash
@@ -128,6 +150,21 @@ id3cli -f remix.mp3 \
 ```
 
 **Resultado:** Los artistas se unen con `"; "` → `Luis Fonsi; Daddy Yankee; Justin Bieber`
+
+### 📺 Añadir temporada (ideal para podcasts)
+
+```bash
+# Episodio con temporada
+id3cli -f episodio.mp3 \
+  --title "El origen de Internet" \
+  --artist "Tech Podcast" \
+  --album "Historia de la Tecnología" \
+  --track 5 \
+  --season 2 \
+  --genre "Podcast"
+```
+
+**Resultado:** Temporada 2, Episodio 5 (S02E05) perfectamente identificado
 
 ### 🎨 Añadir carátula
 
@@ -215,6 +252,7 @@ id3cli -f episodio42.mp3 \
   --original-artist "Lorenzo" \
   --genre "Podcast" \
   --track 42 \
+  --season 3 \
   --date "2026-01-22" \
   --copyright "© 2026 CC BY 4.0"
 ```
@@ -230,6 +268,7 @@ id3cli -f episodio42.mp3 \
 - `--original-artist` → TOPE (artista original)
 - `--genre` → TCON ("Podcast")
 - `--track` → TRCK (número de episodio)
+- `--season` → TPOS (temporada)
 - `--date` → TDRC (fecha de publicación)
 - `--copyright` → TCOP (licencia)
 
@@ -296,7 +335,7 @@ id3cli -f cancion.mp3 -r orden-album -r orden-artista -r orden-titulo
 ```
 
 **Tags disponibles para eliminar:**
-`title`, `artist`, `album`, `year`, `genre`, `track`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
+`title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
 
 ---
 
@@ -313,6 +352,7 @@ id3cli -f cancion.mp3 -r orden-album -r orden-artista -r orden-titulo
 | TOPE | `--original-artist` | Artista original | Creador original |
 | TCON | `--genre` | Género | "Podcast" |
 | TRCK | `--track` | Número de pista | Número de episodio |
+| TPOS | `--season` | Disco/Parte | Temporada |
 | TDRC | `--date` | Fecha de grabación | Fecha de publicación |
 | TCOP | `--copyright` | Copyright | Licencia (CC BY 4.0) |
 | TYER | `--year` | Año | Año de publicación |
@@ -368,9 +408,11 @@ cargo clippy -- -D warnings
 ```tree
 id3cli/
 ├── src/
-│   └── main.rs                    # Código principal (761 líneas)
+│   ├── lib.rs                     # Librería (511 líneas) - lógica de negocio
+│   ├── main.rs                    # CLI (272 líneas) - interfaz de usuario
+│   └── tests.rs                   # Tests unitarios (730 líneas)
 ├── tests/
-│   └── integration_test.rs        # Tests de integración (19 tests)
+│   └── integration_test.rs        # Tests de integración (1164 líneas)
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
@@ -387,16 +429,26 @@ id3cli/
 
 ## Arquitectura técnica
 
+**Módulos principales:**
+
+- **src/lib.rs** - Librería reutilizable con todas las funciones de manipulación de tags
+- **src/main.rs** - CLI con clap para parsing de argumentos y orquestación
+- **src/tests.rs** - Tests unitarios para todas las funciones de la librería
+
 **Funciones principales:**
 
-- `apply_metadata()` - Aplica todos los tags de metadata al archivo
+- `apply_metadata()` - Aplica todos los tags de metadata al archivo (14 parámetros)
 - `add_cover_art()` - Embebe imagen con detección automática de MIME type
+- `add_lyrics()` - Añade letras en formato USLT
+- `add_url()` - Añade URL oficial en formato WOAR
+- `add_apple_metadata()` - Añade metadatos específicos de Apple
 - `remove_tags()` - Elimina tags específicos (acepta inglés/español)
 - `detect_mime_type()` - Detecta formato de imagen por extensión
 - `display_tags()` - Muestra tags formateados con emojis
 
 **Patrones de diseño:**
 
+- Arquitectura modular con separación lib/CLI
 - Funciones puras para lógica testeable
 - Separación entre parsing CLI (clap) y lógica de negocio
 - Referencias/slices en lugar de cloning innecesario
@@ -404,22 +456,25 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con 63 tests (38 unitarios + 25 de integración):
+El proyecto tiene **cobertura completa** con **99 tests** (59 unitarios + 40 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (52)
-cargo test --lib        # Solo tests unitarios (33)
-cargo test --test '*'   # Solo tests de integración (19)
+cargo test              # Ejecutar todos los tests (99)
+cargo test --lib        # Solo tests unitarios (59)
+cargo test --test '*'   # Solo tests de integración (40)
 ```
 
 **Ejemplos de tests:**
 
+- Aplicación de metadatos básicos y extendidos
 - Detección de MIME types (JPG, PNG, WEBP)
 - Múltiples artistas con separador correcto
+- Temporada (season) para podcasts
+- Lyrics, URLs y metadatos de Apple
 - Eliminación de tags en inglés/español
 - Preservación de metadata existente
 - Validación de formatos no soportados
-- Tests end-to-end del CLI completo
+- Tests end-to-end del CLI completo con podcasts
 
 ---
 
@@ -444,7 +499,13 @@ Desarrollado con 🦀 Rust
 - [x] Soporte para más formatos de imagen (PNG, WEBP)
 - [x] Eliminación de tags específicos
 - [x] Soporte para lyrics (letras de canciones)
+- [x] Soporte para URLs (sitio web oficial)
+- [x] Metadatos de Apple (compilation, sort orders)
+- [x] Metadatos para podcasts (composer, subtitle, original artist, album artist)
+- [x] Temporada (season/TPOS) para organizar podcasts por temporadas
+- [x] Arquitectura modular (lib.rs separado del CLI)
 - [ ] Modo batch para procesar múltiples archivos
 - [ ] Binarios para Windows y macOS
 - [ ] Soporte para otros formatos de audio (FLAC, M4A)
 - [ ] Leer lyrics desde archivo externo (.lrc, .txt)
+- [ ] GUI opcional con egui o similar

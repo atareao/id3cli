@@ -19,6 +19,7 @@ use std::path::Path;
 /// * `year` - Año de publicación
 /// * `genre` - Género musical
 /// * `track` - Número de pista
+/// * `season` - Temporada (TPOS - útil para podcasts)
 /// * `date` - Fecha de grabación (formato YYYY-MM-DD o YYYY)
 /// * `copyright` - Información de copyright
 /// * `composer` - Compositor (TCOM)
@@ -37,6 +38,7 @@ pub fn apply_metadata(
     year: Option<i32>,
     genre: Option<&str>,
     track: Option<u32>,
+    season: Option<u32>,
     date: Option<&str>,
     copyright: Option<&str>,
     composer: Option<&str>,
@@ -74,6 +76,11 @@ pub fn apply_metadata(
 
     if let Some(track) = track {
         tag.set_track(track);
+        changed = true;
+    }
+
+    if let Some(season_num) = season {
+        tag.set_disc(season_num);
         changed = true;
     }
 
@@ -257,6 +264,7 @@ pub fn add_cover_art(tag: &mut Tag, cover_path: &Path, cover_data: Vec<u8>) -> R
 /// * year/año - Año
 /// * genre/género - Género
 /// * track/pista - Número de pista
+/// * season/temporada - Temporada
 /// * date/fecha - Fecha de grabación
 /// * copyright - Copyright
 /// * composer/compositor - Compositor
@@ -301,6 +309,10 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
             }
             "track" | "pista" => {
                 tag.remove_track();
+                true
+            }
+            "season" | "temporada" => {
+                tag.remove_disc();
                 true
             }
             "date" | "fecha" => {
@@ -356,7 +368,7 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
                 true
             }
             _ => {
-                eprintln!("⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, date, copyright, composer, subtitle, original_artist, album_artist, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort", tag_name);
+                eprintln!("⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, season, date, copyright, composer, subtitle, original_artist, album_artist, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort", tag_name);
                 false
             }
         };
@@ -406,6 +418,10 @@ pub fn display_tags(tag: &Tag) {
     
     if let Some(track) = tag.track() {
         println!("#️⃣  Pista:     {}", track);
+    }
+    
+    if let Some(season) = tag.disc() {
+        println!("📺 Temporada: {}", season);
     }
     
     if let Some(copyright) = tag.get("TCOP").and_then(|f| f.content().text()) {

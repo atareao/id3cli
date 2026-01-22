@@ -65,7 +65,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - No network or external credentials discovered — changes are local filesystem operations
 
 - **Supported features (as of current version):**
-  - Basic metadata: title, artist(s), album, year, genre, track
+  - Basic metadata: title, artist(s), album, year, genre, track, season (TPOS)
   - Extended metadata: date (recorded), copyright, lyrics (USLT frame), url (WOAR frame)
   - Standard ID3v2 tags: composer (TCOM), subtitle (TIT3), original artist (TOPE), album artist (TPE2)
   - Apple metadata: compilation flag (TCMP), sort orders (TSOA, TSOP, TSOT)
@@ -73,11 +73,11 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Display: `--show` flag to view all tags (lyrics preview shows first 3 lines)
   - Tag removal: `--remove` flag to delete specific tags (supports English/Spanish names)
   - Multiple artists: specify `--artist` multiple times, joined with "; "
-  - **Perfect for podcasts:** All recommended tags for podcast episodes supported
+  - **Perfect for podcasts:** All recommended tags for podcast episodes supported, including season (TPOS)
 
 - **What an AI helper should do first:**
   1. Run `cargo build` to ensure the toolchain and dependencies are available
-  2. Run `cargo test` to verify all 92 tests pass (55 unit + 37 integration)
+  2. Run `cargo test` to verify all 99 tests pass (59 unit + 40 integration)
   3. Review **src/lib.rs** for all business logic functions
   4. Review **src/main.rs** for CLI structure and argument handling
   5. Test with: `cargo run -- -f /tmp/test.mp3 --show`
@@ -93,15 +93,15 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - All new features must include tests (both unit and integration)
   - Maintain the pattern of extracting testable functions from `main()`
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing test coverage - currently at 92 tests (55 unit + 37 integration)
+  - Preserve existing test coverage - currently at 99 tests (59 unit + 40 integration)
   - When modifying `apply_metadata()`, `add_cover_art()`, `add_lyrics()`, `add_url()`, or `add_apple_metadata()`, update ALL tests that call them
-  - apply_metadata() now takes 13 parameters: title, artists, album, year, genre, track, date, copyright, composer, subtitle, original_artist, album_artist
+  - apply_metadata() now takes 14 parameters: title, artists, album, year, genre, track, season, date, copyright, composer, subtitle, original_artist, album_artist
   - Use "; " separator for multiple artists (not " / ")
   - Supported image formats: JPG, PNG, WEBP - validate extensions and return helpful errors
   - Tag names accept both English and Spanish for user-friendly CLI
   - Lyrics use ISO-639-2 language code "spa" for Spanish
   - Apple metadata: TCMP uses "1" for compilation, TSOA/TSOP/TSOT use set_text() for sort orders
-  - Standard ID3v2: TCOM (composer), TIT3 (subtitle), TOPE (original artist), TPE2 (album artist via set_album_artist())
+  - Standard ID3v2: TCOM (composer), TIT3 (subtitle), TOPE (original artist), TPE2 (album artist via set_album_artist()), TPOS (season via set_disc())
 
 - **Testing patterns:**
   - Unit tests in `src/main.rs` under `#[cfg(test)] mod tests`

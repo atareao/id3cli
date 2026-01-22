@@ -7,7 +7,7 @@ use std::path::Path;
 #[test]
 fn test_apply_metadata_title_only() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, Some("Test Title"), &[], None, None, None, None, None, None, None, None, None, None);
+    let changed = apply_metadata(&mut tag, Some("Test Title"), &[], None, None, None, None, None, None, None, None, None, None, None);
     
     assert!(changed);
     assert_eq!(tag.title(), Some("Test Title"));
@@ -26,6 +26,7 @@ fn test_apply_metadata_all_fields() {
         Some(2026),
         Some("Rock"),
         Some(5),
+        None,
         Some("2026-01-22"),
         Some("© 2026 Test Records"),
         None,
@@ -48,7 +49,7 @@ fn test_apply_metadata_all_fields() {
 #[test]
 fn test_apply_metadata_no_changes() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, None, None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, None, None, None);
     
     assert!(!changed);
 }
@@ -61,6 +62,7 @@ fn test_apply_metadata_partial() {
         Some("Title"),
         &[],
         Some("Album"),
+        None,
         None,
         None,
         None,
@@ -112,7 +114,7 @@ fn test_apply_metadata_preserves_existing() {
     tag.set_artist("Original Artist");
     
     // Solo cambiar el álbum
-    apply_metadata(&mut tag, None, &[], Some("New Album"), None, None, None, None, None, None, None, None, None);
+    apply_metadata(&mut tag, None, &[], Some("New Album"), None, None, None, None, None, None, None, None, None, None);
     
     // El título y artista originales deben preservarse
     assert_eq!(tag.title(), Some("Original Title"));
@@ -125,7 +127,7 @@ fn test_apply_metadata_overwrites_existing() {
     let mut tag = Tag::new();
     tag.set_title("Old Title");
     
-    apply_metadata(&mut tag, Some("New Title"), &[], None, None, None, None, None, None, None, None, None, None);
+    apply_metadata(&mut tag, Some("New Title"), &[], None, None, None, None, None, None, None, None, None, None, None);
     
     assert_eq!(tag.title(), Some("New Title"));
 }
@@ -133,7 +135,7 @@ fn test_apply_metadata_overwrites_existing() {
 #[test]
 fn test_year_negative() {
     let mut tag = Tag::new();
-    apply_metadata(&mut tag, None, &[], None, Some(-1), None, None, None, None, None, None, None, None);
+    apply_metadata(&mut tag, None, &[], None, Some(-1), None, None, None, None, None, None, None, None, None);
     
     assert_eq!(tag.year(), Some(-1));
 }
@@ -141,7 +143,7 @@ fn test_year_negative() {
 #[test]
 fn test_year_future() {
     let mut tag = Tag::new();
-    apply_metadata(&mut tag, None, &[], None, Some(3000), None, None, None, None, None, None, None, None);
+    apply_metadata(&mut tag, None, &[], None, Some(3000), None, None, None, None, None, None, None, None, None);
     
     assert_eq!(tag.year(), Some(3000));
 }
@@ -150,7 +152,7 @@ fn test_year_future() {
 fn test_empty_strings() {
     let mut tag = Tag::new();
     let artists = vec!["".to_string()];
-    let changed = apply_metadata(&mut tag, Some(""), &artists, Some(""), None, Some(""), None, None, None, None, None, None, None);
+    let changed = apply_metadata(&mut tag, Some(""), &artists, Some(""), None, Some(""), None, None, None, None, None, None, None, None);
     
     assert!(changed);
     assert_eq!(tag.title(), Some(""));
@@ -175,6 +177,7 @@ fn test_unicode_characters() {
         None,
         None,
         None,
+        None,
     );
     
     assert_eq!(tag.title(), Some("Título con ñ y acentos"));
@@ -186,7 +189,7 @@ fn test_unicode_characters() {
 fn test_multiple_artists() {
     let mut tag = Tag::new();
     let artists = vec!["Artist 1".to_string(), "Artist 2".to_string(), "Artist 3".to_string()];
-    let changed = apply_metadata(&mut tag, None, &artists, None, None, None, None, None, None, None, None, None, None);
+    let changed = apply_metadata(&mut tag, None, &artists, None, None, None, None, None, None, None, None, None, None, None);
     
     assert!(changed);
     assert_eq!(tag.artist(), Some("Artist 1; Artist 2; Artist 3"));
@@ -196,7 +199,7 @@ fn test_multiple_artists() {
 fn test_multiple_artists_unicode() {
     let mut tag = Tag::new();
     let artists = vec!["Artista Español".to_string(), "アーティスト".to_string()];
-    apply_metadata(&mut tag, None, &artists, None, None, None, None, None, None, None, None, None, None);
+    apply_metadata(&mut tag, None, &artists, None, None, None, None, None, None, None, None, None, None, None);
     
     assert_eq!(tag.artist(), Some("Artista Español; アーティスト"));
 }
@@ -224,7 +227,7 @@ fn test_display_tags_with_data() {
 #[test]
 fn test_track_number() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, Some(7), None, None, None, None, None, None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, Some(7), None, None, None, None, None, None, None);
     
     assert!(changed);
     assert_eq!(tag.track(), Some(7));
@@ -233,7 +236,7 @@ fn test_track_number() {
 #[test]
 fn test_track_number_zero() {
     let mut tag = Tag::new();
-    apply_metadata(&mut tag, None, &[], None, None, None, Some(0), None, None, None, None, None, None);
+    apply_metadata(&mut tag, None, &[], None, None, None, Some(0), None, None, None, None, None, None, None);
     
     assert_eq!(tag.track(), Some(0));
 }
@@ -242,7 +245,7 @@ fn test_track_number_zero() {
 fn test_track_with_other_metadata() {
     let mut tag = Tag::new();
     let artists = vec!["Artist".to_string()];
-    apply_metadata(&mut tag, Some("Title"), &artists, None, None, None, Some(3), None, None, None, None, None, None);
+    apply_metadata(&mut tag, Some("Title"), &artists, None, None, None, Some(3), None, None, None, None, None, None, None);
     
     assert_eq!(tag.title(), Some("Title"));
     assert_eq!(tag.artist(), Some("Artist"));
@@ -252,7 +255,7 @@ fn test_track_with_other_metadata() {
 #[test]
 fn test_date_recorded() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, Some("2026-01-22"), None, None, None, None, None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, Some("2026-01-22"), None, None, None, None, None);
     
     assert!(changed);
     assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026-01-22".to_string()));
@@ -261,7 +264,7 @@ fn test_date_recorded() {
 #[test]
 fn test_copyright() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, Some("© 2026 Records"), None, None, None, None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, Some("© 2026 Records"), None, None, None, None);
     
     assert!(changed);
     assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© 2026 Records"));
@@ -270,7 +273,7 @@ fn test_copyright() {
 #[test]
 fn test_date_and_copyright() {
     let mut tag = Tag::new();
-    apply_metadata(&mut tag, None, &[], None, None, None, None, Some("2026"), Some("© Test"), None, None, None, None);
+    apply_metadata(&mut tag, None, &[], None, None, None, None, None, Some("2026"), Some("© Test"), None, None, None, None);
     
     assert_eq!(tag.date_recorded().map(|t| t.to_string()), Some("2026".to_string()));
     assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), Some("© Test"));
@@ -584,7 +587,7 @@ fn test_remove_apple_sort_spanish() {
 #[test]
 fn test_add_composer() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, Some("John Lennon"), None, None, None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, Some("John Lennon"), None, None, None);
     
     assert!(changed);
     assert_eq!(tag.get("TCOM").and_then(|f| f.content().text()), Some("John Lennon"));
@@ -593,7 +596,7 @@ fn test_add_composer() {
 #[test]
 fn test_add_subtitle() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, Some("Extended Version"), None, None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, Some("Extended Version"), None, None);
     
     assert!(changed);
     assert_eq!(tag.get("TIT3").and_then(|f| f.content().text()), Some("Extended Version"));
@@ -602,7 +605,7 @@ fn test_add_subtitle() {
 #[test]
 fn test_add_original_artist() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, Some("The Beatles"), None);
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, None, Some("The Beatles"), None);
     
     assert!(changed);
     assert_eq!(tag.get("TOPE").and_then(|f| f.content().text()), Some("The Beatles"));
@@ -611,7 +614,7 @@ fn test_add_original_artist() {
 #[test]
 fn test_add_album_artist() {
     let mut tag = Tag::new();
-    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, None, Some("Various Artists"));
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, None, None, None, None, None, None, Some("Various Artists"));
     
     assert!(changed);
     assert_eq!(tag.album_artist(), Some("Various Artists"));
@@ -624,6 +627,7 @@ fn test_add_all_new_tags() {
         &mut tag,
         Some("Title"),
         &[],
+        None,
         None,
         None,
         None,
@@ -682,4 +686,45 @@ fn test_remove_album_artist() {
     let changed = remove_tags(&mut tag, &["album_artist".to_string()]);
     assert!(changed);
     assert_eq!(tag.album_artist(), None);
+}
+
+#[test]
+fn test_add_season() {
+    let mut tag = Tag::new();
+    let changed = apply_metadata(&mut tag, None, &[], None, None, None, None, Some(2), None, None, None, None, None, None);
+    
+    assert!(changed);
+    assert_eq!(tag.disc(), Some(2));
+}
+
+#[test]
+fn test_add_season_with_track() {
+    let mut tag = Tag::new();
+    let changed = apply_metadata(&mut tag, Some("Episode 5"), &[], None, None, None, Some(5), Some(2), None, None, None, None, None, None);
+    
+    assert!(changed);
+    assert_eq!(tag.title(), Some("Episode 5"));
+    assert_eq!(tag.track(), Some(5));
+    assert_eq!(tag.disc(), Some(2));
+}
+
+#[test]
+fn test_remove_season() {
+    let mut tag = Tag::new();
+    tag.set_disc(3);
+    assert_eq!(tag.disc(), Some(3));
+    
+    let changed = remove_tags(&mut tag, &["season".to_string()]);
+    assert!(changed);
+    assert_eq!(tag.disc(), None);
+}
+
+#[test]
+fn test_remove_season_spanish() {
+    let mut tag = Tag::new();
+    tag.set_disc(5);
+    
+    let changed = remove_tags(&mut tag, &["temporada".to_string()]);
+    assert!(changed);
+    assert_eq!(tag.disc(), None);
 }

@@ -37,6 +37,10 @@ struct Args {
     #[arg(short = 'T', long)]
     track: Option<u32>,
 
+    /// Temporada (TPOS - útil para podcasts)
+    #[arg(short = 'S', long)]
+    season: Option<u32>,
+
     /// Fecha de grabación (YYYY-MM-DD o YYYY)
     #[arg(short = 'd', long)]
     date: Option<String>,
@@ -93,7 +97,7 @@ struct Args {
     #[arg(short, long)]
     show: bool,
 
-    /// Eliminar tags específicos (title, artist, album, year, genre, track, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
+    /// Eliminar tags específicos (title, artist, album, year, genre, track, season, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
     #[arg(short, long)]
     remove: Vec<String>,
 }
@@ -146,6 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.year,
         args.genre.as_deref(),
         args.track,
+        args.season,
         args.date.as_deref(),
         args.copyright.as_deref(),
         args.composer.as_deref(),
@@ -172,6 +177,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(track) = args.track {
         println!("✓ Pista: {}", track);
+    }
+    if let Some(season) = args.season {
+        println!("✓ Temporada: {}", season);
     }
     if let Some(date) = &args.date {
         println!("✓ Fecha: {}", date);
