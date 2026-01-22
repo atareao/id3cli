@@ -2,7 +2,7 @@ use clap::Parser;
 use id3::{Tag, TagLike};
 use id3::frame::{Picture, PictureType};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// CLI para añadir tags ID3 y carátulas a archivos MP3
 #[derive(Parser, Debug)]
@@ -45,7 +45,7 @@ struct Args {
     #[arg(short = 'C', long)]
     copyright: Option<String>,
 
-    /// Ruta del archivo JPG para la carátula
+    /// Ruta del archivo de imagen para la carátula (JPG, PNG, WEBP)
     #[arg(short, long)]
     cover: Option<PathBuf>,
 
@@ -129,9 +129,27 @@ fn create_picture_frame(data: Vec<u8>, mime_type: &str) -> Picture {
     }
 }
 
+/// Detecta el tipo MIME desde la extensión del archivo
+fn detect_mime_type(path: &Path) -> Result<&'static str, String> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
+        .ok_or_else(|| "No se pudo determinar la extensión del archivo".to_string())?;
+
+    match extension.as_str() {
+        "jpg" | "jpeg" => Ok("image/jpeg"),
+        "png" => Ok("image/png"),
+        "webp" => Ok("image/webp"),
+        _ => Err(format!("Formato de imagen no soportado: .{}", extension)),
+    }
+}
+
 /// Añade una carátula al tag desde un archivo
-fn add_cover_art(tag: &mut Tag, cover_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-    let picture = create_picture_frame(cover_data, "image/jpeg");
+fn add_cover_art(tag: &mut Tag, cover_path: &Path, cover_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+    let mime_type = detect_mime_type(cover_path)
+        .map_err(|e| format!("{} (soportados: jpg, png, webp)", e))?;
+    let picture = create_picture_frame(cover_data, mime_type);
     tag.add_frame(picture);
     Ok(())
 }
@@ -339,9 +357,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let cover_data = fs::read(cover_path)?;
-        add_cover_art(&mut tag, cover_data)?;
-        println!("✓ Carátula añadida desde: {}", cover_path.display());
-        cover_added = true;
+        match add_cover_art(&mut tag, cover_path, cover_data) {
+            Ok(_) => {
+                println!("✓ Carátula añadida desde: {}", cover_path.display());
+                cover_added = true;
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     // Guardar cambios
@@ -441,13 +466,15 @@ mod tests {
     fn test_add_cover_art() {
         let mut tag = Tag::new();
         let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        let path = Path::new("test.jpg");
         
-        let result = add_cover_art(&mut tag, data.clone());
+        let result = add_cover_art(&mut tag, path, data.clone());
         assert!(result.is_ok());
         
         let pictures: Vec<_> = tag.pictures().collect();
         assert_eq!(pictures.len(), 1);
         assert_eq!(pictures[0].data, data);
+        assert_eq!(pictures[0].mime_type, "image/jpeg");
     }
 
     #[test]
@@ -668,11 +695,66 @@ mod tests {
     fn test_remove_cover() {
         let mut tag = Tag::new();
         let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
-        add_cover_art(&mut tag, data).unwrap();
+        let path = Path::new("test.jpg");
+        add_cover_art(&mut tag, path, data).unwrap();
         assert_eq!(tag.pictures().count(), 1);
         
         let changed = remove_tags(&mut tag, &["cover".to_string()]);
         assert!(changed);
         assert_eq!(tag.pictures().count(), 0);
+    }
+
+    #[test]
+    fn test_detect_mime_type_jpeg() {
+        assert_eq!(detect_mime_type(Path::new("test.jpg")).unwrap(), "image/jpeg");
+        assert_eq!(detect_mime_type(Path::new("test.jpeg")).unwrap(), "image/jpeg");
+        assert_eq!(detect_mime_type(Path::new("test.JPG")).unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn test_detect_mime_type_png() {
+        assert_eq!(detect_mime_type(Path::new("test.png")).unwrap(), "image/png");
+        assert_eq!(detect_mime_type(Path::new("test.PNG")).unwrap(), "image/png");
+    }
+
+    #[test]
+    fn test_detect_mime_type_webp() {
+        assert_eq!(detect_mime_type(Path::new("test.webp")).unwrap(), "image/webp");
+        assert_eq!(detect_mime_type(Path::new("test.WEBP")).unwrap(), "image/webp");
+    }
+
+    #[test]
+    fn test_detect_mime_type_unsupported() {
+        let result = detect_mime_type(Path::new("test.gif"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no soportado"));
+    }
+
+    #[test]
+    fn test_add_cover_art_png() {
+        let mut tag = Tag::new();
+        let data = vec![0x89, 0x50, 0x4E, 0x47]; // PNG header
+        let path = Path::new("cover.png");
+        
+        let result = add_cover_art(&mut tag, path, data.clone());
+        assert!(result.is_ok());
+        
+        let pictures: Vec<_> = tag.pictures().collect();
+        assert_eq!(pictures.len(), 1);
+        assert_eq!(pictures[0].mime_type, "image/png");
+    }
+
+    #[test]
+    fn test_add_cover_art_webp() {
+        let mut tag = Tag::new();
+        let data = vec![0x52, 0x49, 0x46, 0x46]; // WEBP header
+        let path = Path::new("cover.webp");
+        
+        let result = add_cover_art(&mut tag, path, data.clone());
+        assert!(result.is_ok());
+        
+        let pictures: Vec<_> = tag.pictures().collect();
+        assert_eq!(pictures.len(), 1);
+        assert_eq!(pictures[0].mime_type, "image/webp");
     }
 }

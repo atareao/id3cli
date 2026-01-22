@@ -5,7 +5,7 @@ version  := `vampus show`
 list:
     @just --list
 
-version:
+upgrade:
     @vampus upgrade --patch
 
 release:

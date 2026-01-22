@@ -505,3 +505,81 @@ fn test_cli_remove_all_tags() {
     
     cleanup_file(&mp3_path);
 }
+
+#[test]
+fn test_cli_cover_png() {
+    let mp3_path = create_temp_mp3();
+    let temp_dir = std::env::temp_dir();
+    let cover_path = temp_dir.join("test_cover.png");
+    
+    // Crear un archivo PNG mínimo
+    let png_data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    fs::write(&cover_path, png_data).expect("Failed to create PNG");
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--cover", cover_path.to_str().unwrap(), "--title", "PNG Cover Test"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let pictures: Vec<_> = tag.pictures().collect();
+    assert_eq!(pictures.len(), 1);
+    assert_eq!(pictures[0].mime_type, "image/png");
+    
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_cover_webp() {
+    let mp3_path = create_temp_mp3();
+    let temp_dir = std::env::temp_dir();
+    let cover_path = temp_dir.join("test_cover.webp");
+    
+    // Crear un archivo WEBP mínimo
+    let webp_data = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
+    fs::write(&cover_path, webp_data).expect("Failed to create WEBP");
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--cover", cover_path.to_str().unwrap(), "--title", "WEBP Cover Test"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let pictures: Vec<_> = tag.pictures().collect();
+    assert_eq!(pictures.len(), 1);
+    assert_eq!(pictures[0].mime_type, "image/webp");
+    
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_cover_unsupported_format() {
+    let mp3_path = create_temp_mp3();
+    let temp_dir = std::env::temp_dir();
+    let cover_path = temp_dir.join("test_cover.gif");
+    
+    // Crear un archivo GIF (no soportado)
+    fs::write(&cover_path, b"GIF89a").expect("Failed to create GIF");
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--cover", cover_path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Debe fallar con formato no soportado
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no soportado") || stderr.contains("gif"));
+    
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}

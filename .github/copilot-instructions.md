@@ -20,7 +20,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Run locally with args: `cargo run -- --your-args`
   - Example: `cargo run -- -f song.mp3 -t "Title" -a "Artist"`
   - Build optimized release: `cargo build --release`
-  - Run all tests: `cargo test` (22 unit + 13 integration = 35 total)
+  - Run all tests: `cargo test` (33 unit + 19 integration = 52 total)
   - Run only unit tests: `cargo test --lib`
   - Run only integration tests: `cargo test --test '*'`
   - Format: `cargo fmt`
@@ -47,13 +47,17 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Primary external dependency: the `id3` crate. Inspect its API (e.g., `id3::Tag`, `id3::frame::Picture`) when adding features
   - Date fields use `Timestamp` type - parse strings with `.parse()`
   - Copyright stored in TCOP frame via `tag.set_text("TCOP", value)`
+  - Cover art MIME types auto-detected from file extension: .jpg/.jpeg → image/jpeg, .png → image/png, .webp → image/webp
+  - `detect_mime_type()` function validates image formats and returns appropriate MIME type
+  - `add_cover_art()` now accepts `&Path` to detect format before embedding
   - No network or external credentials discovered — changes are local filesystem operations
 
 - **Supported features (as of current version):**
   - Basic metadata: title, artist(s), album, year, genre, track
   - Extended metadata: date (recorded), copyright
-  - Cover art: JPG files as front cover
+  - Cover art: JPG, PNG, and WEBP files as front cover with MIME type auto-detection
   - Display: `--show` flag to view all tags
+  - Tag removal: `--remove` flag to delete specific tags (supports English/Spanish names)
   - Multiple artists: specify `--artist` multiple times, joined with "; "
 
 - **What an AI helper should do first:**
@@ -73,9 +77,11 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - All new features must include tests (both unit and integration)
   - Maintain the pattern of extracting testable functions from `main()`
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing test coverage - currently at 35 tests
-  - When modifying `apply_metadata()`, update ALL tests that call it (there are many)
+  - Preserve existing test coverage - currently at 52 tests
+  - When modifying `apply_metadata()` or `add_cover_art()`, update ALL tests that call them
   - Use "; " separator for multiple artists (not " / ")
+  - Supported image formats: JPG, PNG, WEBP - validate extensions and return helpful errors
+  - Tag names accept both English and Spanish for user-friendly CLI
 
 - **Testing patterns:**
   - Unit tests in `src/main.rs` under `#[cfg(test)] mod tests`
