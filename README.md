@@ -11,7 +11,7 @@ CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
 ✨ **Completo y fácil de usar**
 
 - 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, fecha, copyright
-- 🎨 Soporte para carátulas en **JPG, PNG y WEBP** con detección automática de tipo MIME
+- � Soporte para letras de canciones (lyrics) en formato USLT- 🌐 Soporte para URL (sitio web oficial del artista) en formato WOAR- �🎨 Soporte para carátulas en **JPG, PNG y WEBP** con detección automática de tipo MIME
 - 👥 Soporte para múltiples artistas (colaboraciones)
 - 🗑️ Eliminar tags específicos con nombres en inglés o español
 - 👀 Visualizar todos los tags existentes con formato legible
@@ -58,6 +58,8 @@ id3cli [OPTIONS] --file <FILE>
 | `-d, --date <DATE>` | Fecha de grabación (YYYY-MM-DD o YYYY) |
 | `-C, --copyright <COPYRIGHT>` | Copyright |
 | `-c, --cover <COVER>` | Ruta del archivo de imagen para la carátula (JPG, PNG, WEBP) |
+| `-L, --lyrics <LYRICS>` | Letra de la canción (lyrics) |
+| `-u, --url <URL>` | URL asociada (sitio web del artista, página oficial, etc.) |
 | `-r, --remove <TAG>` | Eliminar tags específicos (se puede repetir) |
 | `-s, --show` | Mostrar todos los tags del archivo |
 | `-h, --help` | Mostrar ayuda |
@@ -130,6 +132,31 @@ id3cli -f cancion.mp3 --cover portada.png
 id3cli -f cancion.mp3 --cover portada.webp
 ```
 
+### 🎶 Añadir letra (lyrics)
+
+```bash
+# Letra simple
+id3cli -f cancion.mp3 -L "Primera línea
+Segunda línea
+Coro completo"
+
+# Desde archivo
+id3cli -f cancion.mp3 -L "$(cat letra.txt)"
+
+# Con otros metadatos
+id3cli -f cancion.mp3 -t "Canción" -a "Artista" -L "Letra completa..."
+```
+
+### 🌐 Añadir URL
+
+```bash
+# URL del sitio oficial del artista
+id3cli -f cancion.mp3 -u "https://artista.com"
+
+# Con otros metadatos
+id3cli -f cancion.mp3 -t "Canción" -a "Artista" -u "https://artista.com/official"
+```
+
 ### 📦 Metadata completa
 
 ```bash
@@ -177,11 +204,17 @@ id3cli -f cancion.mp3 -r título -r artista
 # Eliminar carátula
 id3cli -f cancion.mp3 --remove cover
 
+# Eliminar letra
+id3cli -f cancion.mp3 -r lyrics
+
+# Eliminar URL
+id3cli -f cancion.mp3 -r url
+
 # Eliminar todos los tags
-id3cli -f cancion.mp3 -r title -r artist -r album -r year -r genre -r track -r date -r copyright -r cover
+id3cli -f cancion.mp3 -r title -r artist -r album -r year -r genre -r track -r date -r copyright -r cover -r lyrics -r url
 ```
 
-**Tags eliminables:** `title/título`, `artist/artista`, `album/álbum`, `year/año`, `genre/género`, `track/pista`, `date/fecha`, `copyright`, `cover/carátula`
+**Tags eliminables:** `title/título`, `artist/artista`, `album/álbum`, `year/año`, `genre/género`, `track/pista`, `date/fecha`, `copyright`, `cover/carátula`, `lyrics/letra`, `url`
 
 ---
 
@@ -263,7 +296,7 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con 52 tests (33 unitarios + 19 de integración):
+El proyecto tiene **cobertura completa** con 63 tests (38 unitarios + 25 de integración):
 
 ```bash
 cargo test              # Ejecutar todos los tests (52)
@@ -302,7 +335,8 @@ Desarrollado con 🦀 Rust
 
 - [x] Soporte para más formatos de imagen (PNG, WEBP)
 - [x] Eliminación de tags específicos
+- [x] Soporte para lyrics (letras de canciones)
 - [ ] Modo batch para procesar múltiples archivos
-- [ ] Soporte para lyrics
 - [ ] Binarios para Windows y macOS
 - [ ] Soporte para otros formatos de audio (FLAC, M4A)
+- [ ] Leer lyrics desde archivo externo (.lrc, .txt)

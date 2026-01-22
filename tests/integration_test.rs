@@ -583,3 +583,184 @@ fn test_cli_cover_unsupported_format() {
     cleanup_file(&mp3_path);
     cleanup_file(&cover_path);
 }
+
+#[test]
+fn test_cli_add_lyrics() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--title", "Song with Lyrics", 
+                "--lyrics", "Primera línea\nSegunda línea\nTercera línea"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Song with Lyrics"));
+    
+    // Verificar que se añadió lyrics
+    let mut found_lyrics = false;
+    for frame in tag.frames() {
+        if let id3::frame::Content::Lyrics(lyrics) = frame.content() {
+            assert_eq!(lyrics.lang, "spa");
+            assert!(lyrics.text.contains("Primera línea"));
+            assert!(lyrics.text.contains("Tercera línea"));
+            found_lyrics = true;
+            break;
+        }
+    }
+    assert!(found_lyrics);
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_lyrics() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir lyrics
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--lyrics", "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Mostrar tags
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "--show"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Letra"));
+    assert!(stdout.contains("Line 1"));
+    assert!(stdout.contains("líneas más")); // Preview de solo 3 líneas
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_lyrics() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir lyrics
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--lyrics", "Test lyrics"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Verificar que se añadió
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let has_lyrics = tag.frames().any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
+    assert!(has_lyrics);
+    
+    // Eliminar lyrics
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "-r", "lyrics"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    // Verificar que se eliminó
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let has_lyrics = tag.frames().any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
+    assert!(!has_lyrics);
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_add_url() {
+    let mp3_path = create_temp_mp3();
+    
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--title", "Song with URL", 
+                "--url", "https://example.com/artist"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Song with URL"));
+    
+    // Verificar que se añadió URL
+    let mut found_url = false;
+    for frame in tag.frames() {
+        if frame.id() == "WOAR" {
+            if let id3::frame::Content::Link(url) = frame.content() {
+                assert_eq!(url, "https://example.com/artist");
+                found_url = true;
+                break;
+            }
+        }
+    }
+    assert!(found_url);
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_url() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir URL
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--url", "https://myband.com"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Mostrar tags
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), "--show"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("URL"));
+    assert!(stdout.contains("https://myband.com"));
+    
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_url() {
+    let mp3_path = create_temp_mp3();
+    
+    // Añadir URL
+    Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "--url", "https://test.com"])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Verificar que se añadió
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let has_url = tag.frames().any(|f| f.id() == "WOAR");
+    assert!(has_url);
+    
+    // Eliminar URL
+    let output = Command::new("cargo")
+        .args(&["run", "--quiet", "--", "--file", mp3_path.to_str().unwrap(), 
+                "-r", "url"])
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    
+    // Verificar que se eliminó
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let has_url = tag.frames().any(|f| f.id() == "WOAR");
+    assert!(!has_url);
+    
+    cleanup_file(&mp3_path);
+}

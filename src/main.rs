@@ -1,6 +1,6 @@
 use clap::Parser;
-use id3::{Tag, TagLike};
-use id3::frame::{Picture, PictureType};
+use id3::{Tag, TagLike, Frame};
+use id3::frame::{Content, Lyrics, Picture, PictureType};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -49,11 +49,19 @@ struct Args {
     #[arg(short, long)]
     cover: Option<PathBuf>,
 
+    /// Letra de la canción (lyrics)
+    #[arg(short = 'L', long)]
+    lyrics: Option<String>,
+
+    /// URL asociada (sitio web del artista, página oficial, etc.)
+    #[arg(short = 'u', long)]
+    url: Option<String>,
+
     /// Mostrar todos los tags del archivo
     #[arg(short, long)]
     show: bool,
 
-    /// Eliminar tags específicos (title, artist, album, year, genre, track, date, copyright, cover)
+    /// Eliminar tags específicos (title, artist, album, year, genre, track, date, copyright, cover, lyrics, url)
     #[arg(short, long)]
     remove: Vec<String>,
 }
@@ -117,6 +125,26 @@ fn apply_metadata(
     }
 
     changed
+}
+
+/// Añade letras (lyrics) al tag
+fn add_lyrics(tag: &mut Tag, text: &str) -> bool {
+    let lyrics_frame = Frame::with_content("USLT", Content::Lyrics(Lyrics {
+        lang: "spa".to_string(),
+        description: String::new(),
+        text: text.to_string(),
+    }));
+    
+    tag.add_frame(lyrics_frame);
+    true
+}
+
+/// Añade URL al tag (WOAR - Official artist/performer webpage)
+fn add_url(tag: &mut Tag, url: &str) -> bool {
+    // WOAR es un frame de tipo Link, no Text
+    let url_frame = Frame::with_content("WOAR", Content::Link(url.to_string()));
+    tag.add_frame(url_frame);
+    true
 }
 
 /// Crea un Picture frame desde datos de imagen
@@ -196,8 +224,16 @@ fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
                 tag.remove_all_pictures();
                 true
             }
+            "lyrics" | "letra" => {
+                tag.remove("USLT");
+                true
+            }
+            "url" => {
+                tag.remove("WOAR");
+                true
+            }
             _ => {
-                eprintln!("⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, date, copyright, cover", tag_name);
+                eprintln!("⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, date, copyright, cover, lyrics, url", tag_name);
                 false
             }
         };
@@ -252,12 +288,38 @@ fn display_tags(tag: &Tag) {
         println!("👥 Artista del álbum: {}", album_artist);
     }
     
+    // Mostrar URL si existe
+    for frame in tag.frames() {
+        if frame.id() == "WOAR" {
+            if let Content::Link(url) = frame.content() {
+                println!("🌐 URL: {}", url);
+                break;
+            }
+        }
+    }
+    
     let pictures: Vec<_> = tag.pictures().collect();
     if !pictures.is_empty() {
         println!("🖼️  Carátulas: {} imagen(es)", pictures.len());
         for (i, pic) in pictures.iter().enumerate() {
             println!("   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes", 
                 i + 1, pic.picture_type, pic.mime_type, pic.data.len());
+        }
+    }
+    
+    // Mostrar lyrics si existen
+    for frame in tag.frames() {
+        if let Content::Lyrics(lyrics) = frame.content() {
+            println!("📝 Letra ({}):", lyrics.lang);
+            // Mostrar solo las primeras 3 líneas como preview
+            let lines: Vec<&str> = lyrics.text.lines().collect();
+            for line in lines.iter().take(3) {
+                println!("   {}", line);
+            }
+            if lines.len() > 3 {
+                println!("   ... ({} líneas más)", lines.len() - 3);
+            }
+            break; // Solo mostrar el primer frame de lyrics
         }
     }
     
@@ -348,6 +410,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("✓ Copyright: {}", copyright);
     }
 
+    // Añadir lyrics
+    let mut lyrics_added = false;
+    if let Some(lyrics_text) = &args.lyrics {
+        add_lyrics(&mut tag, lyrics_text);
+        let line_count = lyrics_text.lines().count();
+        println!("✓ Letra: {} línea(s)", line_count);
+        lyrics_added = true;
+    }
+
+    // Añadir URL
+    let mut url_added = false;
+    if let Some(url) = &args.url {
+        add_url(&mut tag, url);
+        println!("✓ URL: {}", url);
+        url_added = true;
+    }
+
     // Añadir carátula
     let mut cover_added = false;
     if let Some(cover_path) = &args.cover {
@@ -370,7 +449,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Guardar cambios
-    if changed || cover_added || removed {
+    if changed || cover_added || removed || lyrics_added || url_added {
         tag.write_to_path(&args.file, id3::Version::Id3v24)?;
         println!("\n✅ Tags guardados correctamente en '{}'", args.file.display());
     } else {
@@ -756,5 +835,97 @@ mod tests {
         let pictures: Vec<_> = tag.pictures().collect();
         assert_eq!(pictures.len(), 1);
         assert_eq!(pictures[0].mime_type, "image/webp");
+    }
+
+    #[test]
+    fn test_add_lyrics() {
+        let mut tag = Tag::new();
+        let lyrics_text = "Primera línea\nSegunda línea\nTercera línea";
+        
+        let result = add_lyrics(&mut tag, lyrics_text);
+        assert!(result);
+        
+        // Verificar que se añadió el frame de lyrics
+        let mut found_lyrics = false;
+        for frame in tag.frames() {
+            if let Content::Lyrics(lyrics) = frame.content() {
+                assert_eq!(lyrics.lang, "spa");
+                assert_eq!(lyrics.text, lyrics_text);
+                found_lyrics = true;
+                break;
+            }
+        }
+        assert!(found_lyrics);
+    }
+
+    #[test]
+    fn test_remove_lyrics() {
+        let mut tag = Tag::new();
+        let lyrics_text = "Test lyrics";
+        add_lyrics(&mut tag, lyrics_text);
+        
+        // Verificar que se añadió
+        let has_lyrics = tag.frames().any(|f| matches!(f.content(), Content::Lyrics(_)));
+        assert!(has_lyrics);
+        
+        // Eliminar lyrics
+        let changed = remove_tags(&mut tag, &["lyrics".to_string()]);
+        assert!(changed);
+        
+        // Verificar que se eliminó
+        let has_lyrics = tag.frames().any(|f| matches!(f.content(), Content::Lyrics(_)));
+        assert!(!has_lyrics);
+    }
+
+    #[test]
+    fn test_remove_lyrics_spanish() {
+        let mut tag = Tag::new();
+        add_lyrics(&mut tag, "Test");
+        
+        let changed = remove_tags(&mut tag, &["letra".to_string()]);
+        assert!(changed);
+        
+        let has_lyrics = tag.frames().any(|f| matches!(f.content(), Content::Lyrics(_)));
+        assert!(!has_lyrics);
+    }
+
+    #[test]
+    fn test_add_url() {
+        let mut tag = Tag::new();
+        let url = "https://example.com/artist";
+        
+        let result = add_url(&mut tag, url);
+        assert!(result);
+        
+        // Verificar que se añadió el frame de URL
+        let mut found_url = false;
+        for frame in tag.frames() {
+            if frame.id() == "WOAR" {
+                if let Content::Link(link) = frame.content() {
+                    assert_eq!(link, url);
+                    found_url = true;
+                    break;
+                }
+            }
+        }
+        assert!(found_url);
+    }
+
+    #[test]
+    fn test_remove_url() {
+        let mut tag = Tag::new();
+        add_url(&mut tag, "https://test.com");
+        
+        // Verificar que se añadió
+        let has_url = tag.frames().any(|f| f.id() == "WOAR");
+        assert!(has_url);
+        
+        // Eliminar URL
+        let changed = remove_tags(&mut tag, &["url".to_string()]);
+        assert!(changed);
+        
+        // Verificar que se eliminó
+        let has_url = tag.frames().any(|f| f.id() == "WOAR");
+        assert!(!has_url);
     }
 }

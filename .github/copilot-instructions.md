@@ -20,8 +20,8 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Run locally with args: `cargo run -- --your-args`
   - Example: `cargo run -- -f song.mp3 -t "Title" -a "Artist"`
   - Build optimized release: `cargo build --release`
-  - Run all tests: `cargo test` (33 unit + 19 integration = 52 total)
-  - Run only unit tests: `cargo test --lib`
+  - Run all tests: `cargo test` (38 unit + 25 integration = 63 total)
+  - Run only unit tests: `cargo test --test ''`
   - Run only integration tests: `cargo test --test '*'`
   - Format: `cargo fmt`
   - Lint: `cargo clippy -- -D warnings`
@@ -47,16 +47,19 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Primary external dependency: the `id3` crate. Inspect its API (e.g., `id3::Tag`, `id3::frame::Picture`) when adding features
   - Date fields use `Timestamp` type - parse strings with `.parse()`
   - Copyright stored in TCOP frame via `tag.set_text("TCOP", value)`
+  - Lyrics stored in USLT frame (Unsynchronised lyrics) with language code "spa" and Content::Lyrics
+  - URL stored in WOAR frame (Official artist webpage) with Content::Link
   - Cover art MIME types auto-detected from file extension: .jpg/.jpeg → image/jpeg, .png → image/png, .webp → image/webp
   - `detect_mime_type()` function validates image formats and returns appropriate MIME type
   - `add_cover_art()` now accepts `&Path` to detect format before embedding
+  - `add_lyrics()` creates Frame with Content::Lyrics and adds to tag
   - No network or external credentials discovered — changes are local filesystem operations
 
 - **Supported features (as of current version):**
   - Basic metadata: title, artist(s), album, year, genre, track
-  - Extended metadata: date (recorded), copyright
+  - Extended metadata: date (recorded), copyright, lyrics (USLT frame), url (WOAR frame)
   - Cover art: JPG, PNG, and WEBP files as front cover with MIME type auto-detection
-  - Display: `--show` flag to view all tags
+  - Display: `--show` flag to view all tags (lyrics preview shows first 3 lines)
   - Tag removal: `--remove` flag to delete specific tags (supports English/Spanish names)
   - Multiple artists: specify `--artist` multiple times, joined with "; "
 
@@ -77,11 +80,12 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - All new features must include tests (both unit and integration)
   - Maintain the pattern of extracting testable functions from `main()`
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing test coverage - currently at 52 tests
-  - When modifying `apply_metadata()` or `add_cover_art()`, update ALL tests that call them
+  - Preserve existing test coverage - currently at 63 tests
+  - When modifying `apply_metadata()`, `add_cover_art()`, `add_lyrics()`, or `add_url()`, update ALL tests that call them
   - Use "; " separator for multiple artists (not " / ")
   - Supported image formats: JPG, PNG, WEBP - validate extensions and return helpful errors
   - Tag names accept both English and Spanish for user-friendly CLI
+  - Lyrics use ISO-639-2 language code "spa" for Spanish
 
 - **Testing patterns:**
   - Unit tests in `src/main.rs` under `#[cfg(test)] mod tests`
