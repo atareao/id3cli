@@ -5,6 +5,9 @@ version  := `vampus show`
 list:
     @just --list
 
+install:
+    cargo install --path .
+
 upgrade:
     @vampus upgrade --patch
 
