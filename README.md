@@ -44,45 +44,50 @@ sudo cp target/release/id3cli /usr/local/bin/
 
 ## Uso
 
+### Comandos disponibles
+
 ```bash
-id3cli [OPTIONS] --file <FILE>
+# Mostrar todos los tags del archivo
+id3cli show <FILE>
+
+# Editar tags del archivo
+id3cli edit <FILE> [OPTIONS]
 ```
 
-### Opciones disponibles
+### Opciones para el comando edit
 
-| Opción | Descripción |
-| ------ | ----------- |
-| `-f, --file <FILE>` | Ruta del archivo MP3 (requerido) |
-| `-t, --title <TITLE>` | Título de la canción |
-| `-a, --artist <ARTIST>` | Artista (se puede repetir para múltiples artistas) |
-| `-A, --album <ALBUM>` | Álbum |
-| `-y, --year <YEAR>` | Año |
-| `-g, --genre <GENRE>` | Género |
-| `-T, --track <TRACK>` | Número de pista |
-| `-S, --season <SEASON>` | Temporada (TPOS - útil para podcasts) |
-| `-d, --date <DATE>` | Fecha de grabación (YYYY-MM-DD o YYYY) |
-| `-C, --copyright <COPYRIGHT>` | Copyright |
-| `--composer <COMPOSER>` | Compositor (TCOM) |
-| `--subtitle <SUBTITLE>` | Subtítulo o descripción (TIT3) |
-| `--original-artist <ORIGINAL_ARTIST>` | Artista original (TOPE) |
-| `--album-artist <ALBUM_ARTIST>` | Artista del álbum / Publisher (TPE2) |
-| `-c, --cover <COVER>` | Ruta del archivo de imagen para la carátula (JPG, PNG, WEBP) |
-| `-L, --lyrics <LYRICS>` | Letra de la canción (lyrics) |
-| `-u, --url <URL>` | URL asociada (sitio web del artista, página oficial, etc.) |
-| `--compilation` | Marcar como compilación (Apple TCMP) |
-| `--album-sort <ALBUM_SORT>` | Orden de clasificación del álbum (Apple TSOA) |
-| `--artist-sort <ARTIST_SORT>` | Orden de clasificación del artista (Apple TSOP) |
-| `--title-sort <TITLE_SORT>` | Orden de clasificación del título (Apple TSOT) |
-| `-r, --remove <TAG>` | Eliminar tags específicos (se puede repetir) |
-| `-s, --show` | Mostrar todos los tags del archivo |
-| `-h, --help` | Mostrar ayuda |
+| Opción                                | Descripción                                                  |
+| ------------------------------------- | ------------------------------------------------------------ |
+| `<FILE>`                              | Ruta del archivo MP3 (argumento posicional, requerido)       |
+| `-t, --title <TITLE>`                 | Título de la canción                                         |
+| `-a, --artist <ARTIST>`               | Artista (se puede repetir para múltiples artistas)           |
+| `-A, --album <ALBUM>`                 | Álbum                                                        |
+| `-y, --year <YEAR>`                   | Año                                                          |
+| `-g, --genre <GENRE>`                 | Género                                                       |
+| `-T, --track <TRACK>`                 | Número de pista                                              |
+| `-S, --season <SEASON>`               | Temporada (TPOS - útil para podcasts)                        |
+| `-d, --date <DATE>`                   | Fecha de grabación (YYYY-MM-DD o YYYY)                       |
+| `-C, --copyright <COPYRIGHT>`         | Copyright                                                    |
+| `--composer <COMPOSER>`               | Compositor (TCOM)                                            |
+| `--subtitle <SUBTITLE>`               | Subtítulo o descripción (TIT3)                               |
+| `--original-artist <ORIGINAL_ARTIST>` | Artista original (TOPE)                                      |
+| `--album-artist <ALBUM_ARTIST>`       | Artista del álbum / Publisher (TPE2)                         |
+| `-c, --cover <COVER>`                 | Ruta del archivo de imagen para la carátula (JPG, PNG, WEBP) |
+| `-L, --lyrics <LYRICS>`               | Letra de la canción (lyrics)                                 |
+| `-u, --url <URL>`                     | URL asociada (sitio web del artista, página oficial, etc.)   |
+| `--compilation`                       | Marcar como compilación (Apple TCMP)                         |
+| `--album-sort <ALBUM_SORT>`           | Orden de clasificación del álbum (Apple TSOA)                |
+| `--artist-sort <ARTIST_SORT>`         | Orden de clasificación del artista (Apple TSOP)              |
+| `--title-sort <TITLE_SORT>`           | Orden de clasificación del título (Apple TSOT)               |
+| `-r, --remove <TAG>`                  | Eliminar tags específicos (se puede repetir)                 |
+| `-h, --help`                          | Mostrar ayuda                                                |
 
 ## Ejemplos de uso
 
 ### 👀 Ver tags existentes
 
 ```bash
-id3cli -f cancion.mp3 --show
+id3cli show cancion.mp3
 ```
 
 **Salida:**
@@ -130,7 +135,7 @@ id3cli -f cancion.mp3 --show
 ### ✏️ Añadir metadatos básicos
 
 ```bash
-id3cli -f cancion.mp3 \
+id3cli edit cancion.mp3 \
   --title "Bohemian Rhapsody" \
   --artist "Queen" \
   --album "A Night at the Opera" \
@@ -142,7 +147,7 @@ id3cli -f cancion.mp3 \
 ### 👥 Múltiples artistas (colaboraciones)
 
 ```bash
-id3cli -f remix.mp3 \
+id3cli edit remix.mp3 \
   --title "Despacito Remix" \
   --artist "Luis Fonsi" \
   --artist "Daddy Yankee" \
@@ -155,7 +160,7 @@ id3cli -f remix.mp3 \
 
 ```bash
 # Episodio con temporada
-id3cli -f episodio.mp3 \
+id3cli edit episodio.mp3 \
   --title "El origen de Internet" \
   --artist "Tech Podcast" \
   --album "Historia de la Tecnología" \
@@ -172,38 +177,38 @@ Soporta **JPG, PNG y WEBP** con detección automática de tipo MIME:
 
 ```bash
 # JPG o JPEG
-id3cli -f cancion.mp3 --cover portada.jpg
+id3cli edit cancion.mp3 --cover portada.jpg
 
 # PNG
-id3cli -f cancion.mp3 --cover portada.png
+id3cli edit cancion.mp3 --cover portada.png
 
 # WEBP
-id3cli -f cancion.mp3 --cover portada.webp
+id3cli edit cancion.mp3 --cover portada.webp
 ```
 
 ### 🎶 Añadir letra (lyrics)
 
 ```bash
 # Letra simple
-id3cli -f cancion.mp3 -L "Primera línea
+id3cli edit cancion.mp3 -L "Primera línea
 Segunda línea
 Coro completo"
 
 # Desde archivo
-id3cli -f cancion.mp3 -L "$(cat letra.txt)"
+id3cli edit cancion.mp3 -L "$(cat letra.txt)"
 
 # Con otros metadatos
-id3cli -f cancion.mp3 -t "Canción" -a "Artista" -L "Letra completa..."
+id3cli edit cancion.mp3 -t "Canción" -a "Artista" -L "Letra completa..."
 ```
 
 ### 🌐 Añadir URL
 
 ```bash
 # URL del sitio oficial del artista
-id3cli -f cancion.mp3 -u "https://artista.com"
+id3cli edit cancion.mp3 -u "https://artista.com"
 
 # Con otros metadatos
-id3cli -f cancion.mp3 -t "Canción" -a "Artista" -u "https://artista.com/official"
+id3cli edit cancion.mp3 -t "Canción" -a "Artista" -u "https://artista.com/official"
 ```
 
 ### 🍎 Metadatos de Apple
@@ -212,10 +217,10 @@ Los metadatos de Apple son útiles para organizar bibliotecas musicales en iTune
 
 ```bash
 # Marcar como compilación (álbum recopilatorio)
-id3cli -f cancion.mp3 --compilation
+id3cli edit cancion.mp3 --compilation
 
 # Especificar orden de clasificación personalizado
-id3cli -f cancion.mp3 \
+id3cli edit cancion.mp3 \
   --title "A Hard Day's Night" \
   --artist "The Beatles" \
   --album "A Hard Day's Night" \
@@ -224,7 +229,7 @@ id3cli -f cancion.mp3 \
   --title-sort "Hard Day's Night, A"
 
 # Compilación con orden de clasificación
-id3cli -f cancion.mp3 \
+id3cli edit cancion.mp3 \
   --compilation \
   --album-sort "Greatest Hits" \
   --artist-sort "Various Artists"
@@ -242,7 +247,7 @@ id3cli -f cancion.mp3 \
 Configuración completa para episodios de podcast con todas las etiquetas recomendadas:
 
 ```bash
-id3cli -f episodio42.mp3 \
+id3cli edit episodio42.mp3 \
   --title "Episodio 42: Introducción a Rust" \
   --subtitle "Aprendiendo sobre ownership y borrowing" \
   --artist "Lorenzo" \
@@ -275,7 +280,7 @@ id3cli -f episodio42.mp3 \
 ### 📦 Metadata completa
 
 ```bash
-id3cli -f cancion.mp3 \
+id3cli edit cancion.mp3 \
   --title "Yesterday" \
   --artist "The Beatles" \
   --album "Help!" \
@@ -293,13 +298,13 @@ Los tags existentes se preservan automáticamente:
 
 ```bash
 # Solo cambiar el año
-id3cli -f cancion.mp3 --year 2026
+id3cli edit cancion.mp3 --year 2026
 
 # Solo añadir carátula (preserva título, artista, etc.)
-id3cli -f cancion.mp3 --cover nueva_portada.jpg
+id3cli edit cancion.mp3 --cover nueva_portada.jpg
 
 # Cambiar artista sin afectar otros tags
-id3cli -f cancion.mp3 -a "Nuevo Artista"
+id3cli edit cancion.mp3 -a "Nuevo Artista"
 ```
 
 ### 🗑️ Eliminar tags específicos
@@ -308,30 +313,30 @@ Acepta nombres en **inglés o español**:
 
 ```bash
 # Eliminar un tag
-id3cli -f cancion.mp3 --remove title
+id3cli edit cancion.mp3 --remove title
 
 # Eliminar varios tags a la vez
-id3cli -f cancion.mp3 -r title -r artist -r album
+id3cli edit cancion.mp3 -r title -r artist -r album
 
 # Usar nombres en español
-id3cli -f cancion.mp3 -r título -r artista
+id3cli edit cancion.mp3 -r título -r artista
 
 # Eliminar carátula
-id3cli -f cancion.mp3 --remove cover
+id3cli edit cancion.mp3 --remove cover
 
 # Eliminar letra
-id3cli -f cancion.mp3 -r lyrics
+id3cli edit cancion.mp3 -r lyrics
 
 # Eliminar URL
-id3cli -f cancion.mp3 -r url
+id3cli edit cancion.mp3 -r url
 
 # Eliminar metadatos de Apple
-id3cli -f cancion.mp3 -r compilation
-id3cli -f cancion.mp3 -r album_sort -r artist_sort -r title_sort
+id3cli edit cancion.mp3 -r compilation
+id3cli edit cancion.mp3 -r album_sort -r artist_sort -r title_sort
 
 # Usar nombres en español para metadatos Apple
-id3cli -f cancion.mp3 -r compilación
-id3cli -f cancion.mp3 -r orden-album -r orden-artista -r orden-titulo
+id3cli edit cancion.mp3 -r compilación
+id3cli edit cancion.mp3 -r orden-album -r orden-artista -r orden-titulo
 ```
 
 **Tags disponibles para eliminar:**
@@ -341,28 +346,28 @@ id3cli -f cancion.mp3 -r orden-album -r orden-artista -r orden-titulo
 
 ## Referencia Rápida de Tags ID3v2
 
-| Frame ID3v2 | Opción CLI | Descripción | Uso en Podcasts |
-|-------------|------------|-------------|-----------------|
-| TIT2 | `--title` | Título principal | Nombre del episodio |
-| TIT3 | `--subtitle` | Subtítulo/Descripción | Descripción corta |
-| TPE1 | `--artist` | Artista/Intérprete | Host/Presentador |
-| TPE2 | `--album-artist` | Artista del álbum | Publisher/Creador |
-| TALB | `--album` | Álbum | Nombre del podcast |
-| TCOM | `--composer` | Compositor | Autor de la obra |
-| TOPE | `--original-artist` | Artista original | Creador original |
-| TCON | `--genre` | Género | "Podcast" |
-| TRCK | `--track` | Número de pista | Número de episodio |
-| TPOS | `--season` | Disco/Parte | Temporada |
-| TDRC | `--date` | Fecha de grabación | Fecha de publicación |
-| TCOP | `--copyright` | Copyright | Licencia (CC BY 4.0) |
-| TYER | `--year` | Año | Año de publicación |
-| USLT | `--lyrics` | Letras | Transcripción |
-| WOAR | `--url` | URL oficial | Sitio web |
-| APIC | `--cover` | Carátula | Logo del podcast |
-| TCMP | `--compilation` | Compilación (Apple) | - |
-| TSOA | `--album-sort` | Orden álbum (Apple) | - |
-| TSOP | `--artist-sort` | Orden artista (Apple) | - |
-| TSOT | `--title-sort` | Orden título (Apple) | - |
+| Frame ID3v2 | Opción CLI          | Descripción           | Uso en Podcasts      |
+| ----------- | ------------------- | --------------------- | -------------------- |
+| TIT2        | `--title`           | Título principal      | Nombre del episodio  |
+| TIT3        | `--subtitle`        | Subtítulo/Descripción | Descripción corta    |
+| TPE1        | `--artist`          | Artista/Intérprete    | Host/Presentador     |
+| TPE2        | `--album-artist`    | Artista del álbum     | Publisher/Creador    |
+| TALB        | `--album`           | Álbum                 | Nombre del podcast   |
+| TCOM        | `--composer`        | Compositor            | Autor de la obra     |
+| TOPE        | `--original-artist` | Artista original      | Creador original     |
+| TCON        | `--genre`           | Género                | "Podcast"            |
+| TRCK        | `--track`           | Número de pista       | Número de episodio   |
+| TPOS        | `--season`          | Disco/Parte           | Temporada            |
+| TDRC        | `--date`            | Fecha de grabación    | Fecha de publicación |
+| TCOP        | `--copyright`       | Copyright             | Licencia (CC BY 4.0) |
+| TYER        | `--year`            | Año                   | Año de publicación   |
+| USLT        | `--lyrics`          | Letras                | Transcripción        |
+| WOAR        | `--url`             | URL oficial           | Sitio web            |
+| APIC        | `--cover`           | Carátula              | Logo del podcast     |
+| TCMP        | `--compilation`     | Compilación (Apple)   | -                    |
+| TSOA        | `--album-sort`      | Orden álbum (Apple)   | -                    |
+| TSOP        | `--artist-sort`     | Orden artista (Apple) | -                    |
+| TSOT        | `--title-sort`      | Orden título (Apple)  | -                    |
 
 ---
 
@@ -388,7 +393,7 @@ cargo test
 ### Ejecutar en modo desarrollo
 
 ```bash
-cargo run -- -f test.mp3 --title "Test"
+cargo run -- edit test.mp3 --title "Test"
 ```
 
 ### Formatear código
@@ -409,10 +414,10 @@ cargo clippy -- -D warnings
 id3cli/
 ├── src/
 │   ├── lib.rs                     # Librería (511 líneas) - lógica de negocio
-│   ├── main.rs                    # CLI (272 líneas) - interfaz de usuario
+│   ├── main.rs                    # CLI (291 líneas) - interfaz de comandos show/edit
 │   └── tests.rs                   # Tests unitarios (730 líneas)
 ├── tests/
-│   └── integration_test.rs        # Tests de integración (1164 líneas)
+│   └── integration_test.rs        # Tests de integración (1628 líneas)
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
@@ -432,7 +437,7 @@ id3cli/
 **Módulos principales:**
 
 - **src/lib.rs** - Librería reutilizable con todas las funciones de manipulación de tags
-- **src/main.rs** - CLI con clap para parsing de argumentos y orquestación
+- **src/main.rs** - CLI con clap subcommands (show/edit) para parsing de argumentos y orquestación
 - **src/tests.rs** - Tests unitarios para todas las funciones de la librería
 
 **Funciones principales:**
