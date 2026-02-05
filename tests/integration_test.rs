@@ -1597,3 +1597,33 @@ fn test_cli_remove_season() {
 
     cleanup_file(&mp3_path);
 }
+
+#[test]
+fn test_cli_add_album() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--album",
+            "My Test Album",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    if !output.status.success() {
+        eprintln!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success());
+
+    // Verificar que el tag fue guardado
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.album(), Some("My Test Album"));
+
+    cleanup_file(&mp3_path);
+}
