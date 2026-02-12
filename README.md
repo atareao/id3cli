@@ -17,7 +17,7 @@ CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
 - 🍎 Soporte para metadatos de Apple: compilation, album sort, artist sort, title sort
 - 🎨 Soporte para carátulas en **JPG, PNG y WEBP** con detección automática de tipo MIME
 - 👥 Soporte para múltiples artistas (colaboraciones)
-- 🗑️ Eliminar tags específicos con nombres en inglés o español
+- 🗑️ **Comando remove dedicado** para eliminar tags específicos con nombres en inglés o español
 - 👀 Visualizar todos los tags existentes con formato legible
 - 🔄 Preserva metadatos existentes al actualizar campos específicos
 
@@ -52,7 +52,21 @@ id3cli show <FILE>
 
 # Editar tags del archivo
 id3cli edit <FILE> [OPTIONS]
+
+# Eliminar tags específicos del archivo
+id3cli remove <FILE> [TAGS...]
 ```
+
+### Opciones para el comando remove
+
+| Argumento   | Descripción                                         |
+| ----------- | --------------------------------------------------- |
+| `<FILE>`    | Ruta del archivo MP3 (requerido)                    |
+| `[TAGS...]` | Tags a eliminar (uno o más argumentos posicionales) |
+
+**Tags disponibles:** `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
+
+También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`, `género`, `pista`, `temporada`, `fecha`, `compositor`, `subtítulo`, `carátula`, `letra`, `compilación`, etc.
 
 ### Opciones para el comando edit
 
@@ -79,7 +93,6 @@ id3cli edit <FILE> [OPTIONS]
 | `--album-sort <ALBUM_SORT>`           | Orden de clasificación del álbum (Apple TSOA)                |
 | `--artist-sort <ARTIST_SORT>`         | Orden de clasificación del artista (Apple TSOP)              |
 | `--title-sort <TITLE_SORT>`           | Orden de clasificación del título (Apple TSOT)               |
-| `-r, --remove <TAG>`                  | Eliminar tags específicos (se puede repetir)                 |
 | `-h, --help`                          | Mostrar ayuda                                                |
 
 ## Ejemplos de uso
@@ -313,34 +326,50 @@ Acepta nombres en **inglés o español**:
 
 ```bash
 # Eliminar un tag
-id3cli edit cancion.mp3 --remove title
+id3cli remove cancion.mp3 title
 
 # Eliminar varios tags a la vez
-id3cli edit cancion.mp3 -r title -r artist -r album
+id3cli remove cancion.mp3 title artist album
 
 # Usar nombres en español
-id3cli edit cancion.mp3 -r título -r artista
+id3cli remove cancion.mp3 título artista
 
 # Eliminar carátula
-id3cli edit cancion.mp3 --remove cover
+id3cli remove cancion.mp3 cover
 
 # Eliminar letra
-id3cli edit cancion.mp3 -r lyrics
+id3cli remove cancion.mp3 lyrics
 
 # Eliminar URL
-id3cli edit cancion.mp3 -r url
+id3cli remove cancion.mp3 url
 
 # Eliminar metadatos de Apple
-id3cli edit cancion.mp3 -r compilation
-id3cli edit cancion.mp3 -r album_sort -r artist_sort -r title_sort
+id3cli remove cancion.mp3 compilation
+id3cli remove cancion.mp3 album_sort artist_sort title_sort
 
 # Usar nombres en español para metadatos Apple
-id3cli edit cancion.mp3 -r compilación
-id3cli edit cancion.mp3 -r orden-album -r orden-artista -r orden-titulo
+id3cli remove cancion.mp3 compilación
+id3cli remove cancion.mp3 orden-album orden-artista orden-titulo
 ```
 
 **Tags disponibles para eliminar:**
 `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
+
+### 🎯 Ejemplos adicionales del comando remove
+
+```bash
+# Eliminar todos los metadatos básicos
+id3cli remove cancion.mp3 title artist album year genre
+
+# Limpiar metadatos de podcast
+id3cli remove episodio.mp3 season subtitle composer original_artist
+
+# Eliminar solo elementos multimedia
+id3cli remove cancion.mp3 cover lyrics url
+
+# Resetear ordenes de clasificación de Apple
+id3cli remove cancion.mp3 compilation album_sort artist_sort title_sort
+```
 
 ---
 
@@ -414,7 +443,7 @@ cargo clippy -- -D warnings
 id3cli/
 ├── src/
 │   ├── lib.rs                     # Librería (511 líneas) - lógica de negocio
-│   ├── main.rs                    # CLI (291 líneas) - interfaz de comandos show/edit
+│   ├── main.rs                    # CLI (291 líneas) - interfaz de comandos show/edit/remove
 │   └── tests.rs                   # Tests unitarios (730 líneas)
 ├── tests/
 │   └── integration_test.rs        # Tests de integración (1628 líneas)
@@ -437,7 +466,7 @@ id3cli/
 **Módulos principales:**
 
 - **src/lib.rs** - Librería reutilizable con todas las funciones de manipulación de tags
-- **src/main.rs** - CLI con clap subcommands (show/edit) para parsing de argumentos y orquestación
+- **src/main.rs** - CLI con clap subcommands (show/edit/remove) para parsing de argumentos y orquestación
 - **src/tests.rs** - Tests unitarios para todas las funciones de la librería
 
 **Funciones principales:**

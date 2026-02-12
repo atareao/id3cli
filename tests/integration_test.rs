@@ -512,9 +512,8 @@ fn test_cli_remove_title() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "--remove",
             "title",
         ])
         .output()
@@ -559,11 +558,9 @@ fn test_cli_remove_multiple_tags() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "--remove",
             "title",
-            "--remove",
             "artist",
         ])
         .output()
@@ -614,19 +611,13 @@ fn test_cli_remove_all_tags() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "--remove",
             "title",
-            "--remove",
             "artist",
-            "--remove",
             "album",
-            "--remove",
             "year",
-            "--remove",
             "genre",
-            "--remove",
             "track",
         ])
         .output()
@@ -852,9 +843,8 @@ fn test_cli_remove_lyrics() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "-r",
             "lyrics",
         ])
         .output()
@@ -973,9 +963,8 @@ fn test_cli_remove_url() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "-r",
             "url",
         ])
         .output()
@@ -1118,9 +1107,8 @@ fn test_cli_remove_compilation() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "-r",
             "compilation",
         ])
         .output()
@@ -1166,11 +1154,9 @@ fn test_cli_remove_apple_sort_orders() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "-r",
             "album_sort",
-            "-r",
             "artist_sort",
         ])
         .output()
@@ -1428,15 +1414,11 @@ fn test_cli_remove_new_tags() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "-r",
             "composer",
-            "-r",
             "subtitle",
-            "-r",
             "original_artist",
-            "-r",
             "album_artist",
         ])
         .output()
@@ -1581,9 +1563,8 @@ fn test_cli_remove_season() {
             "run",
             "--quiet",
             "--",
-            "edit",
+            "remove",
             mp3_path.to_str().unwrap(),
-            "-r",
             "season",
         ])
         .output()

@@ -104,10 +104,14 @@ enum Command {
         /// Orden de clasificación del título (Apple TSOT)
         #[arg(long)]
         title_sort: Option<String>,
+    },
+    /// Eliminar tags específicos del archivo MP3
+    Remove {
+        /// Ruta del archivo MP3
+        file: PathBuf,
 
-        /// Eliminar tags específicos (title, artist, album, year, genre, track, season, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
-        #[arg(short, long)]
-        remove: Vec<String>,
+        /// Tags a eliminar (title, artist, album, year, genre, track, season, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
+        tags: Vec<String>,
     },
 }
 
@@ -155,7 +159,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             album_sort,
             artist_sort,
             title_sort,
-            remove,
         } => {
             // Verificar que el archivo MP3 existe
             if !file.exists() {
@@ -174,12 +177,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Tag::new()
                 }
             };
-
-            // Procesar eliminación de tags si se especificó
-            let mut removed = false;
-            if !remove.is_empty() {
-                removed = remove_tags(&mut tag, remove);
-            }
 
             // Aplicar metadatos
             let changed = apply_metadata(
@@ -304,11 +301,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Guardar cambios
-            if changed || cover_added || removed || lyrics_added || url_added || apple_added {
+            if changed || cover_added || lyrics_added || url_added || apple_added {
                 tag.write_to_path(file, id3::Version::Id3v24)?;
                 println!("\n✅ Tags guardados correctamente en '{}'", file.display());
             } else {
                 println!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
+            }
+        }
+        Command::Remove { file, tags } => {
+            // Verificar que el archivo MP3 existe
+            if !file.exists() {
+                eprintln!("Error: El archivo '{}' no existe", file.display());
+                std::process::exit(1);
+            }
+
+            // Verificar que se especificaron tags para eliminar
+            if tags.is_empty() {
+                eprintln!("Error: Debes especificar al menos un tag para eliminar");
+                eprintln!("Ejemplo: id3cli remove cancion.mp3 title artist");
+                std::process::exit(1);
+            }
+
+            // Leer tag
+            let mut tag = match Tag::read_from_path(file) {
+                Ok(tag) => tag,
+                Err(_) => {
+                    eprintln!("Error: No se encontraron tags ID3 en '{}'", file.display());
+                    std::process::exit(1);
+                }
+            };
+
+            // Eliminar tags
+            let removed = remove_tags(&mut tag, tags);
+
+            if removed {
+                tag.write_to_path(file, id3::Version::Id3v24)?;
+                println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
+            } else {
+                println!("\n⚠️  No se encontraron tags válidos para eliminar.");
             }
         }
     }
