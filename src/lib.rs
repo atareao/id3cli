@@ -30,6 +30,7 @@ use std::path::Path;
 /// # Retorna
 ///
 /// `true` si se aplicó al menos un cambio, `false` en caso contrario
+#[allow(clippy::too_many_arguments)]
 pub fn apply_metadata(
     tag: &mut Tag,
     title: Option<&str>,
@@ -489,11 +490,9 @@ pub fn display_tags(tag: &Tag) {
 
     // Mostrar URL si existe
     for frame in tag.frames() {
-        if frame.id() == "WOAR" {
-            if let Content::Link(url) = frame.content() {
-                println!("🌐 URL: {}", url);
-                break;
-            }
+        if frame.id() == "WOAR" && let Content::Link(url) = frame.content() {
+            println!("🌐 URL: {}", url);
+            break;
         }
     }
 
@@ -528,10 +527,10 @@ pub fn display_tags(tag: &Tag) {
     }
 
     // Mostrar metadatos de Apple si existen
-    if let Some(compilation) = tag.get("TCMP").and_then(|f| f.content().text()) {
-        if compilation == "1" {
-            println!(" Compilación: Sí");
-        }
+    if let Some(compilation) = tag.get("TCMP").and_then(|f| f.content().text())
+        && compilation == "1"
+    {
+        println!(" Compilación: Sí");
     }
 
     if let Some(album_sort) = tag.get("TSOA").and_then(|f| f.content().text()) {

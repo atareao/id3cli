@@ -14,6 +14,7 @@ struct Args {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 enum Command {
     /// Mostrar todos los tags del archivo MP3
     Show {
