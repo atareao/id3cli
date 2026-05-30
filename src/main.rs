@@ -112,6 +112,10 @@ enum Command {
 
         /// Tags a eliminar (title, artist, album, year, genre, track, season, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
         tags: Vec<String>,
+
+        /// Eliminar todos los tags del archivo
+        #[arg(short, long)]
+        all: bool,
     },
 }
 
@@ -308,11 +312,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
             }
         }
-        Command::Remove { file, tags } => {
+        Command::Remove { file, tags, all } => {
             // Verificar que el archivo MP3 existe
             if !file.exists() {
                 eprintln!("Error: El archivo '{}' no existe", file.display());
                 std::process::exit(1);
+            }
+
+            // Eliminar todos los tags
+            if *all {
+                let mut tag = match Tag::read_from_path(file) {
+                    Ok(tag) => tag,
+                    Err(_) => {
+                        eprintln!("Error: No se encontraron tags ID3 en '{}'", file.display());
+                        std::process::exit(1);
+                    }
+                };
+
+                remove_all_tags(&mut tag);
+                tag.write_to_path(file, id3::Version::Id3v24)?;
+                println!("\n✅ Todos los tags eliminados de '{}'", file.display());
+                return Ok(());
             }
 
             // Verificar que se especificaron tags para eliminar

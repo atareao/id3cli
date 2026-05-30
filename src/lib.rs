@@ -382,6 +382,36 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
     changed
 }
 
+/// Elimina todos los tags del archivo MP3
+///
+/// Borra todos los frames ID3 conocidos: metadatos básicos, carátulas,
+/// letras, URLs y metadatos de Apple.
+///
+/// # Retorna
+///
+/// `true` si se eliminó al menos un tag
+pub fn remove_all_tags(tag: &mut Tag) -> bool {
+    let has_frames = tag.frames().count() > 0;
+
+    tag.remove_title();
+    tag.remove_artist();
+    tag.remove_album();
+    tag.remove_year();
+    tag.remove_genre();
+    tag.remove_track();
+    tag.remove_disc();
+    tag.remove_date_recorded();
+    tag.remove_album_artist();
+    tag.remove_all_pictures();
+    tag.remove_all_lyrics();
+
+    for frame_id in &["TCOP", "TCOM", "TIT3", "TOPE", "WOAR", "TCMP", "TSOA", "TSOP", "TSOT"] {
+        tag.remove(frame_id);
+    }
+
+    has_frames
+}
+
 /// Muestra todos los tags del archivo MP3 en formato legible
 ///
 /// Imprime a stdout todos los metadatos encontrados en el tag,

@@ -728,3 +728,38 @@ fn test_remove_season_spanish() {
     assert!(changed);
     assert_eq!(tag.disc(), None);
 }
+
+#[test]
+fn test_remove_all_tags_function() {
+    let mut tag = Tag::new();
+    tag.set_title("Title");
+    tag.set_artist("Artist");
+    tag.set_album("Album");
+    tag.set_year(2026);
+    tag.set_genre("Rock");
+    tag.set_track(5);
+    tag.set_disc(2);
+    tag.set_text("TCOP", "© 2026");
+    let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    let path = Path::new("test.jpg");
+    add_cover_art(&mut tag, path, data).unwrap();
+    add_lyrics(&mut tag, "Letra de la canción");
+
+    assert_eq!(tag.title(), Some("Title"));
+    assert_eq!(tag.pictures().count(), 1);
+
+    let changed = remove_all_tags(&mut tag);
+    assert!(changed);
+    assert_eq!(tag.title(), None);
+    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.album(), None);
+    assert_eq!(tag.year(), None);
+    assert_eq!(tag.genre(), None);
+    assert_eq!(tag.track(), None);
+    assert_eq!(tag.disc(), None);
+    assert_eq!(tag.pictures().count(), 0);
+    assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), None);
+
+    let has_lyrics = tag.frames().any(|f| matches!(f.content(), Content::Lyrics(_)));
+    assert!(!has_lyrics);
+}

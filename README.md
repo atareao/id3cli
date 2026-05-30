@@ -53,16 +53,20 @@ id3cli show <FILE>
 # Editar tags del archivo
 id3cli edit <FILE> [OPTIONS]
 
+# Eliminar todos los tags del archivo
+id3cli remove <FILE> --all
+
 # Eliminar tags específicos del archivo
 id3cli remove <FILE> [TAGS...]
 ```
 
 ### Opciones para el comando remove
 
-| Argumento   | Descripción                                         |
-| ----------- | --------------------------------------------------- |
-| `<FILE>`    | Ruta del archivo MP3 (requerido)                    |
-| `[TAGS...]` | Tags a eliminar (uno o más argumentos posicionales) |
+| Argumento    | Descripción                                         |
+| ------------ | --------------------------------------------------- |
+| `<FILE>`     | Ruta del archivo MP3 (requerido)                    |
+| `-a, --all`  | Eliminar todos los tags del archivo                 |
+| `[TAGS...]`  | Tags a eliminar (uno o más argumentos posicionales) |
 
 **Tags disponibles:** `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
 
@@ -354,6 +358,13 @@ id3cli remove cancion.mp3 orden-album orden-artista orden-titulo
 
 **Tags disponibles para eliminar:**
 `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
+
+### 🗑️ Eliminar todos los tags
+
+```bash
+# Eliminar todos los tags de una sola vez
+id3cli remove cancion.mp3 --all
+```
 
 ### 🎯 Ejemplos adicionales del comando remove
 
