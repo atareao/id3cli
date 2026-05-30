@@ -1,4 +1,14 @@
 # Changelog
+## [0.3.0] - 2026-05-30
+
+### Features
+
+- Add remove --all flag and fix CI/clippy
+## [0.2.3] - 2026-05-30
+
+### Miscellaneous Tasks
+
+- Release v0.2.3
 ## [0.2.2] - 2026-05-30
 
 ### Features
