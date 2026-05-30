@@ -4,8 +4,8 @@
 //! tags ID3v2.4 en archivos MP3, incluyendo metadatos básicos, carátulas, lyrics,
 //! URLs y metadatos específicos de Apple.
 
-use id3::{Tag, TagLike, Frame};
 use id3::frame::{Content, Lyrics, Picture, PictureType};
+use id3::{Frame, Tag, TagLike};
 use std::path::Path;
 
 /// Aplica los metadatos especificados al tag ID3
@@ -30,6 +30,7 @@ use std::path::Path;
 /// # Retorna
 ///
 /// `true` si se aplicó al menos un cambio, `false` en caso contrario
+#[allow(clippy::too_many_arguments)]
 pub fn apply_metadata(
     tag: &mut Tag,
     title: Option<&str>,
@@ -129,12 +130,15 @@ pub fn apply_metadata(
 ///
 /// `true` si se añadió el frame correctamente
 pub fn add_lyrics(tag: &mut Tag, text: &str) -> bool {
-    let lyrics_frame = Frame::with_content("USLT", Content::Lyrics(Lyrics {
-        lang: "spa".to_string(),
-        description: String::new(),
-        text: text.to_string(),
-    }));
-    
+    let lyrics_frame = Frame::with_content(
+        "USLT",
+        Content::Lyrics(Lyrics {
+            lang: "spa".to_string(),
+            description: String::new(),
+            text: text.to_string(),
+        }),
+    );
+
     tag.add_frame(lyrics_frame);
     true
 }
@@ -163,38 +167,38 @@ pub fn add_url(tag: &mut Tag, url: &str) -> bool {
 ///
 /// `true` si se aplicó al menos un cambio
 pub fn add_apple_metadata(
-    tag: &mut Tag, 
+    tag: &mut Tag,
     compilation: bool,
     album_sort: Option<&str>,
     artist_sort: Option<&str>,
-    title_sort: Option<&str>
+    title_sort: Option<&str>,
 ) -> bool {
     let mut changed = false;
-    
+
     // TCMP - Compilation flag (1 = part of compilation)
     if compilation {
         tag.set_text("TCMP", "1");
         changed = true;
     }
-    
+
     // TSOA - Album sort order
     if let Some(sort) = album_sort {
         tag.set_text("TSOA", sort);
         changed = true;
     }
-    
+
     // TSOP - Performer/Artist sort order
     if let Some(sort) = artist_sort {
         tag.set_text("TSOP", sort);
         changed = true;
     }
-    
+
     // TSOT - Title sort order
     if let Some(sort) = title_sort {
         tag.set_text("TSOT", sort);
         changed = true;
     }
-    
+
     changed
 }
 
@@ -246,9 +250,13 @@ pub fn detect_mime_type(path: &Path) -> Result<&'static str, String> {
 /// Retorna un error si:
 /// * El formato de imagen no es soportado
 /// * No se puede determinar la extensión
-pub fn add_cover_art(tag: &mut Tag, cover_path: &Path, cover_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-    let mime_type = detect_mime_type(cover_path)
-        .map_err(|e| format!("{} (soportados: jpg, png, webp)", e))?;
+pub fn add_cover_art(
+    tag: &mut Tag,
+    cover_path: &Path,
+    cover_data: Vec<u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mime_type =
+        detect_mime_type(cover_path).map_err(|e| format!("{} (soportados: jpg, png, webp)", e))?;
     let picture = create_picture_frame(cover_data, mime_type);
     tag.add_frame(picture);
     Ok(())
@@ -284,7 +292,7 @@ pub fn add_cover_art(tag: &mut Tag, cover_path: &Path, cover_data: Vec<u8>) -> R
 /// `true` si se eliminó al menos un tag
 pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
     let mut changed = false;
-    
+
     for tag_name in tags_to_remove {
         let removed = match tag_name.to_lowercase().as_str() {
             "title" | "título" => {
@@ -327,7 +335,8 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
                 tag.remove("TCOM");
                 true
             }
-            "subtitle" | "subtítulo" | "subtitulo" | "description" | "descripción" | "descripcion" => {
+            "subtitle" | "subtítulo" | "subtitulo" | "description" | "descripción"
+            | "descripcion" => {
                 tag.remove("TIT3");
                 true
             }
@@ -368,18 +377,53 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
                 true
             }
             _ => {
-                eprintln!("⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, season, date, copyright, composer, subtitle, original_artist, album_artist, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort", tag_name);
+                eprintln!(
+                    "⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, season, date, copyright, composer, subtitle, original_artist, album_artist, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort",
+                    tag_name
+                );
                 false
             }
         };
-        
+
         if removed {
             println!("✓ Eliminado: {}", tag_name);
             changed = true;
         }
     }
-    
+
     changed
+}
+
+/// Elimina todos los tags del archivo MP3
+///
+/// Borra todos los frames ID3 conocidos: metadatos básicos, carátulas,
+/// letras, URLs y metadatos de Apple.
+///
+/// # Retorna
+///
+/// `true` si se eliminó al menos un tag
+pub fn remove_all_tags(tag: &mut Tag) -> bool {
+    let has_frames = tag.frames().count() > 0;
+
+    tag.remove_title();
+    tag.remove_artist();
+    tag.remove_album();
+    tag.remove_year();
+    tag.remove_genre();
+    tag.remove_track();
+    tag.remove_disc();
+    tag.remove_date_recorded();
+    tag.remove_album_artist();
+    tag.remove_all_pictures();
+    tag.remove_all_lyrics();
+
+    for frame_id in &[
+        "TCOP", "TCOM", "TIT3", "TOPE", "WOAR", "TCMP", "TSOA", "TSOP", "TSOT",
+    ] {
+        tag.remove(frame_id);
+    }
+
+    has_frames
 }
 
 /// Muestra todos los tags del archivo MP3 en formato legible
@@ -391,78 +435,83 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
 pub fn display_tags(tag: &Tag) {
     println!("\n📋 Tags ID3 encontrados:\n");
     println!("═══════════════════════════════════════");
-    
+
     if let Some(title) = tag.title() {
         println!("🎵 Título:    {}", title);
     }
-    
+
     if let Some(artist) = tag.artist() {
         println!("🎤 Artista:   {}", artist);
     }
-    
+
     if let Some(album) = tag.album() {
         println!("💿 Álbum:     {}", album);
     }
-    
+
     if let Some(year) = tag.year() {
         println!("📅 Año:       {}", year);
     }
-    
+
     if let Some(date) = tag.date_recorded() {
         println!("📆 Fecha:     {}", date);
     }
-    
+
     if let Some(genre) = tag.genre() {
         println!("🎸 Género:    {}", genre);
     }
-    
+
     if let Some(track) = tag.track() {
         println!("#️⃣  Pista:     {}", track);
     }
-    
+
     if let Some(season) = tag.disc() {
         println!("📺 Temporada: {}", season);
     }
-    
+
     if let Some(copyright) = tag.get("TCOP").and_then(|f| f.content().text()) {
         println!("©️  Copyright: {}", copyright);
     }
-    
+
     if let Some(composer) = tag.get("TCOM").and_then(|f| f.content().text()) {
         println!("🎼 Compositor: {}", composer);
     }
-    
+
     if let Some(subtitle) = tag.get("TIT3").and_then(|f| f.content().text()) {
         println!("📄 Subtítulo: {}", subtitle);
     }
-    
+
     if let Some(original_artist) = tag.get("TOPE").and_then(|f| f.content().text()) {
         println!("🎙️  Artista original: {}", original_artist);
     }
-    
+
     if let Some(album_artist) = tag.album_artist() {
         println!("👥 Artista del álbum: {}", album_artist);
     }
-    
+
     // Mostrar URL si existe
     for frame in tag.frames() {
-        if frame.id() == "WOAR" {
-            if let Content::Link(url) = frame.content() {
-                println!("🌐 URL: {}", url);
-                break;
-            }
+        if frame.id() == "WOAR"
+            && let Content::Link(url) = frame.content()
+        {
+            println!("🌐 URL: {}", url);
+            break;
         }
     }
-    
+
     let pictures: Vec<_> = tag.pictures().collect();
     if !pictures.is_empty() {
         println!("🖼️  Carátulas: {} imagen(es)", pictures.len());
         for (i, pic) in pictures.iter().enumerate() {
-            println!("   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes", 
-                i + 1, pic.picture_type, pic.mime_type, pic.data.len());
+            println!(
+                "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
+                i + 1,
+                pic.picture_type,
+                pic.mime_type,
+                pic.data.len()
+            );
         }
     }
-    
+
     // Mostrar lyrics si existen
     for frame in tag.frames() {
         if let Content::Lyrics(lyrics) = frame.content() {
@@ -478,32 +527,32 @@ pub fn display_tags(tag: &Tag) {
             break; // Solo mostrar el primer frame de lyrics
         }
     }
-    
+
     // Mostrar metadatos de Apple si existen
-    if let Some(compilation) = tag.get("TCMP").and_then(|f| f.content().text()) {
-        if compilation == "1" {
-            println!(" Compilación: Sí");
-        }
+    if let Some(compilation) = tag.get("TCMP").and_then(|f| f.content().text())
+        && compilation == "1"
+    {
+        println!(" Compilación: Sí");
     }
-    
+
     if let Some(album_sort) = tag.get("TSOA").and_then(|f| f.content().text()) {
         println!("🔤 Orden álbum: {}", album_sort);
     }
-    
+
     if let Some(artist_sort) = tag.get("TSOP").and_then(|f| f.content().text()) {
         println!("🔤 Orden artista: {}", artist_sort);
     }
-    
+
     if let Some(title_sort) = tag.get("TSOT").and_then(|f| f.content().text()) {
         println!("🔤 Orden título: {}", title_sort);
     }
-    
+
     // Mostrar otros frames si existen
     let frame_count = tag.frames().count();
     if frame_count > 0 {
         println!("\n📦 Total de frames: {}", frame_count);
     }
-    
+
     println!("═══════════════════════════════════════\n");
 }
 

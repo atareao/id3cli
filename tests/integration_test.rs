@@ -1,3 +1,4 @@
+use id3::frame::Content;
 use id3::{Tag, TagLike};
 use std::fs;
 use std::path::PathBuf;
@@ -37,7 +38,7 @@ fn test_cli_adds_title() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -67,7 +68,7 @@ fn test_cli_adds_multiple_fields() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -106,7 +107,7 @@ fn test_cli_adds_multiple_fields() {
 #[test]
 fn test_cli_fails_with_nonexistent_file() {
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -128,7 +129,7 @@ fn test_cli_with_unicode() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -161,7 +162,7 @@ fn test_cli_preserves_existing_tags() {
 
     // Primer comando: agregar título
     let output1 = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -182,7 +183,7 @@ fn test_cli_preserves_existing_tags() {
 
     // Segundo comando: agregar solo artista
     let output2 = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -214,7 +215,7 @@ fn test_cli_multiple_artists() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -247,7 +248,7 @@ fn test_cli_multiple_artists_with_title() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -278,7 +279,7 @@ fn test_cli_show_tags() {
 
     // Primero añadir algunos tags
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -298,7 +299,7 @@ fn test_cli_show_tags() {
 
     // Ahora mostrar los tags
     let output = Command::new("cargo")
-        .args(&["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -318,7 +319,7 @@ fn test_cli_show_empty_tags() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -332,7 +333,7 @@ fn test_cli_track_number() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -360,7 +361,7 @@ fn test_cli_all_metadata_with_track() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -400,7 +401,7 @@ fn test_cli_date_and_copyright() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -437,7 +438,7 @@ fn test_cli_complete_metadata() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -492,7 +493,7 @@ fn test_cli_remove_title() {
 
     // Primero añadir tags
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -508,7 +509,7 @@ fn test_cli_remove_title() {
 
     // Luego eliminar solo el título
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -534,7 +535,7 @@ fn test_cli_remove_multiple_tags() {
 
     // Añadir varios tags
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -554,7 +555,7 @@ fn test_cli_remove_multiple_tags() {
 
     // Eliminar varios tags
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -583,7 +584,7 @@ fn test_cli_remove_all_tags() {
 
     // Añadir tags
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -607,7 +608,7 @@ fn test_cli_remove_all_tags() {
 
     // Eliminar todos
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -637,6 +638,64 @@ fn test_cli_remove_all_tags() {
 }
 
 #[test]
+fn test_cli_remove_all_flag() {
+    let mp3_path = create_temp_mp3();
+
+    // Añadir varios tags
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "Test",
+            "--artist",
+            "Artist",
+            "--album",
+            "Album",
+            "--track",
+            "1",
+            "--season",
+            "2",
+            "-L",
+            "Letra de prueba",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Eliminar todos con --all
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "--all",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None);
+    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.album(), None);
+    assert_eq!(tag.track(), None);
+    assert_eq!(tag.disc(), None);
+
+    let has_lyrics: bool = tag
+        .frames()
+        .any(|f| matches!(f.content(), Content::Lyrics(_)));
+    assert!(!has_lyrics);
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
 fn test_cli_cover_png() {
     let mp3_path = create_temp_mp3();
     let temp_dir = std::env::temp_dir();
@@ -647,7 +706,7 @@ fn test_cli_cover_png() {
     fs::write(&cover_path, png_data).expect("Failed to create PNG");
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -683,7 +742,7 @@ fn test_cli_cover_webp() {
     fs::write(&cover_path, webp_data).expect("Failed to create WEBP");
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -718,7 +777,7 @@ fn test_cli_cover_unsupported_format() {
     fs::write(&cover_path, b"GIF89a").expect("Failed to create GIF");
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -744,7 +803,7 @@ fn test_cli_add_lyrics() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -785,7 +844,7 @@ fn test_cli_show_lyrics() {
 
     // Añadir lyrics
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -799,7 +858,7 @@ fn test_cli_show_lyrics() {
 
     // Mostrar tags
     let output = Command::new("cargo")
-        .args(&["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -818,7 +877,7 @@ fn test_cli_remove_lyrics() {
 
     // Añadir lyrics
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -839,7 +898,7 @@ fn test_cli_remove_lyrics() {
 
     // Eliminar lyrics
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -867,7 +926,7 @@ fn test_cli_add_url() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -889,12 +948,12 @@ fn test_cli_add_url() {
     // Verificar que se añadió URL
     let mut found_url = false;
     for frame in tag.frames() {
-        if frame.id() == "WOAR" {
-            if let id3::frame::Content::Link(url) = frame.content() {
-                assert_eq!(url, "https://example.com/artist");
-                found_url = true;
-                break;
-            }
+        if frame.id() == "WOAR"
+            && let id3::frame::Content::Link(url) = frame.content()
+        {
+            assert_eq!(url, "https://example.com/artist");
+            found_url = true;
+            break;
         }
     }
     assert!(found_url);
@@ -908,7 +967,7 @@ fn test_cli_show_url() {
 
     // Añadir URL
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -922,7 +981,7 @@ fn test_cli_show_url() {
 
     // Mostrar tags
     let output = Command::new("cargo")
-        .args(&["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -940,7 +999,7 @@ fn test_cli_remove_url() {
 
     // Añadir URL
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -959,7 +1018,7 @@ fn test_cli_remove_url() {
 
     // Eliminar URL
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -985,7 +1044,7 @@ fn test_cli_add_compilation() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1011,7 +1070,7 @@ fn test_cli_add_sort_orders() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1052,7 +1111,7 @@ fn test_cli_show_apple_metadata() {
 
     // Añadir metadatos de Apple
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1067,7 +1126,7 @@ fn test_cli_show_apple_metadata() {
 
     // Mostrar tags
     let output = Command::new("cargo")
-        .args(&["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1086,7 +1145,7 @@ fn test_cli_remove_compilation() {
 
     // Añadir compilation
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1103,7 +1162,7 @@ fn test_cli_remove_compilation() {
 
     // Eliminar compilation
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1129,7 +1188,7 @@ fn test_cli_remove_apple_sort_orders() {
 
     // Añadir sort orders
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1150,7 +1209,7 @@ fn test_cli_remove_apple_sort_orders() {
 
     // Eliminar
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1177,7 +1236,7 @@ fn test_cli_add_composer() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1205,7 +1264,7 @@ fn test_cli_add_subtitle() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1233,7 +1292,7 @@ fn test_cli_add_original_artist() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1261,7 +1320,7 @@ fn test_cli_add_album_artist() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1287,7 +1346,7 @@ fn test_cli_podcast_metadata() {
 
     // Simular metadatos de un podcast
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1350,7 +1409,7 @@ fn test_cli_show_new_tags() {
 
     // Añadir todas las etiquetas nuevas
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1370,7 +1429,7 @@ fn test_cli_show_new_tags() {
 
     // Mostrar tags
     let output = Command::new("cargo")
-        .args(&["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1390,7 +1449,7 @@ fn test_cli_remove_new_tags() {
 
     // Añadir tags
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1410,7 +1469,7 @@ fn test_cli_remove_new_tags() {
 
     // Eliminar tags
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1441,7 +1500,7 @@ fn test_cli_add_season() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1471,7 +1530,7 @@ fn test_cli_podcast_with_season() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1541,7 +1600,7 @@ fn test_cli_remove_season() {
 
     // Primero añadir season
     Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1559,7 +1618,7 @@ fn test_cli_remove_season() {
 
     // Ahora eliminar
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
@@ -1584,7 +1643,7 @@ fn test_cli_add_album() {
     let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--quiet",
             "--",
