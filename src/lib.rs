@@ -490,7 +490,9 @@ pub fn display_tags(tag: &Tag) {
 
     // Mostrar URL si existe
     for frame in tag.frames() {
-        if frame.id() == "WOAR" && let Content::Link(url) = frame.content() {
+        if frame.id() == "WOAR"
+            && let Content::Link(url) = frame.content()
+        {
             println!("🌐 URL: {}", url);
             break;
         }
