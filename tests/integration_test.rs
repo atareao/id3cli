@@ -1,5 +1,5 @@
-use id3::{Tag, TagLike};
 use id3::frame::Content;
+use id3::{Tag, TagLike};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -687,7 +687,9 @@ fn test_cli_remove_all_flag() {
     assert_eq!(tag.track(), None);
     assert_eq!(tag.disc(), None);
 
-    let has_lyrics: bool = tag.frames().any(|f| matches!(f.content(), Content::Lyrics(_)));
+    let has_lyrics: bool = tag
+        .frames()
+        .any(|f| matches!(f.content(), Content::Lyrics(_)));
     assert!(!has_lyrics);
 
     cleanup_file(&mp3_path);
