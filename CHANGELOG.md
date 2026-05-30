@@ -1,9 +1,18 @@
 # Changelog
+## [0.3.1] - 2026-05-30
+
+### Miscellaneous Tasks
+
+- Add package metadata for crates.io publishing
 ## [0.3.0] - 2026-05-30
 
 ### Features
 
 - Add remove --all flag and fix CI/clippy
+
+### Miscellaneous Tasks
+
+- Release v0.3.0
 ## [0.2.3] - 2026-05-30
 
 ### Miscellaneous Tasks
