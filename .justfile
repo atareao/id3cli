@@ -8,17 +8,14 @@ list:
 install:
     cargo install --path .
 
+lint:
+    cargo clippy --all-targets --all-features -- -D warnings
+
+fmt:
+    cargo fmt -- --check
+
+fmt-fix:
+    cargo fmt
+
 upgrade:
     @vampus upgrade --patch
-
-release:
-    @git add .
-    @git commit -m ":bookmark: Release v{{version}}"
-    @git tag -a v{{version}} -m "Release v{{version}}"
-    @git push origin main
-    @git push origin v{{version}}
-
-    @gh release create v{{version}} \
-        --title "Release v{{version}}" \
-        --notes "Release v{{version}}"
-
