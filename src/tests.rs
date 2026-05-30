@@ -704,12 +704,12 @@ fn test_add_url() {
     // Verificar que se añadió el frame de URL
     let mut found_url = false;
     for frame in tag.frames() {
-        if frame.id() == "WOAR" {
-            if let Content::Link(link) = frame.content() {
-                assert_eq!(link, url);
-                found_url = true;
-                break;
-            }
+        if frame.id() == "WOAR"
+            && let Content::Link(link) = frame.content()
+        {
+            assert_eq!(link, url);
+            found_url = true;
+            break;
         }
     }
     assert!(found_url);
