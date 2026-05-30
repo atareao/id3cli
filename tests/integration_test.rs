@@ -1,3 +1,4 @@
+use id3::frame::Content;
 use id3::{Tag, TagLike};
 use std::fs;
 use std::path::PathBuf;
@@ -632,6 +633,64 @@ fn test_cli_remove_all_tags() {
     assert_eq!(tag.year(), None);
     assert_eq!(tag.genre(), None);
     assert_eq!(tag.track(), None);
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_all_flag() {
+    let mp3_path = create_temp_mp3();
+
+    // Añadir varios tags
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "Test",
+            "--artist",
+            "Artist",
+            "--album",
+            "Album",
+            "--track",
+            "1",
+            "--season",
+            "2",
+            "-L",
+            "Letra de prueba",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Eliminar todos con --all
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "--all",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None);
+    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.album(), None);
+    assert_eq!(tag.track(), None);
+    assert_eq!(tag.disc(), None);
+
+    let has_lyrics: bool = tag
+        .frames()
+        .any(|f| matches!(f.content(), Content::Lyrics(_)));
+    assert!(!has_lyrics);
 
     cleanup_file(&mp3_path);
 }
