@@ -1,4 +1,9 @@
 # Changelog
+## [0.4.1] - 2026-10-12
+
+### Miscellaneous Tasks
+
+- Sync development vía git push y disparo explícito de release.yml
 ## [0.4.0] - 2026-10-12
 
 ### Bug Fixes
@@ -8,6 +13,10 @@
 ### Features
 
 - Remove --all borra físicamente ID3v1 e ID3v2
+
+### Miscellaneous Tasks
+
+- Release v0.4.0
 ## [0.3.1] - 2026-05-30
 
 ### Miscellaneous Tasks
