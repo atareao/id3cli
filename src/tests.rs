@@ -1,8 +1,10 @@
 // Tests para la librería id3cli
 use super::*;
 use id3::frame::{Content, PictureType};
+use id3::v1v2::FormatVersion;
 use id3::{Tag, TagLike};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn test_apply_metadata_title_only() {
@@ -1106,39 +1108,116 @@ fn test_remove_season_spanish() {
     assert_eq!(tag.disc(), None);
 }
 
+/// Helper para crear un MP3 temporal mínimo sin tags ID3
+fn create_temp_mp3() -> PathBuf {
+    let temp_dir = std::env::temp_dir();
+    let unique = format!(
+        "id3cli_unit_{}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::process::id()
+    );
+    let path = temp_dir.join(format!("{}.mp3", unique));
+    // Bytes mínimos de un MP3 (frame sync word) sin ningún tag ID3.
+    fs::write(&path, [0xFF, 0xFB, 0x90, 0x44]).expect("No se pudo crear MP3 temporal");
+    path
+}
+
+/// Helper para limpiar archivos temporales
+fn cleanup_file(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
 #[test]
-fn test_remove_all_tags_function() {
+fn test_remove_all_id3_removes_v2() {
+    let path = create_temp_mp3();
+
+    // Escribir un tag ID3v2
     let mut tag = Tag::new();
     tag.set_title("Title");
     tag.set_artist("Artist");
-    tag.set_album("Album");
-    tag.set_year(2026);
-    tag.set_genre("Rock");
-    tag.set_track(5);
-    tag.set_disc(2);
-    tag.set_text("TCOP", "© 2026");
-    let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
-    let path = Path::new("test.jpg");
-    add_cover_art(&mut tag, path, data).unwrap();
-    add_lyrics(&mut tag, "Letra de la canción");
+    tag.write_to_path(&path, id3::Version::Id3v24).unwrap();
 
-    assert_eq!(tag.title(), Some("Title"));
-    assert_eq!(tag.pictures().count(), 1);
+    // Verificar precondición: el tag existe
+    assert!(Tag::read_from_path(&path).is_ok());
 
-    let changed = remove_all_tags(&mut tag);
-    assert!(changed);
-    assert_eq!(tag.title(), None);
-    assert_eq!(tag.artist(), None);
-    assert_eq!(tag.album(), None);
-    assert_eq!(tag.year(), None);
-    assert_eq!(tag.genre(), None);
-    assert_eq!(tag.track(), None);
-    assert_eq!(tag.disc(), None);
-    assert_eq!(tag.pictures().count(), 0);
-    assert_eq!(tag.get("TCOP").and_then(|f| f.content().text()), None);
+    let format = remove_all_id3(&path).unwrap();
+    assert!(matches!(format, FormatVersion::Id3v2));
 
-    let has_lyrics = tag
-        .frames()
-        .any(|f| matches!(f.content(), Content::Lyrics(_)));
-    assert!(!has_lyrics);
+    // Verificar ausencia física del tag
+    assert!(Tag::read_from_path(&path).is_err());
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_remove_all_id3_removes_both_v1_and_v2() {
+    let path = create_temp_mp3();
+
+    // Escribir un tag ID3v1 (128 bytes al final del archivo)
+    let mut bytes = fs::read(&path).unwrap();
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    v1[33..39].copy_from_slice(b"Artist");
+    bytes.append(&mut v1);
+    fs::write(&path, &bytes).unwrap();
+
+    // Añadir también un tag ID3v2 encima
+    let mut tag = Tag::new();
+    tag.set_title("Title V2");
+    tag.write_to_path(&path, id3::Version::Id3v24).unwrap();
+
+    let format = remove_all_id3(&path).unwrap();
+    assert!(matches!(format, FormatVersion::Both));
+
+    assert!(Tag::read_from_path(&path).is_err());
+    // ID3v1 debe haber desaparecido (el archivo ya no termina en "TAG")
+    let end = &fs::read(&path).unwrap();
+    assert_ne!(&end[end.len().saturating_sub(3)..], b"TAG");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_remove_all_id3_removes_only_v1() {
+    let path = create_temp_mp3();
+
+    // Añadir solo un tag ID3v1 (128 bytes al final del archivo),
+    // sin ningún header ID3v2 al inicio
+    let mut bytes = fs::read(&path).unwrap();
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    v1[33..39].copy_from_slice(b"Artist");
+    bytes.append(&mut v1);
+    fs::write(&path, &bytes).unwrap();
+
+    // Verificar precondición: hay un tag ID3v1 y ningún ID3v2
+    assert!(id3::v1::Tag::read_from_path(&path).is_ok());
+    assert!(Tag::read_from_path(&path).is_err());
+
+    let format = remove_all_id3(&path).unwrap();
+    assert!(matches!(format, FormatVersion::Id3v1));
+
+    // Verificar ausencia física del tag
+    assert!(id3::v1::Tag::read_from_path(&path).is_err());
+    assert!(Tag::read_from_path(&path).is_err());
+    let end = &fs::read(&path).unwrap();
+    assert_ne!(&end[end.len().saturating_sub(3)..], b"TAG");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_remove_all_id3_no_tags_returns_none() {
+    let path = create_temp_mp3();
+
+    // MP3 sin tags
+    let format = remove_all_id3(&path).unwrap();
+    assert!(matches!(format, FormatVersion::None));
+
+    cleanup_file(&path);
 }

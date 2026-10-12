@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use id3::Tag;
+use id3::v1v2::FormatVersion;
 use id3cli::*;
 use std::fs;
 use std::path::PathBuf;
@@ -114,7 +115,7 @@ enum Command {
         /// Tags a eliminar (title, artist, album, year, genre, track, season, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
         tags: Vec<String>,
 
-        /// Eliminar todos los tags del archivo
+        /// Eliminar físicamente todos los tags ID3 (v1 y v2) del archivo
         #[arg(short, long)]
         all: bool,
     },
@@ -320,19 +321,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
 
-            // Eliminar todos los tags
+            // Eliminar todos los tags (ID3v1 e ID3v2) físicamente
             if *all {
-                let mut tag = match Tag::read_from_path(file) {
-                    Ok(tag) => tag,
-                    Err(_) => {
-                        eprintln!("Error: No se encontraron tags ID3 en '{}'", file.display());
-                        std::process::exit(1);
+                let format = remove_all_id3(file)?;
+                match format {
+                    FormatVersion::None => {
+                        println!("⚠️  El archivo '{}' no tenía tags ID3", file.display());
                     }
-                };
-
-                remove_all_tags(&mut tag);
-                tag.write_to_path(file, id3::Version::Id3v24)?;
-                println!("\n✅ Todos los tags eliminados de '{}'", file.display());
+                    FormatVersion::Id3v1 => {
+                        println!("✅ Tag ID3v1 eliminado de '{}'", file.display());
+                    }
+                    FormatVersion::Id3v2 => {
+                        println!("✅ Tag ID3v2 eliminado de '{}'", file.display());
+                    }
+                    FormatVersion::Both => {
+                        println!("✅ Tags ID3v1 e ID3v2 eliminados de '{}'", file.display());
+                    }
+                }
                 return Ok(());
             }
 

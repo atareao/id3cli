@@ -1,4 +1,3 @@
-use id3::frame::Content;
 use id3::{Tag, TagLike};
 use std::fs;
 use std::path::PathBuf;
@@ -579,8 +578,12 @@ fn test_cli_remove_multiple_tags() {
 }
 
 #[test]
-fn test_cli_remove_all_tags() {
+fn test_cli_remove_all() {
+    // MP3 con bytes de audio puros (sin header ID3v2 vacío inicial,
+    // para que el tag añadido vía `edit` sea el único bloque ID3)
     let mp3_path = create_temp_mp3();
+    // Sobrescribir el header ID3v2 vacío del helper con audio MP3 puro
+    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to write audio bytes");
 
     // Añadir tags
     Command::new("cargo")
@@ -606,7 +609,7 @@ fn test_cli_remove_all_tags() {
         .output()
         .expect("Failed to execute command");
 
-    // Eliminar todos
+    // Eliminar todos con --all
     let output = Command::new("cargo")
         .args([
             "run",
@@ -614,57 +617,41 @@ fn test_cli_remove_all_tags() {
             "--",
             "remove",
             mp3_path.to_str().unwrap(),
-            "title",
-            "artist",
-            "album",
-            "year",
-            "genre",
-            "track",
+            "--all",
         ])
         .output()
         .expect("Failed to execute command");
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("eliminado"),
+        "La salida debería confirmar el borrado, pero fue: {}",
+        stdout
+    );
 
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert_eq!(tag.title(), None);
-    assert_eq!(tag.artist(), None);
-    assert_eq!(tag.album(), None);
-    assert_eq!(tag.year(), None);
-    assert_eq!(tag.genre(), None);
-    assert_eq!(tag.track(), None);
+    // El tag ID3v2 debe haber desaparecido físicamente
+    assert!(Tag::read_from_path(&mp3_path).is_err());
 
     cleanup_file(&mp3_path);
 }
 
 #[test]
-fn test_cli_remove_all_flag() {
+fn test_cli_remove_all_removes_v1() {
+    // MP3 con bytes de audio puros (sin header ID3v2 vacío inicial,
+    // para que el tag ID3v1 sea el único bloque ID3 del archivo)
     let mp3_path = create_temp_mp3();
+    // Sobrescribir el header ID3v2 vacío del helper con audio MP3 puro
+    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to write audio bytes");
 
-    // Añadir varios tags
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--quiet",
-            "--",
-            "edit",
-            mp3_path.to_str().unwrap(),
-            "--title",
-            "Test",
-            "--artist",
-            "Artist",
-            "--album",
-            "Album",
-            "--track",
-            "1",
-            "--season",
-            "2",
-            "-L",
-            "Letra de prueba",
-        ])
-        .output()
-        .expect("Failed to execute command");
-    assert!(output.status.success());
+    // Añadir un tag ID3v1 (128 bytes al final, termina en "TAG")
+    let mut bytes = fs::read(&mp3_path).unwrap();
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    v1[33..39].copy_from_slice(b"Artist");
+    bytes.append(&mut v1);
+    fs::write(&mp3_path, &bytes).unwrap();
 
     // Eliminar todos con --all
     let output = Command::new("cargo")
@@ -678,19 +665,61 @@ fn test_cli_remove_all_flag() {
         ])
         .output()
         .expect("Failed to execute command");
+
     assert!(output.status.success());
+    // El CLI debe informar de que el tag ID3v1 fue eliminado
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ID3v1"),
+        "La salida debería mencionar el tag ID3v1, pero fue: {}",
+        stdout
+    );
 
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert_eq!(tag.title(), None);
-    assert_eq!(tag.artist(), None);
-    assert_eq!(tag.album(), None);
-    assert_eq!(tag.track(), None);
-    assert_eq!(tag.disc(), None);
+    // El tag ID3v1 debe haber desaparecido físicamente
+    assert!(Tag::read_from_path(&mp3_path).is_err());
+    let end = &fs::read(&mp3_path).unwrap();
+    assert_ne!(
+        &end[end.len().saturating_sub(3)..],
+        b"TAG",
+        "El ID3v1 no fue eliminado físicamente"
+    );
 
-    let has_lyrics: bool = tag
-        .frames()
-        .any(|f| matches!(f.content(), Content::Lyrics(_)));
-    assert!(!has_lyrics);
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_all_no_tags_warns() {
+    // MP3 sin ningún tag ID3 (usamos un archivo con bytes de MP3 puros,
+    // no el helper create_temp_mp3 que ya incluye un header ID3v2 vacío)
+    let temp_dir = std::env::temp_dir();
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    let mp3_path = temp_dir.join(format!("test_{}_{}.mp3", timestamp, id));
+    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to create temp MP3");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "--all",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Debe tener éxito (exit 0) e informar de que no había tags
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("no tenía tags"),
+        "Debería informar de que no había tags, pero fue: {}",
+        stdout
+    );
 
     cleanup_file(&mp3_path);
 }
