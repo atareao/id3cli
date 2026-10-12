@@ -1,9 +1,15 @@
 # Changelog
+## [0.4.2] - 2026-10-12
+
+### Miscellaneous Tasks
+
+- Añade GH_TOKEN al paso de disparo de release.yml
 ## [0.4.1] - 2026-10-12
 
 ### Miscellaneous Tasks
 
 - Sync development vía git push y disparo explícito de release.yml
+- Release v0.4.1
 ## [0.4.0] - 2026-10-12
 
 ### Bug Fixes
