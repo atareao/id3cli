@@ -1,9 +1,15 @@
 # Changelog
+## [0.4.3] - 2026-10-12
+
+### Miscellaneous Tasks
+
+- Añade actions:write para disparar release.yml vía API
 ## [0.4.2] - 2026-10-12
 
 ### Miscellaneous Tasks
 
 - Añade GH_TOKEN al paso de disparo de release.yml
+- Release v0.4.2
 ## [0.4.1] - 2026-10-12
 
 ### Miscellaneous Tasks
