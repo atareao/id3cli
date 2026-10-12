@@ -64,8 +64,10 @@ jobs:
           git tag "v${V}"
           git push "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}" main
           git push "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}" "v${V}"
+          gh workflow run release.yml --ref "v${V}"
 
       - name: Sync development with main
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: gh api -X PUT repos/${{ github.repository }}/git/refs/heads/development -f sha=$(git rev-parse HEAD)
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" main:development --force
