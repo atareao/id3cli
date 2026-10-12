@@ -55,6 +55,7 @@ jobs:
       - name: Commit, tag and push
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ steps.version.outputs.value }}"
           git config user.name "github-actions[bot]"
