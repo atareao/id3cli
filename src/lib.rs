@@ -5,6 +5,7 @@
 //! URLs y metadatos específicos de Apple.
 
 use id3::frame::{Content, Lyrics, Picture, PictureType};
+use id3::v1v2::FormatVersion;
 use id3::{Frame, Tag, TagLike};
 use std::path::Path;
 
@@ -394,36 +395,28 @@ pub fn remove_tags(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
     changed
 }
 
-/// Elimina todos los tags del archivo MP3
+/// Elimina físicamente todos los tags ID3 (v1 y v2) del archivo MP3
 ///
-/// Borra todos los frames ID3 conocidos: metadatos básicos, carátulas,
-/// letras, URLs y metadatos de Apple.
+/// Borra el bloque ID3v2 completo y el tag ID3v1 del archivo, dejándolo
+/// como si nunca hubiera tenido tags (el audio permanece intacto).
+///
+/// # Argumentos
+///
+/// * `file` - Ruta del archivo MP3
 ///
 /// # Retorna
 ///
-/// `true` si se eliminó al menos un tag
-pub fn remove_all_tags(tag: &mut Tag) -> bool {
-    let has_frames = tag.frames().count() > 0;
-
-    tag.remove_title();
-    tag.remove_artist();
-    tag.remove_album();
-    tag.remove_year();
-    tag.remove_genre();
-    tag.remove_track();
-    tag.remove_disc();
-    tag.remove_date_recorded();
-    tag.remove_album_artist();
-    tag.remove_all_pictures();
-    tag.remove_all_lyrics();
-
-    for frame_id in &[
-        "TCOP", "TCOM", "TIT3", "TOPE", "WOAR", "TCMP", "TSOA", "TSOP", "TSOT",
-    ] {
-        tag.remove(frame_id);
-    }
-
-    has_frames
+/// Un `FormatVersion` que indica el estado previo de los tags:
+/// * `None` - No había tags ID3
+/// * `Id3v1` - Solo había un tag ID3v1
+/// * `Id3v2` - Solo había un tag ID3v2
+/// * `Both` - Había tags ID3v1 e ID3v2
+///
+/// # Errores
+///
+/// Retorna un error si no se puede acceder o modificar el archivo.
+pub fn remove_all_id3(file: &Path) -> id3::Result<FormatVersion> {
+    id3::v1v2::remove_from_path(file)
 }
 
 /// Muestra todos los tags del archivo MP3 en formato legible
