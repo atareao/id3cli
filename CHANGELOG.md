@@ -1,9 +1,19 @@
 # Changelog
+## [0.4.0] - 2026-10-12
+
+### Bug Fixes
+
+- Release-prepare checkout no usa GH_PAT (repo público) y push con PAT explícito
+
+### Features
+
+- Remove --all borra físicamente ID3v1 e ID3v2
 ## [0.3.1] - 2026-05-30
 
 ### Miscellaneous Tasks
 
 - Add package metadata for crates.io publishing
+- Release v0.3.1
 ## [0.3.0] - 2026-05-30
 
 ### Features
