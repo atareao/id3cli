@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
+[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -518,12 +518,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **99 tests** (59 unitarios + 40 de integración):
+El proyecto tiene **cobertura completa** con **125 tests** (63 unitarios + 62 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (99)
-cargo test --lib        # Solo tests unitarios (59)
-cargo test --test '*'   # Solo tests de integración (40)
+cargo test              # Ejecutar todos los tests (125)
+cargo test --lib        # Solo tests unitarios (63)
+cargo test --test '*'   # Solo tests de integración (62)
 ```
 
 **Ejemplos de tests:**
