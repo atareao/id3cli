@@ -303,6 +303,19 @@ pub fn detect_mime_type(path: &Path) -> Result<&'static str, String> {
     }
 }
 
+/// Valida la extensión de una carátula y devuelve su tipo MIME.
+///
+/// Es la variante «de CLI» de [`detect_mime_type`]: añade al mensaje de error la
+/// lista de formatos soportados, para que el texto sea idéntico en la carátula
+/// de MP3 y en la de MP4 (que comparten esta validación y este mensaje).
+///
+/// # Errores
+///
+/// Retorna un error si la extensión no es soportada o no se puede determinar.
+pub fn detect_cover_mime_type(path: &Path) -> Result<&'static str, String> {
+    detect_mime_type(path).map_err(|e| format!("{} (soportados: jpg, png, webp)", e))
+}
+
 /// Añade una carátula al tag desde un archivo
 ///
 /// El tipo MIME se detecta automáticamente desde la extensión del archivo.
@@ -317,8 +330,7 @@ pub fn add_cover_art(
     cover_path: &Path,
     cover_data: Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mime_type =
-        detect_mime_type(cover_path).map_err(|e| format!("{} (soportados: jpg, png, webp)", e))?;
+    let mime_type = detect_cover_mime_type(cover_path)?;
     let picture = create_picture_frame(cover_data, mime_type);
     let _ = tag.insert_picture(picture);
     Ok(())
@@ -989,6 +1001,20 @@ impl Mp4AtomMapping {
     }
 }
 
+/// Carátula a escribir en el átomo `covr` de un contenedor MP4.
+///
+/// Se entrega ya leída de disco para que la escritura del tag y la de la
+/// carátula sean una sola operación atómica: de `path` se deriva el tipo MIME
+/// (por la extensión) y `data` son los bytes de la imagen que se copian intactos
+/// al átomo.
+#[derive(Debug, Clone, Copy)]
+pub struct Mp4Cover<'a> {
+    /// Ruta al archivo de imagen; de su extensión se deriva el tipo MIME.
+    pub path: &'a Path,
+    /// Bytes de la imagen, ya leídos de disco.
+    pub data: &'a [u8],
+}
+
 /// Opciones de edición de metadatos sobre un contenedor MP4.
 ///
 /// Refleja uno a uno los flags del subcomando `edit`. Los campos que no se
@@ -1029,6 +1055,8 @@ pub struct Mp4EditOptions<'a> {
     pub artist_sort: Option<&'a str>,
     /// Orden de clasificación del álbum (`soal`).
     pub album_sort: Option<&'a str>,
+    /// Carátula (`covr`); `None` si no se indicó `--cover`.
+    pub cover: Option<Mp4Cover<'a>>,
 }
 
 /// Resultado de aplicar metadatos a un tag MP4.
@@ -1063,6 +1091,54 @@ pub fn mp4_year_absorbed_warning(date: &str, year: i32) -> String {
         "⚠️  Advertencia: --year {year} queda absorbido por --date \"{date}\" en el átomo ©day \
          (el año es el prefijo de la fecha); se escribe la fecha."
     )
+}
+
+/// Construye el warning (en español) que acompaña a una carátula WebP escrita en
+/// el átomo `covr` de un MP4.
+///
+/// El átomo no admite el tipo WebP: para no abortar, la carátula se escribe con
+/// el tipo de dato reservado (0), que iTunes y macOS no muestran. El CLI debe
+/// avisar de esa pérdida en vez de esconderla.
+pub fn mp4_webp_cover_warning() -> String {
+    "⚠️  Aviso: la carátula WebP se escribe en el átomo `covr` con el tipo de dato reservado (0), \
+     que iTunes y macOS NO muestran; la carátula no será visible en esos reproductores."
+        .to_string()
+}
+
+/// Escribe una carátula en el átomo `covr` de un tag MP4 con el tipo de dato
+/// correcto.
+///
+/// JPEG y PNG se escriben con su tipo MIME well-known, que `lofty` traduce a los
+/// tipos de dato 13 y 14. WebP no tiene tipo well-known en `covr`: `lofty`
+/// 0.25.4 **devuelve un error** si se le entrega un tipo MIME que no reconoce,
+/// así que la carátula se escribe dejando el MIME deliberadamente **sin
+/// establecer** (lo que la librería mapea al tipo de dato reservado, 0) y es
+/// responsabilidad del llamador avisar de que no se mostrará.
+///
+/// # Retorna
+///
+/// `true` si la carátula se escribió con el tipo reservado (es decir, si era
+/// WebP), `false` en caso contrario.
+fn push_mp4_cover(tag: &mut Tag, data: &[u8], mime: &str) -> bool {
+    // WebP es el único formato que el CLI acepta y que carece de tipo well-known
+    // en `covr`: se detecta para dejar el MIME sin establecer.
+    let reserved_type = mime == "image/webp";
+
+    let picture = if reserved_type {
+        // No se llama a `.mime_type(...)`: el MIME queda `None`, que es el caso
+        // que `lofty` escribe como `DataType::Reserved` (0).
+        Picture::unchecked(data.to_vec())
+            .pic_type(PictureType::CoverFront)
+            .description("Cover")
+            .build()
+    } else {
+        // JPEG y PNG: se reutiliza la misma construcción que en MP3 (portada
+        // frontal, descripción "Cover" y MIME well-known).
+        create_picture_frame(data.to_vec(), mime)
+    };
+
+    tag.push_picture(picture);
+    reserved_type
 }
 
 /// Devuelve la [`ItemKey`] de texto asociada a un flag del CLI según
@@ -1231,16 +1307,31 @@ pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::E
 /// aplica los cambios y, solo si hay alguno, reescribe el archivo. Los warnings
 /// de la operación se emiten por stderr y además se devuelven en el informe.
 ///
+/// La carátula se valida **antes** de escribir el archivo: si la extensión de la
+/// imagen no está soportada, la función devuelve error sin modificar un solo
+/// byte.
+///
 /// # Errores
 ///
-/// Retorna un error si el archivo no se puede leer, interpretar o escribir.
+/// Retorna un error si el archivo no se puede leer, interpretar o escribir, o si
+/// la extensión de la carátula no está soportada.
 pub fn edit_mp4(
     path: &Path,
     options: &Mp4EditOptions<'_>,
 ) -> Result<Mp4EditReport, Box<dyn std::error::Error>> {
     let mut tag = read_mp4_tag(path)?.unwrap_or_else(|| Tag::new(TagType::Mp4Ilst));
 
-    let report = apply_metadata_mp4(&mut tag, options);
+    let mut report = apply_metadata_mp4(&mut tag, options);
+
+    // Carátula. La validación del MIME ocurre antes de tocar el disco, de modo
+    // que una imagen inválida devuelve error sin dejar el archivo a medias.
+    if let Some(cover) = options.cover {
+        let mime = detect_cover_mime_type(cover.path)?;
+        if push_mp4_cover(&mut tag, cover.data, mime) {
+            report.warnings.push(mp4_webp_cover_warning());
+        }
+        report.changed = true;
+    }
 
     if report.changed {
         write_mp4_tag(path, &tag)?;

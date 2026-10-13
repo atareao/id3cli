@@ -3196,3 +3196,309 @@ fn test_cli_unsupported_format_message_lists_mp3_and_mp4() {
 
     cleanup_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// MP4 (M4A): carátulas (`covr`) y letras (`©lyr`) — grupo 5
+// ---------------------------------------------------------------------------
+
+/// Bytes de una imagen JPEG reconocible (signatura + inicio de APP0).
+const JPEG_BYTES: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
+/// Bytes de una imagen PNG reconocible (signatura + primer trozo).
+const PNG_BYTES: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+];
+/// Bytes de una imagen WebP reconocible.
+const WEBP_BYTES: &[u8] = b"RIFF\x24\x00\x00\x00WEBPVP8 ";
+
+/// Escribe una imagen temporal con la extensión indicada y la devuelve.
+fn write_temp_image(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
+    let path = unique_temp_path(label, extension);
+    fs::write(&path, bytes).expect("Failed to write temp image");
+    path
+}
+
+/// Devuelve `(tipo de dato, payload)` del primer `data` box que sigue al átomo
+/// indicado, leyendo directamente los bytes del contenedor ISO-BMFF.
+///
+/// Comprueba el **tipo de dato real** escrito (13 JPEG, 14 PNG, 0 reservado) en
+/// lugar de asumirlo. Layout: `[size][data][version/flags][locale][payload]`,
+/// con el tipo en los 24 bits bajos de `version/flags`.
+fn data_box_after(bytes: &[u8], atom: &[u8]) -> Option<(u32, Vec<u8>)> {
+    let pos = bytes
+        .windows(atom.len())
+        .position(|window| window == atom)?;
+    let box_pos = pos + atom.len();
+    if box_pos + 16 > bytes.len() || &bytes[box_pos + 4..box_pos + 8] != b"data" {
+        return None;
+    }
+    let size = u32::from_be_bytes(bytes[box_pos..box_pos + 4].try_into().ok()?) as usize;
+    if box_pos + size > bytes.len() {
+        return None;
+    }
+    let version_flags = u32::from_be_bytes(bytes[box_pos + 8..box_pos + 12].try_into().ok()?);
+    Some((
+        version_flags & 0x00FF_FFFF,
+        bytes[box_pos + 16..box_pos + size].to_vec(),
+    ))
+}
+
+#[test]
+fn test_cli_m4a_cover_jpeg_uses_wellknown_type_and_keeps_bytes() {
+    let path = create_temp_m4a("cover_jpeg_cli");
+    let image = write_temp_image("cover_jpeg_cli", "jpg", JPEG_BYTES);
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "Con JPG",
+    ]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "una carátula JPEG no debe emitir avisos, fue: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // El tipo de dato real del `data` box del `covr` es JPEG (13) y los bytes
+    // de la imagen quedan intactos.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(data_type, 13, "JPEG debe usar el tipo well-known 13");
+    assert_eq!(payload, JPEG_BYTES);
+
+    // `show` lista la carátula.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains("Carátulas: 1"),
+        "`show` debe listar la carátula"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_cover_png_uses_wellknown_type_and_keeps_bytes() {
+    let path = create_temp_m4a("cover_png_cli");
+    let image = write_temp_image("cover_png_cli", "png", PNG_BYTES);
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "Con PNG",
+    ]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "una carátula PNG no debe emitir avisos"
+    );
+
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(data_type, 14, "PNG debe usar el tipo well-known 14");
+    assert_eq!(payload, PNG_BYTES);
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_cover_webp_reserved_type_warns_and_succeeds() {
+    let path = create_temp_m4a("cover_webp_cli");
+    let image = write_temp_image("cover_webp_cli", "webp", WEBP_BYTES);
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "Con WebP",
+    ]);
+
+    // No falla: termina con código de salida cero.
+    assert!(out.status.success(), "WebP no debe abortar la operación");
+
+    // Avisa por stderr de que no será visible en iTunes/macOS.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("WebP") && stderr.contains("iTunes") && stderr.contains("macOS"),
+        "debe advertir de que la carátula no es visible, fue: {stderr}"
+    );
+
+    // El tipo de dato real es el reservado (0), con los bytes intactos.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(
+        data_type, 0,
+        "WebP debe quedar con el tipo de dato reservado (0)"
+    );
+    assert_eq!(payload, WEBP_BYTES);
+
+    // El resto de campos indicados se escriben con normalidad.
+    let tag = read_m4a_tag(&path).expect("el tag debe ser legible");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Con WebP"));
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_cover_missing_file_fails_without_writing() {
+    let path = create_temp_m4a("cover_missing_cli");
+    let before = fs::read(&path).unwrap();
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        "/ruta/que/no/existe.jpg",
+        "--title",
+        "X",
+    ]);
+    assert!(
+        !out.status.success(),
+        "una carátula inexistente debe fallar"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no existe"),
+        "debe informar en español de que el archivo no existe, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "no se debe escribir nada en el archivo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_cover_unsupported_format_fails_without_writing() {
+    let path = create_temp_m4a("cover_tiff_cli");
+    let image = write_temp_image("cover_tiff_cli", "tiff", b"II*\x00");
+    let before = fs::read(&path).unwrap();
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "X",
+    ]);
+    assert!(
+        !out.status.success(),
+        "una extensión no soportada debe fallar"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Formato de imagen no soportado") && stderr.contains(".tiff"),
+        "debe explicar en español que el formato no está soportado, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "no se debe escribir nada en el archivo"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_remove_cover_removes_covr_and_keeps_rest() {
+    let path = create_temp_m4a("remove_cover_cli");
+    let image = write_temp_image("remove_cover_cli", "png", PNG_BYTES);
+
+    let edit = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "T",
+        "--artist",
+        "A",
+        "--cover",
+        image.to_str().unwrap(),
+    ]);
+    assert!(edit.status.success());
+    assert!(contains_bytes(&fs::read(&path).unwrap(), b"covr"));
+
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "cover"]);
+    assert!(remove.status.success());
+
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), b"covr"),
+        "el átomo `covr` debe desaparecer"
+    );
+    let tag = read_m4a_tag(&path).expect("el resto debe seguir legible");
+    assert!(tag.pictures().is_empty());
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("T"));
+    assert_eq!(tag.get_string(ItemKey::TrackArtist), Some("A"));
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_lyrics_written_shown_and_without_language() {
+    let path = create_temp_m4a("lyrics_cli");
+    let lyrics = "Primera línea\nSegunda línea\nTercera línea";
+
+    let out = run_cli(&["edit", path.to_str().unwrap(), "--lyrics", lyrics]);
+    assert!(out.status.success());
+
+    // El texto se recupera íntegro por `show`.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(stdout.contains("📝 Letra:"), "show debe mostrar la letra");
+    assert!(stdout.contains("Primera línea"), "stdout: {stdout}");
+    assert!(stdout.contains("Tercera línea"), "stdout: {stdout}");
+
+    // El `©lyr` no lleva prefijo de idioma: su `data` box es exactamente el texto.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"\xA9lyr").expect("debe existir `©lyr`");
+    assert_eq!(data_type, 1, "el texto se guarda como UTF-8 (tipo 1)");
+    assert_eq!(
+        payload,
+        lyrics.as_bytes(),
+        "el `©lyr` no puede llevar prefijo de idioma"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_lyrics_language_spa_in_mp3_still_preserved() {
+    let mp3_path = create_temp_mp3();
+    let lyrics = "Uno\nDos\nTres";
+
+    let out = run_cli(&["edit", mp3_path.to_str().unwrap(), "--lyrics", lyrics]);
+    assert!(out.status.success());
+
+    // En MP3 el frame `USLT` sigue llevando el código de idioma `spa`.
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let mut found = false;
+    for frame in tag.frames() {
+        if let id3::frame::Content::Lyrics(l) = frame.content() {
+            assert_eq!(l.lang, "spa", "el USLT debe conservar el idioma `spa`");
+            assert_eq!(l.text, lyrics, "la letra se conserva íntegra");
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "debe existir el frame USLT de la letra");
+
+    cleanup_file(&mp3_path);
+}

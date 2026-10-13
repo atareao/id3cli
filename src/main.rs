@@ -457,6 +457,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Backend::Mp4 => {
+                // La carátula se valida ANTES de escribir nada: si la ruta no
+                // existe o la extensión no está soportada, se sale con error sin
+                // haber tocado el archivo (mismo contrato que en MP3).
+                let cover_data = match cover {
+                    Some(cover_path) => {
+                        if !cover_path.exists() {
+                            eprintln!(
+                                "Error: El archivo de carátula '{}' no existe",
+                                cover_path.display()
+                            );
+                            std::process::exit(1);
+                        }
+                        if let Err(e) = detect_cover_mime_type(cover_path) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                        Some(fs::read(cover_path)?)
+                    }
+                    None => None,
+                };
+
+                let cover_input = match (cover, cover_data.as_deref()) {
+                    (Some(path), Some(data)) => Some(Mp4Cover {
+                        path: path.as_path(),
+                        data,
+                    }),
+                    _ => None,
+                };
+
                 let mp4_options = Mp4EditOptions {
                     title: title.as_deref(),
                     artists: artist,
@@ -475,16 +504,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     title_sort: title_sort.as_deref(),
                     artist_sort: artist_sort.as_deref(),
                     album_sort: album_sort.as_deref(),
+                    cover: cover_input,
                 };
-
-                // La carátula de MP4 se implementa en el grupo 5 del cambio
-                // `m4a-support`; hasta entonces se avisa y se omite, sin
-                // escribir nada en el archivo.
-                if cover.is_some() {
-                    eprintln!(
-                        "⚠️  La carátula (--cover) todavía no está soportada en archivos MP4; se omite."
-                    );
-                }
 
                 let report = match edit_mp4(file, &mp4_options) {
                     Ok(report) => report,
@@ -534,6 +555,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(lyrics_text) = lyrics {
                     println!("✓ Letra: {} línea(s)", lyrics_text.lines().count());
+                }
+                if let Some(cover_path) = cover {
+                    println!("✓ Carátula añadida desde: {}", cover_path.display());
                 }
                 if *compilation {
                     println!("✓ Compilación: Sí");

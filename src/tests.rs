@@ -1410,6 +1410,48 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
+/// Escribe una imagen temporal con la extensión indicada y la devuelve.
+fn write_temp_image(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "id3cli_unit_img_{}_{}_{}.{}",
+        label,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::process::id(),
+        extension
+    ));
+    fs::write(&path, bytes).expect("No se pudo escribir la imagen temporal");
+    path
+}
+
+/// Devuelve `(tipo de dato, payload)` del primer `data` box que sigue al átomo
+/// indicado, leyendo directamente los bytes del contenedor ISO-BMFF.
+///
+/// Permite comprobar el **tipo de dato real** que `lofty` escribe (13 JPEG, 14
+/// PNG, 0 reservado) en lugar de asumirlo. El layout del `data` box es
+/// `[size][data][version/flags][locale][payload]` y el tipo de dato ocupa los 24
+/// bits bajos de `version/flags`.
+fn data_box_after(bytes: &[u8], atom: &[u8]) -> Option<(u32, Vec<u8>)> {
+    let pos = bytes
+        .windows(atom.len())
+        .position(|window| window == atom)?;
+    let box_pos = pos + atom.len();
+    if box_pos + 16 > bytes.len() || &bytes[box_pos + 4..box_pos + 8] != b"data" {
+        return None;
+    }
+    let size = u32::from_be_bytes(bytes[box_pos..box_pos + 4].try_into().ok()?) as usize;
+    if box_pos + size > bytes.len() {
+        return None;
+    }
+    let version_flags = u32::from_be_bytes(bytes[box_pos + 8..box_pos + 12].try_into().ok()?);
+    Some((
+        version_flags & 0x00FF_FFFF,
+        bytes[box_pos + 16..box_pos + size].to_vec(),
+    ))
+}
+
 #[test]
 fn test_m4a_fixture_is_valid_mp4_without_ilst() {
     let bytes = fs::read(fixture_m4a_path()).expect("No se pudo leer el fixture M4A");
@@ -2170,6 +2212,242 @@ fn test_m4a_remove_all_reports_and_removes_ilst() {
 
     // Y ya no hay metadatos.
     assert!(read_mp4_tag(&path).unwrap().is_none());
+
+    cleanup_file(&path);
+}
+
+// --- Carátulas sobre MP4 (`covr`) y letras (`©lyr`) -------------------------
+
+/// Bytes de una imagen JPEG reconocible (signatura + inicio de APP0).
+const JPEG_BYTES: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
+/// Bytes de una imagen PNG reconocible (signatura + primer trozo).
+const PNG_BYTES: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+];
+/// Bytes de una imagen WebP reconocible.
+const WEBP_BYTES: &[u8] = b"RIFF\x24\x00\x00\x00WEBPVP8 ";
+
+#[test]
+fn test_m4a_writes_jpeg_cover_with_wellknown_type() {
+    let path = create_temp_m4a("cover_jpeg");
+    let image = write_temp_image("cover_jpeg", "jpg", JPEG_BYTES);
+
+    let options = Mp4EditOptions {
+        cover: Some(Mp4Cover {
+            path: &image,
+            data: JPEG_BYTES,
+        }),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).unwrap();
+    assert!(report.changed);
+    assert!(report.warnings.is_empty(), "JPEG no debe emitir aviso");
+
+    // El tipo de dato real del `data` box del `covr` es JPEG (13) y los bytes
+    // de la imagen quedan intactos.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(data_type, 13, "JPEG debe usar el tipo well-known 13");
+    assert_eq!(
+        payload, JPEG_BYTES,
+        "los bytes de la imagen deben ser idénticos"
+    );
+
+    // Y `lofty` lo relee como `image/jpeg`.
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(tag.pictures().len(), 1);
+    assert_eq!(
+        tag.pictures()[0].mime_type().map(|m| m.as_str()),
+        Some("image/jpeg")
+    );
+    assert_eq!(tag.pictures()[0].data(), JPEG_BYTES);
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_m4a_writes_png_cover_with_wellknown_type() {
+    let path = create_temp_m4a("cover_png");
+    let image = write_temp_image("cover_png", "png", PNG_BYTES);
+
+    let options = Mp4EditOptions {
+        cover: Some(Mp4Cover {
+            path: &image,
+            data: PNG_BYTES,
+        }),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).unwrap();
+    assert!(report.changed);
+    assert!(report.warnings.is_empty(), "PNG no debe emitir aviso");
+
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(data_type, 14, "PNG debe usar el tipo well-known 14");
+    assert_eq!(payload, PNG_BYTES);
+
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(
+        tag.pictures()[0].mime_type().map(|m| m.as_str()),
+        Some("image/png")
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_m4a_webp_cover_uses_reserved_type_warns_and_writes_other_fields() {
+    let path = create_temp_m4a("cover_webp");
+    let image = write_temp_image("cover_webp", "webp", WEBP_BYTES);
+
+    let options = Mp4EditOptions {
+        title: Some("Con portada WebP"),
+        cover: Some(Mp4Cover {
+            path: &image,
+            data: WEBP_BYTES,
+        }),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).unwrap();
+    assert!(report.changed, "la carátula WebP debe contar como cambio");
+
+    // Aviso de que no será visible en iTunes ni en macOS.
+    assert_eq!(
+        report.warnings.len(),
+        1,
+        "WebP debe emitir exactamente un aviso"
+    );
+    let warning = &report.warnings[0];
+    assert!(
+        warning.contains("WebP"),
+        "el aviso debe nombrar WebP: {warning}"
+    );
+    assert!(
+        warning.contains("iTunes") && warning.contains("macOS"),
+        "el aviso debe nombrar iTunes y macOS: {warning}"
+    );
+    assert!(
+        warning.contains("no será visible"),
+        "el aviso debe advertir de la invisibilidad: {warning}"
+    );
+
+    // El tipo de dato real es el reservado (0), con los bytes intactos.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(
+        data_type, 0,
+        "WebP debe escribirse con el tipo de dato reservado (0)"
+    );
+    assert_eq!(payload, WEBP_BYTES);
+
+    // El resto de campos indicados se escriben con normalidad.
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(
+        tag.get_string(ItemKey::TrackTitle),
+        Some("Con portada WebP")
+    );
+    // `lofty` relee la carátula sin MIME (tipo reservado).
+    assert_eq!(tag.pictures().len(), 1);
+    assert_eq!(tag.pictures()[0].mime_type(), None);
+    assert_eq!(tag.pictures()[0].data(), WEBP_BYTES);
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_m4a_cover_unsupported_extension_errors_without_writing() {
+    let path = create_temp_m4a("cover_tiff");
+    let before = fs::read(&path).unwrap();
+    let image = write_temp_image("cover_tiff", "tiff", b"II*\x00");
+
+    let options = Mp4EditOptions {
+        // Aunque haya un campo de texto, tampoco se debe escribir.
+        title: Some("No debe escribirse"),
+        cover: Some(Mp4Cover {
+            path: &image,
+            data: b"II*\x00",
+        }),
+        ..Default::default()
+    };
+    let error = edit_mp4(&path, &options).expect_err("una extensión no soportada debe fallar");
+    let message = error.to_string();
+    assert!(
+        message.contains("Formato de imagen no soportado") && message.contains(".tiff"),
+        "el mensaje debe explicar el formato no soportado: {message}"
+    );
+
+    // No se escribió ni un byte.
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "el archivo no debe modificarse si la carátula no es válida"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_m4a_remove_cover_removes_covr_and_keeps_rest() {
+    let path = create_temp_m4a("remove_cover");
+    let image = write_temp_image("remove_cover", "png", PNG_BYTES);
+
+    let options = Mp4EditOptions {
+        title: Some("T"),
+        cover: Some(Mp4Cover {
+            path: &image,
+            data: PNG_BYTES,
+        }),
+        ..Default::default()
+    };
+    edit_mp4(&path, &options).unwrap();
+    assert!(contains_bytes(&fs::read(&path).unwrap(), b"covr"));
+
+    let mut tag = read_mp4_tag(&path).unwrap().unwrap();
+    let removed = remove_tags_mp4(&mut tag, &["cover".to_string()]);
+    assert!(removed);
+    write_mp4_tag(&path, &tag).unwrap();
+
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), b"covr"),
+        "el átomo `covr` debe desaparecer"
+    );
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert!(tag.pictures().is_empty());
+    assert_eq!(
+        tag.get_string(ItemKey::TrackTitle),
+        Some("T"),
+        "el resto de átomos debe sobrevivir"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_m4a_lyrics_atom_has_no_language_prefix_and_keeps_text() {
+    let path = create_temp_m4a("lyrics_lang");
+    let lyrics = "Primera línea\nSegunda línea\nTercera línea";
+    let options = Mp4EditOptions {
+        lyrics: Some(lyrics),
+        ..Default::default()
+    };
+    edit_mp4(&path, &options).unwrap();
+
+    // El `data` box de `©lyr` contiene EXACTAMENTE el texto: no hay campo ni
+    // prefijo de idioma (a diferencia del `USLT` de MP3, que fija `spa`). El
+    // tipo de dato 1 es UTF-8, no un idioma.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"\xA9lyr").expect("debe existir `©lyr`");
+    assert_eq!(data_type, 1, "el texto se guarda como UTF-8 (tipo 1)");
+    assert_eq!(
+        payload,
+        lyrics.as_bytes(),
+        "el `©lyr` no puede llevar prefijo de idioma"
+    );
 
     cleanup_file(&path);
 }
