@@ -3712,3 +3712,186 @@ fn test_cli_mp3_url_and_original_artist_still_write_without_warning() {
 
     cleanup_file(&mp3_path);
 }
+
+// ---------------------------------------------------------------------------
+// Auditoría de paridad: escenarios de la spec sin test dedicado (S9.2 y S5.1)
+// ---------------------------------------------------------------------------
+
+/// Devuelve los bytes de audio que siguen al bloque ID3v2 antepuesto.
+///
+/// `edit` escribe el tag ID3v2.4 **anteponiéndolo** al audio original, de modo
+/// que el audio debe ser exactamente el sufijo que empieza tras la cabecera de
+/// 10 bytes más el tamaño *synchsafe* declarado (y el posible pie de página de
+/// otros 10). Comparar ese sufijo con el audio de partida prueba a la vez que
+/// el archivo sigue siendo un MP3 válido y que el audio queda intacto.
+fn audio_after_id3v2(bytes: &[u8]) -> &[u8] {
+    assert!(bytes.len() >= 10, "el archivo debe tener cabecera ID3v2");
+    assert_eq!(&bytes[0..3], b"ID3", "debe empezar con la cabecera ID3v2");
+    let size = ((bytes[6] as usize & 0x7F) << 21)
+        | ((bytes[7] as usize & 0x7F) << 14)
+        | ((bytes[8] as usize & 0x7F) << 7)
+        | (bytes[9] as usize & 0x7F);
+    // El flag de pie de página (0x10) añade 10 bytes al final del bloque.
+    let footer = if bytes[5] & 0x10 != 0 { 10 } else { 0 };
+    &bytes[10 + size + footer..]
+}
+
+/// Escenario S9.2 (`edit` de un solo campo preserva el resto).
+///
+/// Con título, artista, álbum y género ya escritos, un `edit --year 2026` debe
+/// tocar SOLO el año y dejar los demás frames exactamente igual: mismos valores
+/// y sin duplicados ni pérdidas.
+#[test]
+fn test_cli_edit_year_preserves_other_fields() {
+    let mp3_path = create_temp_mp3();
+
+    // 1ª invocación: el MP3 ya tiene título, artista, álbum y género.
+    let setup = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--title",
+        "Título Original",
+        "--artist",
+        "Artista Original",
+        "--album",
+        "Álbum Original",
+        "--genre",
+        "Rock",
+    ]);
+    assert!(setup.status.success());
+
+    // 2ª invocación: SOLO --year (y nada más).
+    let output = run_cli(&["edit", mp3_path.to_str().unwrap(), "--year", "2026"]);
+    assert!(
+        output.status.success(),
+        "edit --year debe salir con código cero"
+    );
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+
+    // El año se escribió…
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "--year debe escribir el frame TYER"
+    );
+    // …y el resto de campos siguen exactamente igual que antes.
+    assert_eq!(tag.title(), Some("Título Original"));
+    assert_eq!(tag.artist(), Some("Artista Original"));
+    assert_eq!(tag.album(), Some("Álbum Original"));
+    assert_eq!(tag.genre(), Some("Rock"));
+
+    // Sin duplicados: cada frame aparece una única vez.
+    for frame_id in ["TIT2", "TPE1", "TALB", "TCON", "TYER"] {
+        let count = tag.frames().filter(|f| f.id() == frame_id).count();
+        assert_eq!(
+            count, 1,
+            "el frame {frame_id} debe aparecer exactamente una vez"
+        );
+    }
+
+    cleanup_file(&mp3_path);
+}
+
+/// Escenario S5.1 (`edit --cover portada.jpg`) para JPEG.
+///
+/// Debe terminar con código cero, escribir un frame `APIC` con MIME
+/// `image/jpeg` y conservar **byte a byte** los bytes del archivo de imagen de
+/// origen, sin dañar el audio.
+#[test]
+fn test_cli_cover_jpeg_keeps_image_bytes() {
+    let mp3_path = create_temp_mp3();
+    let audio = fs::read(&mp3_path).expect("Failed to read audio");
+    let cover_path = write_temp_image("cover_jpeg_mp3", "jpg", JPEG_BYTES);
+
+    let output = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--cover",
+        cover_path.to_str().unwrap(),
+        "--title",
+        "Con carátula JPEG",
+    ]);
+    assert!(
+        output.status.success(),
+        "edit --cover .jpg debe salir con cero"
+    );
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let pictures: Vec<_> = tag.pictures().collect();
+    assert_eq!(pictures.len(), 1, "debe haber exactamente una carátula");
+    assert_eq!(
+        pictures[0].mime_type, "image/jpeg",
+        "el MIME debe detectarse por la extensión"
+    );
+
+    // Los bytes de la imagen leídos del tag son idénticos a los del origen.
+    let original = fs::read(&cover_path).expect("Failed to read cover file");
+    assert_eq!(
+        pictures[0].data.as_slice(),
+        original.as_slice(),
+        "los bytes de la carátula JPEG deben quedar intactos"
+    );
+
+    // El audio sigue intacto: es exactamente el sufijo tras el tag ID3v2.
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert_eq!(
+        audio_after_id3v2(&result),
+        audio.as_slice(),
+        "el audio debe permanecer intacto y el archivo seguir siendo válido"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+/// Escenario S5.1 (`edit --cover portada.png`) para PNG.
+///
+/// Igual que el caso JPEG pero comprobando también que los bytes del PNG
+/// quedan intactos, algo que ningún test de integración cubría hasta ahora.
+#[test]
+fn test_cli_cover_png_keeps_image_bytes() {
+    let mp3_path = create_temp_mp3();
+    let audio = fs::read(&mp3_path).expect("Failed to read audio");
+    let cover_path = write_temp_image("cover_png_mp3", "png", PNG_BYTES);
+
+    let output = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--cover",
+        cover_path.to_str().unwrap(),
+        "--title",
+        "Con carátula PNG",
+    ]);
+    assert!(
+        output.status.success(),
+        "edit --cover .png debe salir con cero"
+    );
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let pictures: Vec<_> = tag.pictures().collect();
+    assert_eq!(pictures.len(), 1, "debe haber exactamente una carátula");
+    assert_eq!(
+        pictures[0].mime_type, "image/png",
+        "el MIME debe detectarse por la extensión"
+    );
+
+    // Los bytes de la imagen leídos del tag son idénticos a los del origen.
+    let original = fs::read(&cover_path).expect("Failed to read cover file");
+    assert_eq!(
+        pictures[0].data.as_slice(),
+        original.as_slice(),
+        "los bytes de la carátula PNG deben quedar intactos"
+    );
+
+    // El audio sigue intacto: es exactamente el sufijo tras el tag ID3v2.
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert_eq!(
+        audio_after_id3v2(&result),
+        audio.as_slice(),
+        "el audio debe permanecer intacto y el archivo seguir siendo válido"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
