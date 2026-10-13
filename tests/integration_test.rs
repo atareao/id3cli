@@ -2592,3 +2592,267 @@ fn test_cli_album_artist_separator_not_applied() {
 
     cleanup_file(&mp3_path);
 }
+
+// ---------------------------------------------------------------------------
+// Detección del formato por contenido (magic bytes)
+// ---------------------------------------------------------------------------
+
+/// Copia el fixture MP3 real a una ruta temporal con la extensión indicada.
+///
+/// Sirve para comprobar que el formato se decide por el contenido y no por la
+/// extensión del nombre.
+fn create_temp_fixture(extension: &str) -> PathBuf {
+    let path = unique_temp_path("fixture", extension);
+    fs::copy(fixture_mp3_path(), &path).expect("Failed to copy MP3 fixture");
+    path
+}
+
+/// Escribe los bytes indicados (cabecera mágica incluida) en un temporal.
+fn write_temp_bytes(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
+    let path = unique_temp_path(label, extension);
+    fs::write(&path, bytes).expect("Failed to write temp file");
+    path
+}
+
+/// Cabecera mínima con el átomo `ftyp` en el offset 4 (contenedor MP4/M4A).
+fn fake_mp4_bytes() -> Vec<u8> {
+    let mut bytes = vec![0x00, 0x00, 0x00, 0x20];
+    bytes.extend_from_slice(b"ftypM4A \x00\x00\x02\x00");
+    bytes.extend_from_slice(b"mp42M4A ");
+    bytes.extend_from_slice(&[0u8; 16]);
+    bytes
+}
+
+#[test]
+fn test_cli_mp3_renamed_to_m4a_is_edited_as_mp3() {
+    // Un MP3 con extensión `.m4a` debe seguir editándose: la extensión no decide.
+    let path = create_temp_fixture("m4a");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            path.to_str().unwrap(),
+            "--title",
+            "Renombrado",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    if !output.status.success() {
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Renombrado"));
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_m4a_and_leaves_file_untouched() {
+    // Mientras el backend MP4 no exista, un archivo detectado como MP4 se
+    // rechaza en las tres operaciones sin modificar un solo byte.
+    for (op, extra) in [
+        ("show", Vec::<&str>::new()),
+        ("edit", vec!["--title", "X"]),
+        ("remove", vec!["--all"]),
+    ] {
+        let path = write_temp_bytes("clip_m4a", "m4a", &fake_mp4_bytes());
+        let before = fs::read(&path).expect("Failed to read temp file");
+
+        let mut args = vec!["run", "--quiet", "--", op, path.to_str().unwrap()];
+        args.extend_from_slice(&extra);
+        let output = Command::new("cargo")
+            .args(&args)
+            .output()
+            .expect("Failed to execute command");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "'{op}' sobre un .m4a debe terminar con código distinto de cero (stderr: {stderr})"
+        );
+        assert!(
+            stderr.contains("MP3"),
+            "'{op}' debe enumerar los formatos soportados en stderr, fue: {stderr}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("Failed to read temp file"),
+            before,
+            "'{op}' NO debe modificar el archivo .m4a"
+        );
+
+        cleanup_file(&path);
+    }
+}
+
+#[test]
+fn test_cli_mp4_renamed_to_mp3_is_rejected() {
+    // Contenido MP4 (ftyp en el offset 4) con extensión `.mp3`: se decide por el
+    // contenido real, así que se rechaza en vez de tratarse como MP3.
+    let path = write_temp_bytes("clip_as_mp3", "mp3", &fake_mp4_bytes());
+    let before = fs::read(&path).expect("Failed to read temp file");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "un MP4 con nombre .mp3 debe rechazarse por su contenido (stderr: {stderr})"
+    );
+    assert!(
+        stderr.contains("MP4") || stderr.contains("MP3"),
+        "stderr debería indicar el problema de formato, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).expect("Failed to read temp file"),
+        before,
+        "el archivo no debe modificarse"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_unsupported_formats_and_leaves_file_untouched() {
+    let cases: [(&str, &str, &[u8]); 4] = [
+        ("flac", "flac", b"fLaC\x00\x00\x00\x22"),
+        ("ogg", "ogg", b"OggS\x00\x02"),
+        ("wav", "wav", b"RIFF\x00\x00\x00\x00WAVE"),
+        ("aif", "aif", b"FORM\x00\x00\x00\x00AIFF"),
+    ];
+
+    for (label, extension, magic) in cases {
+        let mut bytes = magic.to_vec();
+        bytes.extend_from_slice(&[0u8; 32]);
+        let path = write_temp_bytes(label, extension, &bytes);
+        let before = fs::read(&path).expect("Failed to read temp file");
+
+        let output = Command::new("cargo")
+            .args([
+                "run",
+                "--quiet",
+                "--",
+                "edit",
+                path.to_str().unwrap(),
+                "--title",
+                "X",
+            ])
+            .output()
+            .expect("Failed to execute command");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "'edit' sobre un .{extension} debe fallar (stderr: {stderr})"
+        );
+        assert!(
+            stderr.contains("soportado"),
+            "'edit' sobre un .{extension} debe indicar formato no soportado, fue: {stderr}"
+        );
+        assert!(
+            stderr.contains("MP3"),
+            "el mensaje debe enumerar los formatos soportados, fue: {stderr}"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "el error no debe ir a stdout, fue: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            fs::read(&path).expect("Failed to read temp file"),
+            before,
+            "'edit' NO debe modificar el archivo .{extension}"
+        );
+
+        cleanup_file(&path);
+    }
+}
+
+#[test]
+fn test_cli_rejects_empty_file() {
+    let path = write_temp_bytes("empty", "mp3", &[]);
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("formato"),
+        "'show' sobre un archivo vacío debe informar del formato, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).expect("Failed to read temp file"),
+        Vec::<u8>::new()
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_unrecognized_content() {
+    let path = write_temp_bytes("text", "mp3", b"Esto no es un archivo de audio valido");
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("formato") && stderr.contains("MP3"),
+        "'show' sobre contenido no reconocible debe informar del formato, fue: {stderr}"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_too_short_file() {
+    // `0xFF` + bits altos a 1, pero sin bytes suficientes para validar la
+    // cabecera MPEG: no se puede decidir el formato.
+    let path = write_temp_bytes("short", "mp3", &[0xFF, 0xFB]);
+    let before = fs::read(&path).expect("Failed to read temp file");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("formato"),
+        "un archivo demasiado corto debe informar de que no se pudo decidir, fue: {stderr}"
+    );
+    assert_eq!(fs::read(&path).expect("Failed to read temp file"), before);
+
+    cleanup_file(&path);
+}

@@ -12,6 +12,10 @@
 //! * `TYER` (año), que es el frame de ID3v2.3 que se conserva a propósito para
 //!   `--year`; la tabla de `lofty` solo mapea `TDRC`.
 //! * `USLT` (letra), cuyo código de idioma debe fijarse a `spa`.
+//!
+//! La librería también expone la detección del formato de audio por *magic
+//! bytes* ([`detect_format`]), que decide sobre el contenido del archivo y
+//! nunca sobre la extensión del nombre.
 
 use lofty::TextEncoding;
 use lofty::config::WriteOptions;
@@ -22,7 +26,8 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::Accessor;
 use lofty::tag::TagType;
 use lofty::tag::items::Timestamp;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
 use std::path::Path;
 
 /// Construye un [`FrameId`] a partir de un identificador conocido en tiempo de
@@ -630,6 +635,128 @@ pub fn display_tags(tag: &Id3v2Tag) {
     }
 
     println!("═══════════════════════════════════════\n");
+}
+
+// ---------------------------------------------------------------------------
+// Detección del formato de audio (magic bytes)
+// ---------------------------------------------------------------------------
+
+/// Número máximo de bytes iniciales que se inspeccionan para decidir el formato.
+///
+/// Bastan para leer la cabecera ID3v2 (`ID3`), el átomo `ftyp` del offset 4 y una
+/// cabecera de frame MPEG completa (4 bytes).
+const FORMAT_PROBE_LEN: usize = 16;
+
+/// Magic bytes de formatos de audio reconocibles pero **fuera de alcance**.
+const UNSUPPORTED_MAGIC: &[&[u8]] = &[
+    b"fLaC", // FLAC
+    b"OggS", // Ogg (Vorbis, Opus, …)
+    b"RIFF", // Contenedores RIFF (WAV, AVI, …)
+    b"FORM", // AIFF / AIFC
+    b"MAC ", // Monkey's Audio (APE)
+    b"wvpk", // WavPack
+];
+
+/// Formato de audio reconocido a partir del contenido del archivo.
+///
+/// La decisión se toma siempre sobre los bytes del archivo, nunca sobre la
+/// extensión del nombre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFormat {
+    /// MP3: audio MPEG, con o sin cabecera ID3v2. Soportado.
+    Mp3,
+    /// Contenedor ISO-BMFF/MP4 (`.m4a`, `.mp4`, `.m4b`), reconocido por `ftyp`.
+    Mp4,
+    /// Formato de audio reconocible pero fuera de alcance (FLAC, OGG, WAV,
+    /// AIFF, APE…).
+    Unsupported,
+    /// Contenido no reconocible o archivo demasiado corto para decidirlo.
+    Unknown,
+}
+
+/// Detecta el formato de audio de un archivo a partir de su contenido.
+///
+/// Recibe la ruta únicamente para **leer** sus primeros bytes: la extensión del
+/// nombre no interviene en la decisión. El archivo se abre solo en modo lectura,
+/// de modo que esta función nunca lo modifica.
+///
+/// # Errores
+///
+/// Retorna un error de E/S si el archivo no se puede abrir o leer.
+pub fn detect_format(path: &Path) -> io::Result<AudioFormat> {
+    let mut file = File::open(path)?;
+    let mut header = [0u8; FORMAT_PROBE_LEN];
+    let mut read = 0;
+    while read < header.len() {
+        match file.read(&mut header[read..])? {
+            0 => break,
+            n => read += n,
+        }
+    }
+    Ok(detect_format_from_bytes(&header[..read]))
+}
+
+/// Detecta el formato de audio a partir de un bloque de bytes iniciales.
+///
+/// * MP3: cabecera ID3v2 (`ID3`) o cabecera de frame MPEG válida.
+/// * MP4: átomo `ftyp` en el offset 4, con independencia del brand declarado.
+/// * [`AudioFormat::Unsupported`]: magic bytes de un formato conocido pero fuera
+///   de alcance.
+/// * [`AudioFormat::Unknown`]: contenido no reconocible o demasiado corto.
+pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
+    if header.starts_with(b"ID3") {
+        return AudioFormat::Mp3;
+    }
+
+    if header.len() >= 8 && &header[4..8] == b"ftyp" {
+        return AudioFormat::Mp4;
+    }
+
+    if is_valid_mpeg_frame_header(header) {
+        return AudioFormat::Mp3;
+    }
+
+    if UNSUPPORTED_MAGIC
+        .iter()
+        .any(|magic| header.starts_with(magic))
+    {
+        return AudioFormat::Unsupported;
+    }
+
+    AudioFormat::Unknown
+}
+
+/// Comprueba que los primeros bytes formen una cabecera de frame MPEG válida.
+///
+/// Además de la sincronía (`0xFF` y los tres bits altos del segundo byte a `1`)
+/// se validan los campos de versión, layer, bitrate y frecuencia de muestreo:
+/// una cabecera con el valor reservado o inválido en cualquiera de ellos no se
+/// acepta como MP3. Es la guarda que evita confundir con MP3 un archivo cuyo
+/// primer byte sea `0xFF` por casualidad.
+fn is_valid_mpeg_frame_header(header: &[u8]) -> bool {
+    if header.len() < 4 || header[0] != 0xFF || (header[1] & 0xE0) != 0xE0 {
+        return false;
+    }
+
+    // Versión MPEG (bits 4-3 del segundo byte): `01` es el valor reservado.
+    if ((header[1] >> 3) & 0b11) == 0b01 {
+        return false;
+    }
+    // Layer (bits 2-1 del segundo byte): `00` es el valor reservado.
+    if ((header[1] >> 1) & 0b11) == 0b00 {
+        return false;
+    }
+    // Índice de bitrate (bits 7-4 del tercer byte): `1111` es el valor inválido.
+    if ((header[2] >> 4) & 0b1111) == 0b1111 {
+        return false;
+    }
+    // Índice de frecuencia de muestreo (bits 3-2 del tercer byte): `11` es el
+    // valor reservado.
+    if ((header[2] >> 2) & 0b11) == 0b11 {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]

@@ -1223,3 +1223,151 @@ fn test_remove_all_id3_no_tags_returns_none() {
 
     cleanup_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// Detección del formato de audio por contenido (magic bytes)
+// ---------------------------------------------------------------------------
+
+/// Escribe bytes arbitrarios en una ruta temporal única con la extensión dada.
+fn create_temp_file(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "id3cli_unit_{}_{}_{}.{}",
+        label,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::process::id(),
+        extension
+    ));
+    fs::write(&path, bytes).expect("No se pudo escribir el archivo temporal");
+    path
+}
+
+#[test]
+fn test_detect_format_mp3_by_id3_header() {
+    // Cabecera ID3v2.4 vacía: basta con los tres primeros bytes `ID3`.
+    let header = b"ID3\x04\x00\x00\x00\x00\x00\x00";
+    assert_eq!(detect_format_from_bytes(header), AudioFormat::Mp3);
+}
+
+#[test]
+fn test_detect_format_mp3_by_mpeg_frame_sync() {
+    // Cabecera MPEG 1, Layer III, 128 kbps y 44.1 kHz (sin cabecera ID3).
+    let header = [0xFF, 0xFB, 0x90, 0x44, 0x00, 0x00, 0x00, 0x00];
+    assert_eq!(detect_format_from_bytes(&header), AudioFormat::Mp3);
+}
+
+#[test]
+fn test_detect_format_mp3_from_real_fixture_header() {
+    // Los cuatro primeros bytes del fixture de audio MPEG versionado.
+    let header = b"\xFF\xF3\x70\xC0";
+    assert_eq!(detect_format_from_bytes(header), AudioFormat::Mp3);
+}
+
+#[test]
+fn test_detect_format_mp4_ftyp_accepts_any_brand() {
+    let brands: [&[u8]; 6] = [b"M4A ", b"M4B ", b"mp42", b"isom", b"avc1", b"qt  "];
+    for brand in brands {
+        let mut header = vec![0x00, 0x00, 0x00, 0x20];
+        header.extend_from_slice(b"ftyp");
+        header.extend_from_slice(brand);
+        header.extend_from_slice(&[0x00, 0x00, 0x02, 0x00]);
+        assert_eq!(
+            detect_format_from_bytes(&header),
+            AudioFormat::Mp4,
+            "el brand {:?} debe reconocerse como MP4",
+            String::from_utf8_lossy(brand)
+        );
+    }
+}
+
+#[test]
+fn test_detect_format_rejects_implausible_mpeg_sync() {
+    // Guarda anti-falso-positivo: `0xFF` + bits altos del segundo byte a 1, pero
+    // con un campo reservado o inválido, NO debe reconocerse como MP3.
+
+    // Versión reservada (bits 4-3 del segundo byte = 01).
+    assert_eq!(
+        detect_format_from_bytes(&[0xFF, 0xEA, 0x70, 0x00]),
+        AudioFormat::Unknown
+    );
+    // Layer reservado (bits 2-1 del segundo byte = 00).
+    assert_eq!(
+        detect_format_from_bytes(&[0xFF, 0xF8, 0x70, 0x00]),
+        AudioFormat::Unknown
+    );
+    // Índice de bitrate inválido (bits 7-4 del tercer byte = 1111).
+    assert_eq!(
+        detect_format_from_bytes(&[0xFF, 0xFB, 0xF0, 0x00]),
+        AudioFormat::Unknown
+    );
+    // Índice de frecuencia de muestreo reservado (bits 3-2 del tercer byte = 11).
+    assert_eq!(
+        detect_format_from_bytes(&[0xFF, 0xFB, 0x7C, 0x00]),
+        AudioFormat::Unknown
+    );
+}
+
+#[test]
+fn test_detect_format_empty() {
+    assert_eq!(detect_format_from_bytes(&[]), AudioFormat::Unknown);
+}
+
+#[test]
+fn test_detect_format_too_short() {
+    // Menos bytes de los necesarios para una cabecera de frame MPEG completa.
+    assert_eq!(detect_format_from_bytes(&[0xFF]), AudioFormat::Unknown);
+    assert_eq!(
+        detect_format_from_bytes(&[0xFF, 0xFB]),
+        AudioFormat::Unknown
+    );
+    assert_eq!(
+        detect_format_from_bytes(&[0xFF, 0xFB, 0x90]),
+        AudioFormat::Unknown
+    );
+    // Menos de 8 bytes: no se puede leer `ftyp` en el offset 4.
+    assert_eq!(
+        detect_format_from_bytes(b"\x00\x00\x00\x20fty"),
+        AudioFormat::Unknown
+    );
+}
+
+#[test]
+fn test_detect_format_unsupported_magic_bytes() {
+    let magics: [&[u8]; 6] = [b"fLaC", b"OggS", b"RIFF", b"FORM", b"MAC ", b"wvpk"];
+    for magic in magics {
+        let mut header = magic.to_vec();
+        header.extend_from_slice(&[0u8; 8]);
+        assert_eq!(
+            detect_format_from_bytes(&header),
+            AudioFormat::Unsupported,
+            "el magic {:?} debe reconocerse como formato no soportado",
+            String::from_utf8_lossy(magic)
+        );
+    }
+}
+
+#[test]
+fn test_detect_format_unrecognized_content() {
+    assert_eq!(
+        detect_format_from_bytes(b"Esto no es un archivo de audio valido"),
+        AudioFormat::Unknown
+    );
+}
+
+#[test]
+fn test_detect_format_ignores_extension() {
+    // Contenido MP3 en un archivo llamado `.m4a`.
+    let mp3_content = fs::read(fixture_mp3_path()).expect("No se pudo leer el fixture MP3");
+    let path = create_temp_file("detect_mp3_as_m4a", "m4a", &mp3_content);
+    assert_eq!(detect_format(&path).unwrap(), AudioFormat::Mp3);
+    cleanup_file(&path);
+
+    // Contenido MP4 (ftyp en el offset 4) en un archivo llamado `.mp3`.
+    let mut mp4_content = vec![0x00, 0x00, 0x00, 0x20];
+    mp4_content.extend_from_slice(b"ftypM4A \x00\x00\x02\x00");
+    let path = create_temp_file("detect_mp4_as_mp3", "mp3", &mp4_content);
+    assert_eq!(detect_format(&path).unwrap(), AudioFormat::Mp4);
+    cleanup_file(&path);
+}

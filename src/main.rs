@@ -181,16 +181,64 @@ enum Command {
     },
 }
 
+/// Comprueba el formato del archivo por su **contenido** y aborta si no es MP3.
+///
+/// La decisión se toma sobre los *magic bytes* del archivo, nunca sobre la
+/// extensión del nombre. Ante un formato no soportado —incluido MP4, cuyo
+/// backend todavía no existe— se escribe un mensaje en español en stderr, se
+/// sale con código distinto de cero y **no se escribe ni un byte del archivo**.
+///
+/// Se mantiene el mensaje literal de archivo inexistente que ya usaba el CLI.
+fn require_mp3_format(file: &Path) {
+    if !file.exists() {
+        eprintln!("Error: El archivo '{}' no existe", file.display());
+        std::process::exit(1);
+    }
+
+    match detect_format(file) {
+        Ok(AudioFormat::Mp3) => {}
+        Ok(AudioFormat::Mp4) => {
+            eprintln!(
+                "Error: El archivo '{}' está en un formato MP4/M4A que todavía no está soportado. \
+                 Formatos soportados: MP3.",
+                file.display()
+            );
+            std::process::exit(1);
+        }
+        Ok(AudioFormat::Unsupported) => {
+            eprintln!(
+                "Error: El archivo '{}' está en un formato de audio no soportado. \
+                 Formatos soportados: MP3.",
+                file.display()
+            );
+            std::process::exit(1);
+        }
+        Ok(AudioFormat::Unknown) => {
+            eprintln!(
+                "Error: No se pudo determinar el formato del archivo '{}'. \
+                 Formatos soportados: MP3.",
+                file.display()
+            );
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!(
+                "Error: No se pudo leer el archivo '{}': {}",
+                file.display(),
+                error
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match &args.command {
         Command::Show { file } => {
-            // Verificar que el archivo MP3 existe
-            if !file.exists() {
-                eprintln!("Error: El archivo '{}' no existe", file.display());
-                std::process::exit(1);
-            }
+            // Verificar que el archivo existe y que su formato (por contenido) es MP3
+            require_mp3_format(file);
 
             // Leer tag
             let tag = match read_id3v2_tag(file) {
@@ -226,11 +274,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             artist_sort,
             title_sort,
         } => {
-            // Verificar que el archivo MP3 existe
-            if !file.exists() {
-                eprintln!("Error: El archivo '{}' no existe", file.display());
-                std::process::exit(1);
-            }
+            // Verificar que el archivo existe y que su formato (por contenido) es MP3
+            require_mp3_format(file);
 
             // Leer o crear tag
             let mut tag = match read_id3v2_tag(file) {
@@ -377,11 +422,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Remove { file, tags, all } => {
-            // Verificar que el archivo MP3 existe
-            if !file.exists() {
-                eprintln!("Error: El archivo '{}' no existe", file.display());
-                std::process::exit(1);
-            }
+            // Verificar que el archivo existe y que su formato (por contenido) es MP3
+            require_mp3_format(file);
 
             // Eliminar todos los tags (ID3v1 e ID3v2) físicamente
             if *all {
