@@ -65,10 +65,13 @@ fn report_error(error: Box<dyn Error>) -> ! {
     std::process::exit(1);
 }
 
-/// CLI para añadir tags ID3 y carátulas a archivos MP3
+/// CLI para añadir metadatos y carátulas a archivos MP3 y MP4
 #[derive(Parser, Debug)]
 #[command(name = "id3cli")]
-#[command(about = "Añade tags ID3 y carátulas a archivos MP3", long_about = None)]
+#[command(
+    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4) y MP4 (átomos iTunes)",
+    long_about = None
+)]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -77,14 +80,14 @@ struct Args {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 enum Command {
-    /// Mostrar todos los tags del archivo MP3
+    /// Mostrar todos los metadatos del archivo MP3 o MP4
     Show {
-        /// Ruta del archivo MP3
+        /// Ruta del archivo de audio (MP3 o MP4)
         file: PathBuf,
     },
-    /// Editar tags ID3 del archivo MP3
+    /// Editar metadatos del archivo MP3 o MP4
     Edit {
-        /// Ruta del archivo MP3
+        /// Ruta del archivo de audio (MP3 o MP4)
         file: PathBuf,
 
         /// Título de la canción
@@ -167,15 +170,19 @@ enum Command {
         #[arg(long)]
         title_sort: Option<String>,
     },
-    /// Eliminar tags específicos del archivo MP3
+    /// Eliminar tags específicos del archivo MP3 o MP4
     Remove {
-        /// Ruta del archivo MP3
+        /// Ruta del archivo de audio (MP3 o MP4)
         file: PathBuf,
 
-        /// Tags a eliminar (title, artist, album, year, genre, track, season, date, copyright, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort)
+        // Tags a eliminar. La lista se deriva de `id3cli::VALID_TAG_NAMES`, la
+        // misma tabla de alias que comparten la clasificación de MP3 y la de
+        // MP4, para que la ayuda no pueda quedar desincronizada de los nombres
+        // realmente aceptados.
+        #[arg(help = format!("Tags a eliminar, en inglés o en español ({VALID_TAG_NAMES})"))]
         tags: Vec<String>,
 
-        /// Eliminar físicamente todos los tags ID3 (v1 y v2) del archivo
+        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4)
         #[arg(short, long)]
         all: bool,
     },
@@ -575,7 +582,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if report.changed {
-                    println!("\n✅ Tags guardados correctamente en '{}'", file.display());
+                    println!(
+                        "\n✅ Metadatos guardados correctamente en '{}'",
+                        file.display()
+                    );
                 } else {
                     println!(
                         "\n⚠️  No se especificaron cambios. Usa --help para ver las opciones."
@@ -672,7 +682,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = write_mp4_tag(file, &tag) {
                         report_mp4_error(file, e);
                     }
-                    println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
+                    println!(
+                        "\n✅ Metadatos eliminados correctamente de '{}'",
+                        file.display()
+                    );
                 } else {
                     println!("\n⚠️  No se encontraron tags válidos para eliminar.");
                 }

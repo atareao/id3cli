@@ -2,7 +2,7 @@
 name = "id3cli"
 version = "0.4.3"
 edition = "2024"
-description = "CLI para leer y escribir tags ID3v2.4 en archivos MP3"
+description = "CLI para leer y escribir metadatos ID3v2.4 en MP3 y átomos estilo iTunes (ilst) en MP4"
 license = "MIT"
 repository = "https://github.com/atareao/id3cli"
 homepage = "https://github.com/atareao/id3cli"
