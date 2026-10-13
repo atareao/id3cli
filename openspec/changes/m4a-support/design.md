@@ -84,11 +84,41 @@ El cambio de fixtures y la migración del backend MUST ser pasos separados, cada
 
 Alternativa descartada: hacerlo todo junto en un único paso (ahorra un commit, pero destruye la capacidad de atribuir cualquier fallo, que es justo el valor de la red de seguridad).
 
+### 8. La implementación usa la API de bajo nivel de ID3v2 (`lofty::id3::v2::Id3v2Tag`), en lugar del `lofty::tag::Tag` genérico
+
+Se decidió así tras comprobar que el tag genérico no puede cumplir el contrato de paridad de MP3, por tres razones concretas y verificadas:
+
+1. El frame `TYER`, que el contrato obliga a conservar para `--year`, **no tiene ningún `ItemKey`** en la tabla de `lofty`, y el tag genérico no expone API pública para insertar un frame sin mapeo.
+2. El frame `USLT` de la letra **no permite fijar el código de idioma `spa`** desde el tag genérico: el idioma por defecto sería `XXX`, y solo el frame de bajo nivel permite fijarlo.
+3. `remove_tags` necesita borrar frames **exactos**, incluido `TYER`, y no claves genéricas.
+
+La API de bajo nivel da acceso a los frames ID3v2 reales (`Frame::Text` con `FrameId::new("TYER")`, `Frame::Lyrics`, `Frame::Picture`) y por tanto conserva frame a frame la semántica del backend anterior.
+
+Alternativa descartada: usar el `lofty::tag::Tag` genérico, que es más idiomático y requiere menos código, pero es incapaz de satisfacer los tres puntos anteriores sin perder la paridad del contrato.
+
+### 9. El crate `id3` se conserva como dependencia de desarrollo, para que los tests relean con la librería anterior
+
+Los tests de integración releen los tags con la librería anterior (`id3`), mientras la producción escribe con `lofty`. Ese reparto persigue dos cosas a la vez. Primero, que **ninguna de las 62 aserciones de integración cambia**: si el mismo lector que antes verifica lo que ahora escribe el backend nuevo, la red de seguridad de caracterización queda literalmente intacta y el diff de los tests solo puede contener adaptaciones de firma, nunca expectativas relajadas. Segundo, que la verificación sea **entre librerías distintas** —`lofty` escribe, `id3` lee—, lo que es evidencia más fuerte que releer con la propia librería: una lectura con el mismo crate que escribió comprobaría solo su coherencia interna, no que los bytes en disco siguen siendo los que el producto producía antes.
+
+La producción no la usa: `cargo tree -e normal` no muestra `id3`; solo aparece en `-e dev`. La dependencia queda por tanto confinada al árbol de desarrollo y no viaja al binario distribuido.
+
+Alternativa descartada: reescribir las aserciones de integración contra la API de `lofty`. Evita mantener una dependencia de desarrollo, pero obliga a tocar cada aserción —que es exactamente donde se cuelan los cambios de expectativa— y convierte la verificación en algo autorreferente, porque el lector ya no sería independiente del escritor.
+
+### 10. Paridad de `remove` con la eliminación del último frame, en lugar de aceptar el borrado físico del bloque
+
+La librería antigua, al guardar un tag vacío, dejaba una cabecera ID3v2 vacía de 10 bytes en el archivo; `lofty` en cambio **elimina físicamente el bloque ID3v2 entero**. Se decidió **preservar la paridad** con la librería antigua mediante un guardado específico en `main.rs` que, cuando el tag queda vacío, borra el bloque y antepone una cabecera vacía.
+
+La razón es de diseño del CLI, no de nostalgia del byte: la herramienta ya tiene el subcomando `remove --all` para borrar físicamente los bloques, de modo que si `remove <tags>` también borrara el bloque al quitar el último frame, **la distinción entre ambos subcomandos desaparecería en ese caso límite**. Un usuario que hoy hace `remove title` sobre un MP3 con un solo tag obtiene un archivo con cabecera ID3 vacía, no un MP3 sin bloque ID3; aceptar el comportamiento de `lofty` cambiaría en silencio el efecto de un subcomando documentado.
+
+Coste asumido y declarado: unas 18 líneas de manipulación de archivo en `main.rs` solo para conservar esa peculiaridad.
+
+Alternativa descartada: aceptar el comportamiento de `lofty` por ser más limpio y actualizar el test correspondiente, documentándolo como cambio deliberado de comportamiento. Se descarta aquí para no mezclar cambios de comportamiento con la migración, según el criterio de la decisión 7.
+
 ## Risks / Trade-offs
 
 - **Regresión en MP3 al cambiar de backend** → red de seguridad previa: caracterizar el comportamiento actual y ejecutar la suite completa de 106 tests en verde antes de tocar `lib.rs` (grupo 1 de `tasks.md`); a partir de ahí, cada grupo debe dejar la suite verde y la migración se hace sin tocar el resto de comportamiento en el mismo paso.
 - **Cambia la API pública de `lib.rs`** porque hoy las funciones reciben `&mut id3::Tag` → el cambio de firma es inevitable y se asume como parte del alcance; los tests son el consumidor principal de esa API, así que la adaptación queda contenida en `src/tests.rs` y `tests/integration_test.rs`, y el binario `src/main.rs` es el único otro consumidor.
-- **`remove --all` dependía de `id3::v1v2::remove_from_path`** → hay que reimplementar el borrado físico de ID3v1 e ID3v2 sobre `lofty`, verificando `TagExt::remove_from_path`; el observable a conservar (mensajes por estado previo y audio intacto) está fijado por los escenarios de `mp3-tagging` y verificado con tests de integración.
+- **`remove --all` dependía de `id3::v1v2::remove_from_path`, y su equivalente directo en `lofty` está roto** → `TagType::remove_from_path` de `lofty` 0.25.4 falla con `EBADF` (*Bad file descriptor*), porque `VerifiedFile::new_from_path` envuelve un descriptor abierto en solo lectura sobre el que después intenta escribir. Mitigación verificada: el estado previo se determina sobre los **bytes del propio archivo** —cabecera `ID3` al inicio para v2 y bloque `TAG` en los últimos 128 bytes para v1—, que es exactamente la definición física que usaba el crate `id3`, de modo que no depende de que `lofty` logre parsear el contenedor; y el borrado se delega en `lofty` mediante `TagType::remove_from(...)` sobre un descriptor abierto explícitamente en **lectura/escritura**, tratando ID3v2 e ID3v1 por separado. Los cuatro estados previos (ninguno / solo ID3v1 / solo ID3v2 / ambos) se detectan y se borran correctamente, y el audio sobrevive. El observable a conservar (mensajes por estado previo y audio intacto) está fijado por los escenarios de `mp3-tagging` y verificado con tests de integración.
 - **Los fixtures M4A no se pueden falsificar con 10 bytes** → usar `ffmpeg` para generar un fixture real y commitearlo en `tests/fixtures/`, con un helper que lo copie a un temporal; el fixture se versiona para que la suite no dependa de `ffmpeg` en tiempo de ejecución.
 - **WebP deja de funcionar en `covr`** → es un cambio de comportamiento observable (en MP3 sigue funcionando vía `APIC`), así que se documenta en el README y se emite un warning explícito al usar `--cover` con `.webp` sobre un MP4, en lugar de degradar en silencio a `Reserved(0)`.
 - **Pérdida del idioma de la letra en M4A** → `©lyr` no tiene campo de idioma; el texto se conserva pero `spa` no se puede preservar. Se documenta en el README como limitación conocida del contenedor, no como bug, y el spec de `m4a-tagging` lo fija como comportamiento esperado.

@@ -486,7 +486,8 @@ id3cli/
 
 ## Dependencias
 
-- [`id3`](https://crates.io/crates/id3) v1.16.4 - Lectura/escritura de tags ID3v2
+- [`lofty`](https://crates.io/crates/lofty) v0.25 - Lectura/escritura de metadatos de audio
+- [`id3`](https://crates.io/crates/id3) v1.16 — Solo como dependencia de desarrollo: los tests de integración releen con esta librería los tags escritos por `lofty`, de modo que la verificación es entre librerías distintas. La producción no la usa.
 - [`clap`](https://crates.io/crates/clap) v4.5 - Parser de argumentos CLI con derive macros
 
 ## Arquitectura técnica

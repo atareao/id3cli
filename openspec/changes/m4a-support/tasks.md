@@ -29,23 +29,23 @@ Una sola ruta de código y ningún cambio de comportamiento observable en MP3. A
       Verificación: el fichero está versionado en `tests/fixtures/`, su tipo se detecta como MPEG y `ffprobe` lo reconoce como audio reproducible.
 - [x] 2.2 Adaptar `tests/integration_test.rs` (helper `create_temp_mp3()` y los pocos tests que fabrican bytes falsos de 4 bytes) para que copien el fixture real a un temporal en lugar de construir bytes.
       Verificación: la suite completa da 125 tests y 0 fallos con el backend `id3` sin migrar todavía, sin que ninguna aserción de ningún test haya cambiado y sin que ningún test haya quedado con menos cobertura.
-- [ ] 2.3 Sustituir la dependencia en `Cargo.toml`: entra `lofty` 0.25.4, sale `id3` 1.16.4.
+- [x] 2.3 Sustituir la dependencia en `Cargo.toml`: entra `lofty` 0.25.4, sale `id3` 1.16.4.
       Verificación: `cargo build` compila; `cargo tree` MUST NOT mostrar el crate `id3`.
-- [ ] 2.4 Reescribir `src/lib.rs` contra la API de `lofty`, conservando el mapeo de frames y la semántica de cada función de la tabla del spec `mp3-tagging`.
+- [x] 2.4 Reescribir `src/lib.rs` contra la API de `lofty`, conservando el mapeo de frames y la semántica de cada función de la tabla del spec `mp3-tagging`.
       Verificación: `cargo check` sin errores y revisión de que cada flag conserva su frame: `TIT2`, `TPE1`, `TALB`, `TPE2`, `TYER`/`TDRC`, `TDRC`, `TCON`, `TRCK`, `TPOS`, `TCOM`, `TCOP`, `USLT`, `APIC`, `TCMP`, `TSOT`, `TSOP`, `TSOA`, `TIT3`, `TOPE` y `WOAR`.
-- [ ] 2.5 Adaptar `src/main.rs` a la nueva API, manteniendo los subcomandos `show`, `edit` y `remove`, sus flags y sus mensajes en español.
+- [x] 2.5 Adaptar `src/main.rs` a la nueva API, manteniendo los subcomandos `show`, `edit` y `remove`, sus flags y sus mensajes en español.
       Verificación: `cargo run -- --help`, `cargo run -- edit --help` y `cargo run -- remove --help` MUST mostrar la misma superficie de flags que antes del cambio.
-- [ ] 2.6 Reimplementar el borrado físico de `remove --all` sobre `lofty`, verificando `TagExt::remove_from_path`, conservando los mensajes por estado previo (sin tags / solo ID3v1 / solo ID3v2 / ambos) y el audio intacto.
+- [x] 2.6 Reimplementar el borrado físico de `remove --all` sobre `lofty`, verificando `TagExt::remove_from_path`, conservando los mensajes por estado previo (sin tags / solo ID3v1 / solo ID3v2 / ambos) y el audio intacto.
       Verificación: los tests de integración de `remove --all` del grupo 1 MUST pasar sin modificaciones.
-- [ ] 2.7 Adaptar `src/tests.rs` (63 tests) a las nuevas firmas, sin cambiar ninguna expectativa de comportamiento.
-      Verificación: `cargo test --lib` en verde con 63 tests unitarios.
-- [ ] 2.8 Adaptar `tests/integration_test.rs` (43 tests) al nuevo backend, ajustando las firmas y las llamadas a la nueva API.
-      Verificación: `cargo test --test '*'` en verde con 43 tests o más.
-- [ ] 2.9 Confirmar que el MIME de la carátula sigue detectándose desde la extensión y que `.webp` sigue funcionando vía `APIC` en MP3.
+- [x] 2.7 Adaptar `src/tests.rs` (63 tests) a las nuevas firmas, sin cambiar ninguna expectativa de comportamiento.
+      Verificación: `cargo test --lib` en verde con 63 tests unitarios; las expectativas de los tests MUST preservarse tal cual (mismos frames y mismos valores, incluido `TYER` para el año y el idioma `spa` del `USLT`), y ningún test puede quedar con menos cobertura que antes.
+- [x] 2.8 Adaptar `tests/integration_test.rs` (62 tests) al nuevo backend, ajustando las firmas y las llamadas a la nueva API.
+      Verificación: `cargo test --test '*'` en verde con 62 tests de integración.
+- [x] 2.9 Confirmar que el MIME de la carátula sigue detectándose desde la extensión y que `.webp` sigue funcionando vía `APIC` en MP3.
       Verificación: los tests de carátula jpg, png y webp del grupo 1 MUST pasar sin cambios.
-- [ ] 2.10 Actualizar la documentación del propio código y del backend.
+- [x] 2.10 Actualizar la documentación del propio código y del backend.
       Verificación: el doc-comment del módulo en `src/lib.rs` MUST dejar de citar `id3` y la sección de dependencias del `README.md` MUST listar `lofty` 0.25.4 y `clap`.
-- [ ] 2.11 Cierre del grupo: suite completa, formato y linter.
+- [x] 2.11 Cierre del grupo: suite completa, formato y linter.
       Verificación: `cargo test` (63 tests unitarios + 62 de integración, 125 en total, 0 fallos), `cargo fmt --check` y `cargo clippy --all-targets --all-features -- -D warnings` sin salida de error.
 
 ## 3. Detección de formato por magic bytes

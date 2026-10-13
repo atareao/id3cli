@@ -103,3 +103,14 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 El grupo 8 (verificación de integración final) compara el resultado contra este baseline: recuento de tests, presencia del frame `TYER` en `--year` (tarea 1.6) y ausencia de cambios de expectativa en el diff de `src/tests.rs` y `tests/integration_test.rs`.
+
+## Regresiones que la red de seguridad detectó al migrar
+
+Al compilar la suite contra el nuevo backend `lofty`, fallaron **8 tests**, y no por los tests ni por cambios de expectativa, sino por **dos cambios de comportamiento reales de la librería nueva**:
+
+1. **Siete tests** de `remove`: `lofty`, al guardar un tag vacío, elimina físicamente el bloque ID3v2 completo, mientras el crate `id3` dejaba una cabecera vacía de 10 bytes. Se preservó la paridad con un guardado específico en `main.rs` (ver decisión 10 del diseño).
+2. **Un test**: el `Debug` del error de guardado de `lofty` usa `finish_non_exhaustive` y oculta la causa subyacente, de modo que el mensaje `Permission denied` desaparecía de la salida de error. Se restauró recorriendo la cadena de errores en `main.rs`.
+
+**Conclusión.** Estos dos casos habrían pasado desapercibidos sin los tests de caracterización del grupo 1, y son la evidencia de que esa red cumple su función: los fallos no venían de una expectativa mal escrita, sino de comportamiento nuevo de la librería que solo se manifiesta al releer con un lector independiente.
+
+**Recuento tras cerrar el grupo 2.** La suite sigue en **125 tests (63 unitarios + 62 de integración) y 0 fallos**, y los 62 tests de integración **no han requerido ningún cambio** gracias a que releen con `id3` (decisión 9 del diseño).
