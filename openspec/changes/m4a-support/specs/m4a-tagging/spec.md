@@ -116,7 +116,7 @@ La letra indicada con `--lyrics` MUST almacenarse en el átomo `©lyr`. Dado que
 
 ### Requirement: Carátula en el átomo `covr` y restricciones de formato de imagen
 
-La carátula indicada con `--cover` MUST escribirse en el átomo `covr`. Este átomo solo admite los tipos well-known JPEG (13), PNG (14), GIF (12) y BMP (27); el CLI MUST escribir JPEG y PNG con sus tipos well-known correspondientes (13 y 14) y, cuando la imagen sea WebP, el `covr` resultante MUST quedar con el tipo `Reserved(0)`, que iTunes y macOS NO muestran, así que el CLI MUST avisar por stderr de que esa carátula no será visible en esos reproductores, y MUST NOT abortar la operación ni el resto de la edición. En MP3, el `.webp` sigue funcionando vía `APIC`, según la spec de `mp3-tagging`.
+La carátula indicada con `--cover` MUST escribirse en el átomo `covr`. Este átomo solo admite los tipos well-known JPEG (13), PNG (14), GIF (12) y BMP (27), y el CLI MUST escribir JPEG y PNG con sus tipos well-known correspondientes (13 y 14). Cuando la imagen sea WebP, el CLI MUST NOT entregar a `lofty` 0.25.4 ningún tipo MIME que la librería no reconozca: ante un tipo MIME desconocido la escritura de la carátula **devuelve un error** en lugar de degradar el tipo, así que el CLI MUST escribir la carátula dejando el tipo MIME deliberadamente sin establecer —que es el caso que la librería mapea al tipo reservado—, de modo que el átomo `covr` resultante MUST quedar con el tipo de dato reservado (0), que iTunes y macOS NO muestran. Ante una carátula WebP sobre un archivo MP4 el CLI MUST NOT fallar ni abortar, MUST escribir la carátula por esa vía y MUST avisar al usuario por stderr de que esa carátula no será visible en esos reproductores, y MUST NOT abortar la operación ni el resto de la edición. En MP3, el `.webp` sigue funcionando vía `APIC`, según la spec de `mp3-tagging`.
 
 #### Scenario: Carátula JPEG en M4A
 - **WHEN** se ejecuta `edit --cover portada.jpg` sobre un `.m4a`
@@ -128,7 +128,7 @@ La carátula indicada con `--cover` MUST escribirse en el átomo `covr`. Este á
 
 #### Scenario: Carátula WebP en M4A
 - **WHEN** se ejecuta `edit --cover portada.webp` sobre un `.m4a`
-- **THEN** el átomo `covr` MUST quedar con el tipo `Reserved(0)`, el CLI MUST emitir un warning por stderr advirtiendo de que esa carátula no será visible en iTunes ni en macOS, el CLI MUST NOT terminar con error y el resto de campos indicados MUST escribirse
+- **THEN** el CLI MUST escribir la carátula dejando el tipo MIME sin establecer, de modo que el átomo `covr` MUST quedar con el tipo de dato reservado (0), MUST emitir un warning por stderr advirtiendo de que esa carátula no será visible en iTunes ni en macOS, MUST NOT terminar con error ni abortar, y el resto de campos indicados MUST escribirse
 
 #### Scenario: Archivo de carátula inexistente
 - **WHEN** se ejecuta `edit --cover ruta/que/no/existe.jpg` sobre un `.m4a`

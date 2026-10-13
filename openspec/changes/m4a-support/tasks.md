@@ -72,25 +72,31 @@ Backend correcto en función del contenido, y rechazo explícito de lo que queda
 
 Los campos de la tabla de mapeo, sobre el árbol `moov.udta.meta.ilst`.
 
-- [ ] 4.1 Definir en `src/lib.rs` el mapeo de flags a átomos como una tabla única, en lugar de ramas dispersas por función.
+> [!note] Las tareas 4.9, 4.10 y 4.11 son las que hacen que MP4 sea utilizable desde el CLI, y dependen de que el backend de escritura de metadatos (4.1 a 4.7) esté completo.
+
+- [x] 4.1 Definir en `src/lib.rs` el mapeo de flags a átomos como una tabla única, en lugar de ramas dispersas por función.
       Verificación: revisión de código; el mapeo MUST estar en un solo sitio y cubrir las 18 asignaciones flag→átomo (17 átomos distintos, porque `--year` y `--date` comparten `©day`) de la tabla de `specs/m4a-tagging/spec.md`.
-- [ ] 4.2 Implementar la creación del árbol `moov.udta.meta.ilst` cuando no exista, preservando `moov` y los átomos preexistentes.
+- [x] 4.2 Implementar la creación del árbol `moov.udta.meta.ilst` cuando no exista, preservando `moov` y los átomos preexistentes.
       Verificación: tests unitarios sobre la representación en memoria del tag y comprobación de que los átomos ajenos a los flags indicados sobreviven.
-- [ ] 4.3 Implementar la escritura de los átomos de texto básicos y de numeración: `©nam`, `©ART`, `©alb`, `aART`, `©gen`, `trkn`, `disk` y `cpil`.
+- [x] 4.3 Implementar la escritura de los átomos de texto básicos y de numeración: `©nam`, `©ART`, `©alb`, `aART`, `©gen`, `trkn`, `disk` y `cpil`.
       Verificación: un test por átomo, comprobando el valor escrito y la ausencia de átomos de más.
-- [ ] 4.4 Implementar la escritura de créditos y ordenaciones: `©wrt`, `cprt`, `sonm`, `soar`, `soal` y el átomo freeform `----:com.apple.iTunes:SUBTITLE`.
+- [x] 4.4 Implementar la escritura de créditos y ordenaciones: `©wrt`, `cprt`, `sonm`, `soar`, `soal` y el átomo freeform `----:com.apple.iTunes:SUBTITLE`.
       Verificación: un test por átomo; el subtítulo MUST quedar en el átomo freeform y NO en un átomo estándar.
-- [ ] 4.5 Implementar la escritura de fecha en `©day` con la regla de prioridad de `--date` sobre `--year` y el warning asociado.
+- [x] 4.5 Implementar la escritura de fecha en `©day` con la regla de prioridad de `--date` sobre `--year` y el warning asociado.
       Verificación: tres tests (`solo --date`, `solo --year`, `ambos`) comprobando el contenido de `©day`, la presencia o ausencia del warning por stderr y el código de salida cero.
-- [ ] 4.6 Añadir el fixture `.m4a` real generado con `ffmpeg` y commitearlo en `tests/fixtures/`, junto con el helper que lo copia a un temporal.
+- [x] 4.6 Añadir el fixture `.m4a` real generado con `ffmpeg` y commitearlo en `tests/fixtures/`, junto con el helper que lo copia a un temporal.
       Verificación: el fichero `tests/fixtures/*.m4a` MUST estar versionado y el helper MUST usarlo; un test unitario MUST comprobar que el fixture tiene átomo `ftyp` y que la copia temporal es escribible.
-- [ ] 4.7 Añadir los tests de integración de ida y vuelta sobre el fixture para los campos de metadatos.
+- [x] 4.7 Añadir los tests de integración de ida y vuelta sobre el fixture para los campos de metadatos.
       Verificación: `edit` sobre la copia del fixture y posterior `show` MUST devolver los mismos valores; comparar con el mismo flujo sobre MP3 para comprobar la coherencia entre formatos.
-- [ ] 4.8 Documentar el mapeo MP4.
+- [x] 4.8 Documentar el mapeo MP4.
       Verificación: el `README.md` MUST incluir una tabla `Flag CLI → átomo MP4` alineada con la del spec, y MUST mencionar que `--subtitle` usa un átomo freeform; el `README.md` MUST explicar además la prioridad de `--date` sobre `--year` en `©day`.
-- [ ] 4.9 Enrutar `show`, `edit` y `remove` al backend MP4 cuando el formato detectado sea MP4, y añadir MP4 a la lista de formatos soportados del mensaje de error.
+- [x] 4.9 Enrutar `show`, `edit` y `remove` al backend MP4 cuando el formato detectado sea MP4, y añadir MP4 a la lista de formatos soportados del mensaje de error.
       Verificación: tests de integración que ejecutan las tres operaciones sobre un `.m4a` y comprueban que cada una usa el backend MP4; y que el mensaje de formato no soportado enumera ya MP3 y MP4.
       > [!note] Esta tarea cierra la dependencia que dejó abierta la tarea 3.2.
+- [x] 4.10 Implementar `show` sobre MP4 reutilizando el formato legible y las etiquetas de MP3, y avisar sin error cuando no haya metadatos.
+      Verificación: tests de integración que comparan el conjunto de campos mostrado por `show` sobre un MP3 y sobre un `.m4a` editados con los mismos flags, y que comprueban el aviso por un `.m4a` sin metadatos.
+- [x] 4.11 Implementar `remove` sobre MP4 con la tabla de alias compartida con MP3 (inglés y español) y `remove --all` eliminando el bloque `ilst` completo.
+      Verificación: tests unitarios y de integración de borrado de átomos concretos (en inglés y en español) con supervivencia del resto, y de `remove --all` con metadatos (bloque eliminado, audio intacto) y sin metadatos (aviso, sin error).
 
 ## 5. Backend MP4 ilst: carátulas y letras
 

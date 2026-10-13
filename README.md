@@ -441,6 +441,36 @@ id3cli remove cancion.mp3 compilation album_sort artist_sort title_sort
 
 ---
 
+## Mapeo de tags en MP4
+
+En un `.m4a` (y en general en un contenedor MP4 con `ilst`) los metadatos no son frames ID3, sino átomos dentro de la ruta `moov.udta.meta.ilst`. La siguiente tabla recoge el mapeo entre cada flag del CLI y el átomo que se escribe:
+
+| Flag CLI | Átomo MP4 |
+| --- | --- |
+| `--title` | `©nam` |
+| `--artist` | `©ART` |
+| `--album` | `©alb` |
+| `--album-artist` | `aART` |
+| `--year` | `©day` |
+| `--date` | `©day` |
+| `--genre` | `©gen` |
+| `--track` | `trkn` |
+| `--season` | `disk` |
+| `--composer` | `©wrt` |
+| `--copyright` | `cprt` |
+| `--lyrics` | `©lyr` |
+| `--cover` | `covr` |
+| `--compilation` | `cpil` |
+| `--title-sort` | `sonm` |
+| `--artist-sort` | `soar` |
+| `--album-sort` | `soal` |
+| `--subtitle` | `----:com.apple.iTunes:SUBTITLE` |
+
+- **`--year` y `--date` comparten `©day`.** Es un único átomo, así que no pueden convivir: si se indican ambos flags, **gana `--date`** y se avisa por stderr de que el año ha quedado absorbido por la fecha.
+- **`--subtitle` se guarda en un átomo *freeform*** (`----:com.apple.iTunes:SUBTITLE`), no en un átomo estándar. Los átomos freeform usan un nombre con espacio de nombres, de ahí el prefijo `----:com.apple.iTunes:`.
+
+---
+
 ## Para Desarrolladores
 
 ### Requisitos
