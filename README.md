@@ -1,15 +1,17 @@
 # id3cli
 
-CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
+CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4) y **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-142%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
+[![Tests](https://img.shields.io/badge/tests-211%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
 
 ✨ **Completo y fácil de usar**
 
+- 🎧 **MP3 y MP4:** escribe tags ID3v2.4 en MP3 y átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`)
+- 🔍 **Detección de formato por contenido:** el formato se decide por los *magic bytes* del archivo, nunca por su extensión; los formatos que no soporta se rechazan con un mensaje claro y sin tocar el archivo
 - 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, temporada, fecha, copyright
 - 🎙️ **Soporte completo para podcasts:** compositor, subtítulo, artista original, artista del álbum, temporada (TPOS)
 - 📃 Soporte para letras de canciones (lyrics) en formato USLT
@@ -28,11 +30,16 @@ El formato del archivo se determina **por su contenido** (sus *magic bytes* inic
 | Estado | Formatos | Comportamiento |
 | --- | --- | --- |
 | **Soportado** | MP3 (con o sin cabecera `ID3`) | `show`, `edit` y `remove` operan sobre él; los tags se escriben como ID3v2.4 |
-| **Reconocido, aún sin backend** | MP4 / M4A (`.m4a`, `.mp4`, `.m4b`): átomo `ftyp` en el offset 4, con cualquier brand | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+| **Soportado** | MP4 / M4A (`.m4a`, `.mp4`, `.m4b`): átomo `ftyp` en el offset 4, con cualquier brand | `show`, `edit` y `remove` operan sobre él; los metadatos se **leen y escriben** como átomos `ilst` estilo iTunes |
 | **No soportado** | FLAC (`fLaC`), OGG/Opus (`OggS`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 | **Indeterminado** | Contenido no reconocible o archivo demasiado corto | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 
 En todos los casos de error el archivo queda **intacto**: la detección ocurre antes de abrir el archivo para escritura, de modo que un formato no soportado nunca se toca.
+
+**En resumen:**
+
+- **Soportados:** MP3 (ID3v2.4) y MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes). Ambos admiten `show`, `edit` y `remove` completos.
+- **No soportados:** FLAC (`fLaC`), OGG/Opus (`OggS`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
 
 ## Instalación
 
@@ -77,7 +84,7 @@ id3cli remove <FILE> [TAGS...]
 
 | Argumento    | Descripción                                         |
 | ------------ | --------------------------------------------------- |
-| `<FILE>`     | Ruta del archivo MP3 (requerido)                    |
+| `<FILE>`     | Ruta del archivo de audio MP3 o MP4 (requerido)      |
 | `-a, --all`  | Eliminar **físicamente** todos los tags ID3 (ID3v1 e ID3v2). Si el archivo no tenía tags, muestra un aviso |
 | `[TAGS...]`  | Tags a eliminar (uno o más argumentos posicionales) |
 
@@ -89,7 +96,7 @@ También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`,
 
 | Opción                                | Descripción                                                  |
 | ------------------------------------- | ------------------------------------------------------------ |
-| `<FILE>`                              | Ruta del archivo MP3 (argumento posicional, requerido)       |
+| `<FILE>`                              | Ruta del archivo de audio MP3 o MP4 (argumento posicional, requerido) |
 | `-t, --title <TITLE>`                 | Título de la canción                                         |
 | `-a, --artist <ARTIST>`               | Artista (se puede repetir para múltiples artistas)           |
 | `-A, --album <ALBUM>`                 | Álbum                                                        |
@@ -173,6 +180,43 @@ id3cli edit cancion.mp3 \
   --genre "Rock" \
   --track 11
 ```
+
+### 🎧 Editar un archivo MP4 (`.m4a`)
+
+Los archivos `.m4a` (y en general `.mp4` / `.m4b`) se editan con **exactamente los mismos comandos y flags**; lo único que cambia es que los metadatos se escriben como átomos `ilst` en lugar de frames ID3:
+
+```bash
+id3cli edit cancion.m4a \
+  --title "Bohemian Rhapsody" \
+  --artist "Queen" \
+  --album "A Night at the Opera" \
+  --year 1975 \
+  --genre "Rock" \
+  --track 11
+```
+
+Y se consultan igual con `show`:
+
+```bash
+id3cli show cancion.m4a
+```
+
+**Salida:**
+
+```text
+📋 Tags encontrados:
+
+═══════════════════════════════════════
+🎵 Título:    Bohemian Rhapsody
+🎤 Artista:   Queen
+💿 Álbum:     A Night at the Opera
+📅 Año:       1975
+🎸 Género:    Rock
+#️⃣  Pista:     11
+═══════════════════════════════════════
+```
+
+> [!tip] El formato se detecta por el **contenido** del archivo, no por su extensión: un MP3 renombrado a `.m4a` se sigue editando como MP3 y viceversa.
 
 ### 👥 Múltiples artistas (colaboraciones)
 
@@ -571,12 +615,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **142 tests** (73 unitarios + 69 de integración):
+El proyecto tiene **cobertura completa** con **211 tests** (122 unitarios + 89 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (142)
-cargo test --lib        # Solo tests unitarios (73)
-cargo test --test '*'   # Solo tests de integración (69)
+cargo test              # Ejecutar todos los tests (211)
+cargo test --lib        # Solo tests unitarios (122)
+cargo test --test '*'   # Solo tests de integración (89)
 ```
 
 **Ejemplos de tests:**
@@ -623,6 +667,7 @@ Desarrollado con 🦀 Rust
 - [x] Arquitectura modular (lib.rs separado del CLI)
 - [ ] Modo batch para procesar múltiples archivos
 - [ ] Binarios para Windows y macOS
-- [ ] Soporte para otros formatos de audio (FLAC, M4A)
+- [x] Soporte para MP4 / M4A (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`)
+- [ ] Soporte para otros formatos de audio (FLAC, OGG, Opus, WAV, AIFF, APE)
 - [ ] Leer lyrics desde archivo externo (.lrc, .txt)
 - [ ] GUI opcional con egui o similar

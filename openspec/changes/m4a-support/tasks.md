@@ -130,17 +130,18 @@ Los campos de la tabla de mapeo, sobre el árbol `moov.udta.meta.ilst`.
 
 ## 7. Superficie del CLI y documentación
 
-- [ ] 7.1 Actualizar la `description` de `Cargo.toml` para reflejar que la herramienta trabaja con MP3 y con MP4.
+- [x] 7.1 Actualizar la `description` de `Cargo.toml` para reflejar que la herramienta trabaja con MP3 y con MP4.
       Verificación: `cargo metadata --no-deps` MUST mostrar la descripción nueva.
-- [ ] 7.2 Actualizar los textos de `clap` (`about` del binario, descripciones de subcomandos y de flags) que hoy dicen "MP3" y deberían decir "MP3/M4A".
+- [x] 7.2 Actualizar los textos de `clap` (`about` del binario, descripciones de subcomandos y de flags) que hoy dicen "MP3" y deberían decir "MP3/M4A".
       Verificación: `cargo run -- --help`, `cargo run -- edit --help` y `cargo run -- remove --help` MUST mostrar los textos actualizados y MUST NOT quedar ninguna referencia obsoleta a "MP3" a secas.
-- [ ] 7.3 Actualizar los mensajes en español de `src/main.rs` que asumen MP3 (avisos de "no se encontraron tags ID3", confirmaciones de guardado, etc.) para que sean correctos en ambos formatos.
+- [x] 7.3 Actualizar los mensajes en español de `src/main.rs` que asumen MP3 (avisos de "no se encontraron tags ID3", confirmaciones de guardado, etc.) para que sean correctos en ambos formatos.
       Verificación: `grep` sobre los literales del binario MUST NOT encontrar mensajes que afirmen que el archivo es MP3 cuando se ha detectado MP4.
-- [ ] 7.4 Actualizar `README.md` completo: características, formatos soportados, tabla de mapeo MP3 y MP4, ejemplos con `.m4a`, limitaciones conocidas (WebP en `covr`, idioma de la letra), formatos no soportados y recuento real de tests.
+- [x] 7.4 Actualizar `README.md` completo: características, formatos soportados, tabla de mapeo MP3 y MP4, ejemplos con `.m4a`, limitaciones conocidas (WebP en `covr`, idioma de la letra), formatos no soportados y recuento real de tests.
       Verificación: revisión del documento; MUST incluir al menos un ejemplo `edit` sobre `.m4a` y MUST retirar el `.webp` de la lista de carátulas sin matices.
-- [ ] 7.5 Actualizar `AGENTS.md`: recuento de tests real (106) y referencia al comando de creación de cambios, que en openspec 1.13.2 ya no es `openspec change <feature-name>` sino `openspec new change <name>`.
-      Verificación: `grep` sobre `AGENTS.md` MUST NOT encontrar la cifra 99 ni la forma `openspec change <` sin el `new`.
-- [ ] 7.6 Revisar que la ayuda del subcomando `remove` sigue enumerando los nombres de tag en inglés y español, ahora que también aplican a MP4.
+- [x] 7.5 Actualizar `AGENTS.md`: recuento de tests real (211: 122 unitarios + 89 de integración).
+      Verificación: `grep` sobre `AGENTS.md` MUST NOT encontrar la cifra 99; el recuento documentado MUST coincidir con la salida real de `cargo test --lib` y `cargo test --test '*'`.
+      > [!note] La referencia al comando de creación de OpenSpec (`openspec change` vs `openspec new change`) se comprobó con `grep` y NO vive en este repositorio: está en la configuración global del usuario, fuera del repo, así que queda fuera del alcance de este cambio.
+- [x] 7.6 Revisar que la ayuda del subcomando `remove` sigue enumerando los nombres de tag en inglés y español, ahora que también aplican a MP4.
       Verificación: `cargo run -- remove --help` MUST listar los mismos nombres que la tabla del `README.md`.
 
 ## 8. Verificación de integración final

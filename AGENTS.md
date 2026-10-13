@@ -6,7 +6,7 @@ Single-crate Rust CLI (`edition 2024`, `id3` + `clap` derive) that reads/writes 
 
 ```sh
 cargo build                      # debug
-cargo test                       # 142 tests (73 unit + 69 integration); recuento autoritativo en openspec/changes/m4a-support/baseline.md, crece conforme avanza ese cambio
+cargo test                       # 211 tests (122 unit + 89 integration); recuento autoritativo en openspec/changes/m4a-support/baseline.md, crece conforme avanza ese cambio
 cargo test --lib                 # unit tests only (src/tests.rs)
 cargo test --test '*'            # integration tests only (tests/integration_test.rs)
 cargo fmt
