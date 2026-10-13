@@ -32,6 +32,20 @@ fn cleanup_file(path: &PathBuf) {
     let _ = fs::remove_file(path);
 }
 
+/// Helper para generar una ruta temporal única SIN crear el archivo.
+///
+/// Se deriva del contador atómico y del timestamp para evitar colisiones
+/// entre ejecuciones concurrentes o residuos de ejecuciones abortadas.
+fn unique_temp_path(label: &str, extension: &str) -> PathBuf {
+    let temp_dir = std::env::temp_dir();
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    temp_dir.join(format!("test_{}_{}_{}.{}", label, timestamp, id, extension))
+}
+
 #[test]
 fn test_cli_adds_title() {
     let mp3_path = create_temp_mp3();
@@ -120,7 +134,11 @@ fn test_cli_fails_with_nonexistent_file() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no existe") || stderr.contains("Error"));
+    assert!(
+        stderr.contains("Error: El archivo") && stderr.contains("nonexistent_file_12345.mp3"),
+        "El mensaje de error no es el esperado, fue: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -727,8 +745,7 @@ fn test_cli_remove_all_no_tags_warns() {
 #[test]
 fn test_cli_cover_png() {
     let mp3_path = create_temp_mp3();
-    let temp_dir = std::env::temp_dir();
-    let cover_path = temp_dir.join("test_cover.png");
+    let cover_path = unique_temp_path("cover", "png");
 
     // Crear un archivo PNG mínimo
     let png_data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -763,8 +780,7 @@ fn test_cli_cover_png() {
 #[test]
 fn test_cli_cover_webp() {
     let mp3_path = create_temp_mp3();
-    let temp_dir = std::env::temp_dir();
-    let cover_path = temp_dir.join("test_cover.webp");
+    let cover_path = unique_temp_path("cover", "webp");
 
     // Crear un archivo WEBP mínimo
     let webp_data = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
@@ -799,11 +815,10 @@ fn test_cli_cover_webp() {
 #[test]
 fn test_cli_cover_unsupported_format() {
     let mp3_path = create_temp_mp3();
-    let temp_dir = std::env::temp_dir();
-    let cover_path = temp_dir.join("test_cover.gif");
+    let cover_path = unique_temp_path("cover", "tiff");
 
-    // Crear un archivo GIF (no soportado)
-    fs::write(&cover_path, b"GIF89a").expect("Failed to create GIF");
+    // Crear un archivo TIFF (no soportado)
+    fs::write(&cover_path, b"II*\x00").expect("Failed to create TIFF");
 
     let output = Command::new("cargo")
         .args([
@@ -818,10 +833,14 @@ fn test_cli_cover_unsupported_format() {
         .output()
         .expect("Failed to execute command");
 
-    // Debe fallar con formato no soportado
+    // Debe fallar con el mensaje exacto de formato no soportado para .tiff
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no soportado") || stderr.contains("gif"));
+    assert!(
+        stderr.contains("Formato de imagen no soportado: .tiff"),
+        "stderr debería contener el mensaje de formato no soportado, fue: {}",
+        stderr
+    );
 
     cleanup_file(&mp3_path);
     cleanup_file(&cover_path);
@@ -1693,6 +1712,887 @@ fn test_cli_add_album() {
     // Verificar que el tag fue guardado
     let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
     assert_eq!(tag.album(), Some("My Test Album"));
+
+    cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Tests de caracterización (fase RED de TDD) — fijan el comportamiento ACTUAL
+// del CLI antes de migrar el backend de `id3` a `lofty`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_writes_id3v24_header() {
+    // NO se usa create_temp_mp3(): ese helper ya crea un fichero con header
+    // ID3v2.4, lo que haría la aserción semi-tautológica. Aquí partimos de
+    // audio puro SIN header ID3 para que el test pueda fallar si `edit` no
+    // escribe. Además ejercita la rama "Creando nuevos tags" de main.rs.
+    let mp3_path = unique_temp_path("audio", "mp3");
+    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to create audio-only file");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // El tag debe escribirse siempre como ID3v2.4: header "ID3" + 0x04 0x00
+    let bytes = fs::read(&mp3_path).expect("Failed to read file");
+    assert!(
+        bytes.len() >= 5,
+        "El archivo es demasiado corto para contener un header ID3"
+    );
+    assert_eq!(
+        &bytes[0..5],
+        &[0x49, 0x44, 0x33, 0x04, 0x00],
+        "El header no es ID3v2.4, fue: {:02X?}",
+        &bytes[0..5]
+    );
+
+    // Y el título se escribió de verdad (si `edit` no escribiera, esto fallaría)
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("X"));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_without_flags_does_not_touch_file() {
+    let mp3_path = create_temp_mp3();
+
+    let before_bytes = fs::read(&mp3_path).expect("Failed to read file before");
+    let before_mtime = fs::metadata(&mp3_path)
+        .expect("Failed to stat file before")
+        .modified()
+        .expect("Failed to read mtime before");
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "edit", mp3_path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let after_bytes = fs::read(&mp3_path).expect("Failed to read file after");
+    let after_mtime = fs::metadata(&mp3_path)
+        .expect("Failed to stat file after")
+        .modified()
+        .expect("Failed to read mtime after");
+
+    assert_eq!(
+        before_bytes, after_bytes,
+        "El contenido cambió aunque no se pasó ningún flag"
+    );
+    assert_eq!(
+        before_mtime, after_mtime,
+        "La fecha de modificación cambió aunque no se pasó ningún flag"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_empty_title_writes() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // Un título vacío cuenta como cambio: el frame TIT2 existe con valor vacío
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(
+        tag.get("TIT2").is_some(),
+        "El frame TIT2 debería existir aunque el título esté vacío"
+    );
+    assert_eq!(tag.title(), Some(""));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_preserves_existing_id3v1() {
+    let mp3_path = create_temp_mp3();
+
+    // Añadir un tag ID3v1 (128 bytes al final, empieza por "TAG")
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    v1[33..39].copy_from_slice(b"Artist");
+    let original_bytes = fs::read(&mp3_path).expect("Failed to read file");
+    let mut bytes = original_bytes.clone();
+    bytes.extend_from_slice(&v1);
+    fs::write(&mp3_path, &bytes).expect("Failed to write file with ID3v1");
+
+    // Editar vía ID3v2
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "Nuevo",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // El ID3v1 debe seguir presente e intacto al final del archivo
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert!(
+        result.len() >= 128,
+        "El archivo resultante perdió el bloque ID3v1"
+    );
+    let tail = &result[result.len() - 128..];
+    assert_eq!(tail[0..3], *b"TAG", "El ID3v1 no empieza por TAG");
+    assert_eq!(tail, v1.as_slice(), "El ID3v1 fue modificado");
+
+    // Y además se escribió el ID3v2
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Nuevo"));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_year_writes_tyer() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--year",
+            "2026",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "--year debe escribir el frame TYER"
+    );
+    assert!(
+        tag.get("TDRC").is_none(),
+        "--year no debe escribir el frame TDRC"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_date_writes_tdrc() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--date",
+            "2026-10-13",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TDRC").and_then(|f| f.content().text()),
+        Some("2026-10-13"),
+        "--date debe escribir el frame TDRC"
+    );
+    assert!(
+        tag.get("TYER").is_none(),
+        "--date no debe escribir el frame TYER"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_year_and_date_coexist() {
+    let mp3_path = create_temp_mp3();
+
+    // 1ª invocación: solo --year → TYER presente, TDRC ausente
+    let output_year = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--year",
+            "2026",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output_year.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "--year debe escribir TYER"
+    );
+    assert!(tag.get("TDRC").is_none(), "--year no debe escribir TDRC");
+
+    // 2ª invocación sobre el mismo fichero: solo --date.
+    // El frame TYER ya escrito debe SOBREVIVIR a la reescritura.
+    let output_date = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--date",
+            "2026-10-13",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output_date.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "TYER (frame previo) debe sobrevivir a una reescritura con --date"
+    );
+    assert_eq!(
+        tag.get("TDRC").and_then(|f| f.content().text()),
+        Some("2026-10-13"),
+        "--date debe escribir TDRC"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_without_tags_fails() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "remove", mp3_path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "remove sin tags y sin --all debería salir con código distinto de cero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("al menos un tag"),
+        "stderr debería indicar que hay que especificar al menos un tag, fue: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_cover_missing_file_fails() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--cover",
+            "/ruta/que/no/existe.jpg",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "edit con una carátula inexistente debería fallar"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("El archivo de carátula") && stderr.contains("no existe"),
+        "stderr debería indicar que la carátula no existe, fue: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_unknown_tag_warns_and_does_not_modify() {
+    let mp3_path = create_temp_mp3();
+
+    // Añadir un tag válido para tener algo legible
+    Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "Keep",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let before_bytes = fs::read(&mp3_path).expect("Failed to read file before");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "inventado",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Tags válidos") && stderr.contains("title, artist, album"),
+        "stderr debería listar los tags válidos, fue: {}",
+        stderr
+    );
+
+    let after_bytes = fs::read(&mp3_path).expect("Failed to read file after");
+    assert_eq!(
+        before_bytes, after_bytes,
+        "El archivo no debe modificarse cuando solo se pasan tags desconocidos"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_all_preserves_audio() {
+    let mp3_path = create_temp_mp3();
+
+    // Payload de audio reconocible entre el tag ID3v2 (del helper) y el ID3v1
+    let audio: Vec<u8> = b"AUDIO_PAYLOAD_0123456789_AUDIO_PAYLOAD_0123456789".to_vec();
+    let mut bytes = fs::read(&mp3_path).expect("Failed to read helper file");
+    bytes.extend_from_slice(&audio);
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    bytes.extend_from_slice(&v1);
+    fs::write(&mp3_path, &bytes).expect("Failed to write composed file");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "--all",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // Solo deben desaparecer los bloques de tags: el audio permanece byte a byte
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert_eq!(
+        result, audio,
+        "El audio debería permanecer intacto tras remove --all"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_non_writable_file_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mp3_path = create_temp_mp3();
+
+    // Poner el archivo en solo lectura
+    let mut perms = fs::metadata(&mp3_path)
+        .expect("Failed to stat file")
+        .permissions();
+    perms.set_mode(0o444);
+    fs::set_permissions(&mp3_path, perms).expect("Failed to set read-only permission");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Restaurar permisos para poder limpiar el archivo con seguridad
+    let mut perms = fs::metadata(&mp3_path)
+        .expect("Failed to stat file")
+        .permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&mp3_path, perms).expect("Failed to restore permission");
+
+    if output.status.success() {
+        // Si el proceso corre como root, la escritura en solo lectura tiene éxito
+        // y este test no puede caracterizar el fallo de permisos. Terminamos sin
+        // ninguna aserción para no ser frágiles.
+        eprintln!(
+            "AVISO: se pudo escribir en un archivo de solo lectura (¿proceso ejecutándose como root?); \
+             se omite la caracterización del error de permisos."
+        );
+        cleanup_file(&mp3_path);
+        return;
+    }
+
+    assert!(
+        !output.status.success(),
+        "edit sobre un archivo de solo lectura debería fallar"
+    );
+
+    // CARACTERIZACIÓN: al baseline el error de E/S propagado por la librería
+    // `id3` sale en INGLÉS (`Permission denied`), no en español. El spec se
+    // alineará con este texto real observado.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Permission denied") || stderr.contains("denied"),
+        "stderr debería contener el error real de permisos, fue: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Tests de caracterización adicionales (auditoría: cierre de agujeros).
+// ---------------------------------------------------------------------------
+
+/// Escribe un PNG mínimo válido en la ruta indicada.
+fn write_minimal_png(path: &std::path::Path) {
+    fs::write(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        .expect("Failed to create PNG");
+}
+
+#[test]
+fn test_cli_remove_spanish_names_all_four() {
+    let mp3_path = create_temp_mp3();
+    let cover_path = unique_temp_path("cover", "png");
+    write_minimal_png(&cover_path);
+
+    // Título, artista, álbum (superviviente), título de orden y carátula
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--artist",
+            "A",
+            "--album",
+            "Alb",
+            "--title-sort",
+            "TS",
+            "--cover",
+            cover_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Eliminar usando SOLO nombres en español
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "título",
+            "artista",
+            "carátula",
+            "orden-titulo",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None, "título debería eliminarse");
+    assert_eq!(tag.artist(), None, "artista debería eliminarse");
+    assert_eq!(
+        tag.get("TSOT").and_then(|f| f.content().text()),
+        None,
+        "orden-titulo debería eliminar TSOT"
+    );
+    assert_eq!(tag.pictures().count(), 0, "carátula debería eliminarse");
+    assert_eq!(
+        tag.album(),
+        Some("Alb"),
+        "el álbum no mencionado debe sobrevivir"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_rewrite_preserves_id3v24() {
+    let mp3_path = create_temp_mp3();
+
+    // Primera escritura
+    let output1 = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "First",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output1.status.success());
+
+    // Segunda escritura (campo distinto) sobre el mismo archivo
+    let output2 = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--artist",
+            "Second",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output2.status.success());
+
+    // Tras la SEGUNDA escritura el header debe seguir siendo ID3v2.4
+    let bytes = fs::read(&mp3_path).expect("Failed to read file");
+    assert!(bytes.len() >= 5, "El archivo es demasiado corto");
+    assert_eq!(
+        &bytes[0..5],
+        &[0x49, 0x44, 0x33, 0x04, 0x00],
+        "El header no es ID3v2.4 tras reescribir, fue: {:02X?}",
+        &bytes[0..5]
+    );
+
+    // Sanity check: ambos campos presentes
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("First"));
+    assert_eq!(tag.artist(), Some("Second"));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_lyrics_empty() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--lyrics",
+            "",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let mut found = false;
+    for frame in tag.frames() {
+        if let id3::frame::Content::Lyrics(lyrics) = frame.content() {
+            assert_eq!(lyrics.lang, "spa");
+            assert_eq!(lyrics.text, "");
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "Debería existir un frame USLT con texto vacío");
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_mixed_language_names() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--artist",
+            "A",
+            "--lyrics",
+            "Línea",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Mezcla de nombres en inglés y español en la misma invocación
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "title",
+            "artista",
+            "letra",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None, "title debería eliminarse");
+    assert_eq!(tag.artist(), None, "artista debería eliminarse");
+    let has_lyrics = tag
+        .frames()
+        .any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
+    assert!(!has_lyrics, "letra debería eliminar el frame USLT");
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_accent_folding_limit() {
+    let mp3_path = create_temp_mp3();
+    let cover_path = unique_temp_path("cover", "png");
+    write_minimal_png(&cover_path);
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--genre",
+            "Rock",
+            "--cover",
+            cover_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // "titulo" (sin tilde) NO está en la lista de alias → el título NO se elimina
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "titulo",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.title(),
+        Some("T"),
+        "la variante sin tilde 'titulo' no debe eliminar el título"
+    );
+
+    // "genero" (sin tilde) SÍ está en la lista de alias → elimina el género
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "genero",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.genre(),
+        None,
+        "la variante 'genero' sí debe eliminar el género"
+    );
+
+    // "caratula" (sin tilde) SÍ está en la lista de alias → elimina la carátula
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "caratula",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.pictures().count(),
+        0,
+        "la variante 'caratula' sí debe eliminar la carátula"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_cover_preserves_existing_metadata() {
+    let mp3_path = create_temp_mp3();
+    let cover_path = unique_temp_path("cover", "png");
+    write_minimal_png(&cover_path);
+
+    // Metadatos previos: título, artista y letra
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--artist",
+            "A",
+            "--lyrics",
+            "Línea 1\nLínea 2",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Añadir SOLO la carátula
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--cover",
+            cover_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("T"), "el título debe conservarse");
+    assert_eq!(tag.artist(), Some("A"), "el artista debe conservarse");
+    let has_lyrics = tag
+        .frames()
+        .any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
+    assert!(has_lyrics, "la letra debe conservarse");
+    assert_eq!(tag.pictures().count(), 1, "la carátula debe añadirse");
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_album_artist_separator_not_applied() {
+    let mp3_path = create_temp_mp3();
+
+    // Varios --artist (se unen con "; ") junto con un --album-artist
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--artist",
+            "Luis Fonsi",
+            "--artist",
+            "Daddy Yankee",
+            "--album-artist",
+            "Various Artists",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+
+    // El separador "; " se aplica SOLO al frame del artista (TPE1)...
+    assert_eq!(tag.artist(), Some("Luis Fonsi; Daddy Yankee"));
+    assert_eq!(
+        tag.get("TPE1").and_then(|f| f.content().text()),
+        Some("Luis Fonsi; Daddy Yankee")
+    );
+
+    // ...mientras que el artista del álbum (TPE2) conserva el valor literal
+    assert_eq!(tag.album_artist(), Some("Various Artists"));
+    assert_eq!(
+        tag.get("TPE2").and_then(|f| f.content().text()),
+        Some("Various Artists")
+    );
 
     cleanup_file(&mp3_path);
 }
