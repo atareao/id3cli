@@ -6,24 +6,26 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-/// Helper para crear un archivo MP3 temporal válido para testing
+/// Ruta absoluta al fixture MP3 real y sin tags, versionado en el repositorio.
+///
+/// El fixture contiene audio MPEG reproducible (0,5 s de tono a 32 kbps) y
+/// **ningún** tag ID3 (ni v1 ni v2). Se usa en lugar de fabricar bytes falsos
+/// para que el fichero sea también parseable por el futuro backend `lofty`.
+fn fixture_mp3_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.mp3")
+}
+
+/// Helper para crear un archivo MP3 temporal válido para testing.
+///
+/// Copia el fixture MP3 real (audio sin tags) a una ruta temporal única en
+/// lugar de escribir bytes falsos. El archivo devuelto NO tiene ningún tag
+/// ID3, de modo que `edit` ejercita la rama de creación de tags nuevos.
 fn create_temp_mp3() -> PathBuf {
-    let temp_dir = std::env::temp_dir();
-    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
-    let mp3_path = temp_dir.join(format!("test_{}_{}.mp3", timestamp, id));
-
-    // Crear un archivo MP3 mínimo (solo tag ID3v2.4)
-    // El crate id3 puede trabajar con archivos que solo tienen el tag
-    let minimal_id3 = vec![
-        0x49, 0x44, 0x33, 0x04, 0x00, 0x00, // ID3v2.4 header
-        0x00, 0x00, 0x00, 0x00, // Size (0)
-    ];
-    fs::write(&mp3_path, minimal_id3).expect("Failed to create temp MP3");
-
+    let mp3_path = unique_temp_path("audio", "mp3");
+    fs::copy(fixture_mp3_path(), &mp3_path).expect("Failed to copy MP3 fixture");
     mp3_path
 }
 
@@ -597,11 +599,9 @@ fn test_cli_remove_multiple_tags() {
 
 #[test]
 fn test_cli_remove_all() {
-    // MP3 con bytes de audio puros (sin header ID3v2 vacío inicial,
-    // para que el tag añadido vía `edit` sea el único bloque ID3)
+    // MP3 de audio real y sin tag ID3 (el fixture): el tag añadido vía `edit`
+    // será el único bloque ID3 del archivo.
     let mp3_path = create_temp_mp3();
-    // Sobrescribir el header ID3v2 vacío del helper con audio MP3 puro
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to write audio bytes");
 
     // Añadir tags
     Command::new("cargo")
@@ -656,11 +656,9 @@ fn test_cli_remove_all() {
 
 #[test]
 fn test_cli_remove_all_removes_v1() {
-    // MP3 con bytes de audio puros (sin header ID3v2 vacío inicial,
-    // para que el tag ID3v1 sea el único bloque ID3 del archivo)
+    // MP3 de audio real y sin tag ID3 (el fixture): el tag ID3v1 será el
+    // único bloque ID3 del archivo.
     let mp3_path = create_temp_mp3();
-    // Sobrescribir el header ID3v2 vacío del helper con audio MP3 puro
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to write audio bytes");
 
     // Añadir un tag ID3v1 (128 bytes al final, termina en "TAG")
     let mut bytes = fs::read(&mp3_path).unwrap();
@@ -707,16 +705,8 @@ fn test_cli_remove_all_removes_v1() {
 
 #[test]
 fn test_cli_remove_all_no_tags_warns() {
-    // MP3 sin ningún tag ID3 (usamos un archivo con bytes de MP3 puros,
-    // no el helper create_temp_mp3 que ya incluye un header ID3v2 vacío)
-    let temp_dir = std::env::temp_dir();
-    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
-    let mp3_path = temp_dir.join(format!("test_{}_{}.mp3", timestamp, id));
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to create temp MP3");
+    // MP3 sin ningún tag ID3: el fixture de audio real no lleva tags.
+    let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
         .args([
@@ -1723,12 +1713,11 @@ fn test_cli_add_album() {
 
 #[test]
 fn test_cli_writes_id3v24_header() {
-    // NO se usa create_temp_mp3(): ese helper ya crea un fichero con header
-    // ID3v2.4, lo que haría la aserción semi-tautológica. Aquí partimos de
-    // audio puro SIN header ID3 para que el test pueda fallar si `edit` no
-    // escribe. Además ejercita la rama "Creando nuevos tags" de main.rs.
-    let mp3_path = unique_temp_path("audio", "mp3");
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to create audio-only file");
+    // Se parte del fixture de audio real SIN header ID3 (create_temp_mp3 ya
+    // no inyecta un header vacío), de modo que la aserción no es
+    // semi-tautológica: el test falla si `edit` no escribe. Además ejercita
+    // la rama "Creando nuevos tags" de main.rs.
+    let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
         .args([
@@ -2108,10 +2097,17 @@ fn test_cli_remove_unknown_tag_warns_and_does_not_modify() {
 fn test_cli_remove_all_preserves_audio() {
     let mp3_path = create_temp_mp3();
 
-    // Payload de audio reconocible entre el tag ID3v2 (del helper) y el ID3v1
-    let audio: Vec<u8> = b"AUDIO_PAYLOAD_0123456789_AUDIO_PAYLOAD_0123456789".to_vec();
-    let mut bytes = fs::read(&mp3_path).expect("Failed to read helper file");
-    bytes.extend_from_slice(&audio);
+    // El audio real del fixture es lo que debe sobrevivir byte a byte.
+    let audio = fs::read(&mp3_path).expect("Failed to read fixture copy");
+
+    // Añadir un tag ID3v2 (se antepone) y un ID3v1 (se anexa) para que
+    // `remove --all` tenga ambos bloques de tags que eliminar alrededor del
+    // audio.
+    let mut tag = Tag::new();
+    tag.set_title("Title");
+    tag.write_to_path(&mp3_path, id3::Version::Id3v24)
+        .expect("Failed to write ID3v2 tag");
+    let mut bytes = fs::read(&mp3_path).expect("Failed to read file with ID3v2");
     let mut v1 = vec![0u8; 128];
     v1[0..3].copy_from_slice(b"TAG");
     v1[3..8].copy_from_slice(b"Title");

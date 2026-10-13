@@ -1108,7 +1108,21 @@ fn test_remove_season_spanish() {
     assert_eq!(tag.disc(), None);
 }
 
-/// Helper para crear un MP3 temporal mínimo sin tags ID3
+/// Ruta absoluta al fixture MP3 real y sin tags, versionado en el repositorio.
+///
+/// Contiene audio MPEG reproducible y ningún tag ID3, por lo que es válido
+/// tanto para el backend `id3` actual como para el futuro `lofty`.
+fn fixture_mp3_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.mp3")
+}
+
+/// Helper para crear un MP3 temporal mínimo sin tags ID3.
+///
+/// Copia el fixture MP3 real (audio sin tags) a una ruta temporal única, en
+/// lugar de fabricar bytes falsos: así el fichero es audio MPEG válido.
 fn create_temp_mp3() -> PathBuf {
     let temp_dir = std::env::temp_dir();
     let unique = format!(
@@ -1120,8 +1134,8 @@ fn create_temp_mp3() -> PathBuf {
         std::process::id()
     );
     let path = temp_dir.join(format!("{}.mp3", unique));
-    // Bytes mínimos de un MP3 (frame sync word) sin ningún tag ID3.
-    fs::write(&path, [0xFF, 0xFB, 0x90, 0x44]).expect("No se pudo crear MP3 temporal");
+    // Audio MPEG real y sin ningún tag ID3 (el fixture versionado).
+    fs::copy(fixture_mp3_path(), &path).expect("No se pudo copiar el fixture MP3");
     path
 }
 
