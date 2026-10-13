@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
+[![Tests](https://img.shields.io/badge/tests-142%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -20,6 +20,19 @@ CLI en Rust para añadir tags ID3 y carátulas a archivos MP3.
 - 🗑️ **Comando remove dedicado** para eliminar tags específicos con nombres en inglés o español
 - 👀 Visualizar todos los tags existentes con formato legible
 - 🔄 Preserva metadatos existentes al actualizar campos específicos
+
+## Formatos admitidos
+
+El formato del archivo se determina **por su contenido** (sus *magic bytes* iniciales), nunca por la extensión del nombre. Por eso un MP3 renombrado a `.m4a` se sigue editando correctamente y un `.flac` no se trata por error como MP3.
+
+| Estado | Formatos | Comportamiento |
+| --- | --- | --- |
+| **Soportado** | MP3 (con o sin cabecera `ID3`) | `show`, `edit` y `remove` operan sobre él; los tags se escriben como ID3v2.4 |
+| **Reconocido, aún sin backend** | MP4 / M4A (`.m4a`, `.mp4`, `.m4b`): átomo `ftyp` en el offset 4, con cualquier brand | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+| **No soportado** | FLAC (`fLaC`), OGG/Opus (`OggS`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+| **Indeterminado** | Contenido no reconocible o archivo demasiado corto | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+
+En todos los casos de error el archivo queda **intacto**: la detección ocurre antes de abrir el archivo para escritura, de modo que un formato no soportado nunca se toca.
 
 ## Instalación
 
@@ -507,6 +520,7 @@ id3cli/
 - `add_apple_metadata()` - Añade metadatos específicos de Apple
 - `remove_tags()` - Elimina tags específicos (acepta inglés/español)
 - `detect_mime_type()` - Detecta formato de imagen por extensión
+- `detect_format()` - Detecta el formato de audio por el contenido (magic bytes), no por la extensión
 - `display_tags()` - Muestra tags formateados con emojis
 
 **Patrones de diseño:**
@@ -519,18 +533,20 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **125 tests** (63 unitarios + 62 de integración):
+El proyecto tiene **cobertura completa** con **142 tests** (73 unitarios + 69 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (125)
-cargo test --lib        # Solo tests unitarios (63)
-cargo test --test '*'   # Solo tests de integración (62)
+cargo test              # Ejecutar todos los tests (142)
+cargo test --lib        # Solo tests unitarios (73)
+cargo test --test '*'   # Solo tests de integración (69)
 ```
 
 **Ejemplos de tests:**
 
 - Aplicación de metadatos básicos y extendidos
 - Detección de MIME types (JPG, PNG, WEBP)
+- Detección del formato de audio por contenido (magic bytes), independiente de la extensión
+- Rechazo de formatos no soportados sin modificar el archivo
 - Múltiples artistas con separador correcto
 - Temporada (season) para podcasts
 - Lyrics, URLs y metadatos de Apple

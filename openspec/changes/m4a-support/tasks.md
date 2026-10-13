@@ -52,19 +52,20 @@ Una sola ruta de código y ningún cambio de comportamiento observable en MP3. A
 
 Backend correcto en función del contenido, y rechazo explícito de lo que queda fuera de alcance.
 
-- [ ] 3.1 Implementar la detección de formato a partir de los primeros bytes del archivo, sin consultar la extensión en ningún punto del camino.
+- [x] 3.1 Implementar la detección de formato a partir de los primeros bytes del archivo, sin consultar la extensión en ningún punto del camino.
       Verificación: revisión de código; la función de detección MUST NOT recibir la ruta con extensión como fuente de decisión.
-- [ ] 3.2 Enrutar `show`, `edit` y `remove` al backend MP3 o MP4 según el formato detectado.
-      Verificación: tests de integración que ejecutan las tres operaciones sobre un MP3 y sobre un `.m4a`, comprobando que cada uno usa su backend.
-- [ ] 3.3 Añadir los tests unitarios de detección con bytes sintéticos.
+- [x] 3.2 Enrutar `show`, `edit` y `remove` al backend MP3 cuando el formato detectado sea MP3.
+      Verificación: tests de integración que ejecutan las tres operaciones sobre un MP3, comprobando que cada una usa el backend MP3, y que un `.m4a` se rechaza sin modificar el archivo.
+      > [!note] Estado intermedio seguro: mientras el backend MP4 no exista, un archivo detectado como MP4 recae en el rechazo de formatos no soportados, de modo que el CLI sale con código de salida distinto de cero y MUST NOT modificar el archivo. El enrutado a MP4 se completa en la tarea 4.9.
+- [x] 3.3 Añadir los tests unitarios de detección con bytes sintéticos.
       Verificación: `cargo test --lib` MUST cubrir MP3 con cabecera `ID3`; MP3 sin `ID3` por sincronía de frame MPEG válida; MP4 por `ftyp` aceptando cualquier brand (probar al menos `M4A `, `M4B `, `mp42`, `isom`, `avc1` y `qt  `); y la guarda anti-falso-positivo, con un archivo cuyo primer byte sea `0xFF` y el segundo tenga los bits altos a `1` pero con campos de versión/layer/bitrate/frecuencia reservados, que MUST NOT reconocerse como MP3.
-- [ ] 3.4 Cubrir el caso de archivo renombrado en ambas direcciones.
+- [x] 3.4 Cubrir el caso de archivo renombrado en ambas direcciones.
       Verificación: test de integración con un MP3 copiado a `.m4a` y un `.m4a` copiado a `.mp3`; ambos MUST procesarse por su contenido real.
-- [ ] 3.5 Rechazar los formatos fuera de alcance con código de salida distinto de cero y mensaje en español que enumere MP3 y MP4 como soportados.
+- [x] 3.5 Rechazar los formatos fuera de alcance con código de salida distinto de cero y mensaje en español que enumere los formatos soportados. En este punto del cambio esa enumeración es solo MP3 (MP4 se añade en la tarea 4.9).
       Verificación: tests que invocan el binario sobre archivos FLAC (`fLaC`), OGG (`OggS`), WAV (`RIFF`), AIFF (`FORM`) y APE, comprobando código de salida distinto de cero, mensaje en stderr y archivo sin modificar.
-- [ ] 3.6 Cubrir los casos de borde: archivo demasiado corto, contenido no reconocible, archivo inexistente y contenido vacío.
+- [x] 3.6 Cubrir los casos de borde: archivo demasiado corto, contenido no reconocible, archivo inexistente y contenido vacío.
       Verificación: `cargo test` con un test por caso, comprobando código de salida y Mensaje en stderr.
-- [ ] 3.7 Documentar la detección por contenido.
+- [x] 3.7 Documentar la detección por contenido.
       Verificación: el `README.md` MUST explicar que el formato se decide por el contenido, MUST listar los formatos soportados (MP3 y MP4: `.m4a`, `.mp4`, `.m4b`) y MUST listar los no soportados.
 
 ## 4. Backend MP4 ilst: metadatos
@@ -87,6 +88,9 @@ Los campos de la tabla de mapeo, sobre el árbol `moov.udta.meta.ilst`.
       Verificación: `edit` sobre la copia del fixture y posterior `show` MUST devolver los mismos valores; comparar con el mismo flujo sobre MP3 para comprobar la coherencia entre formatos.
 - [ ] 4.8 Documentar el mapeo MP4.
       Verificación: el `README.md` MUST incluir una tabla `Flag CLI → átomo MP4` alineada con la del spec, y MUST mencionar que `--subtitle` usa un átomo freeform; el `README.md` MUST explicar además la prioridad de `--date` sobre `--year` en `©day`.
+- [ ] 4.9 Enrutar `show`, `edit` y `remove` al backend MP4 cuando el formato detectado sea MP4, y añadir MP4 a la lista de formatos soportados del mensaje de error.
+      Verificación: tests de integración que ejecutan las tres operaciones sobre un `.m4a` y comprueban que cada una usa el backend MP4; y que el mensaje de formato no soportado enumera ya MP3 y MP4.
+      > [!note] Esta tarea cierra la dependencia que dejó abierta la tarea 3.2.
 
 ## 5. Backend MP4 ilst: carátulas y letras
 

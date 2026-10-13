@@ -114,3 +114,11 @@ Al compilar la suite contra el nuevo backend `lofty`, fallaron **8 tests**, y no
 **Conclusión.** Estos dos casos habrían pasado desapercibidos sin los tests de caracterización del grupo 1, y son la evidencia de que esa red cumple su función: los fallos no venían de una expectativa mal escrita, sino de comportamiento nuevo de la librería que solo se manifiesta al releer con un lector independiente.
 
 **Recuento tras cerrar el grupo 2.** La suite sigue en **125 tests (63 unitarios + 62 de integración) y 0 fallos**, y los 62 tests de integración **no han requerido ningún cambio** gracias a que releen con `id3` (decisión 9 del diseño).
+
+## Recuento tras cerrar el grupo 3 (detección de formato)
+
+- La suite pasa a **142 tests (73 unitarios + 69 de integración), 0 fallos**.
+- El grupo 3 añadió **10 tests unitarios** de detección por *magic bytes* en `src/tests.rs` y **7 tests de integración** en `tests/integration_test.rs`: MP3 renombrado a `.m4a` (se edita como MP3), rechazo de un `.m4a` en `show`/`edit`/`remove`, rechazo de un MP4 con nombre `.mp3` (se decide por contenido), rechazo de `.flac`/`.ogg`/`.wav`/`.aif`, archivo vacío, contenido no reconocible y archivo demasiado corto.
+- **Ningún test del grupo 1 o 2 ha visto relajada su expectativa.** En particular, la detección reconoce el fixture MP3 real **sin cabecera ID3** por la vía de la sincronía de frame MPEG válida; si eso fallara sería un bug de detección, no un test a arreglar.
+- Implementación: `detect_format` y `detect_format_from_bytes` en `src/lib.rs`; la guarda `require_mp3_format` en `src/main.rs` se invoca al inicio de `show`, `edit` y `remove` y **antes** de cualquier apertura en escritura, de modo que ningún formato no soportado llega a tocarse.
+- Verificación manual del caso crítico (destrucción silenciosa del baseline): copia de un `.m4a` real de `ffmpeg` (9.435 bytes) y `edit --title "X"` → salida con código 1, mensaje en español y hash SHA-256 idéntico antes y después (`b54527ed…`); `ffprobe` sigue reconociéndolo como contenedor MP4 válido.
