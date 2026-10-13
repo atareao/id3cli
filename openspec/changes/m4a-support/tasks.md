@@ -100,19 +100,19 @@ Los campos de la tabla de mapeo, sobre el árbol `moov.udta.meta.ilst`.
 
 ## 5. Backend MP4 ilst: carátulas y letras
 
-- [ ] 5.1 Implementar la escritura de la carátula en `covr`, con el tipo well-known correspondiente a JPEG y a PNG.
+- [x] 5.1 Implementar la escritura de la carátula en `covr`, con el tipo well-known correspondiente a JPEG y a PNG.
       Verificación: tests de integración con un fixture `.m4a` y sendas imágenes `.jpg` y `.png`, comprobando que el átomo `covr` contiene los bytes de la imagen y el tipo esperado.
-- [ ] 5.2 Implementar el aviso por WebP en `.m4a`, sin abortar la operación.
+- [x] 5.2 Implementar el aviso por WebP en `.m4a`, sin abortar la operación.
       Verificación: test de integración con `--cover portada.webp` que comprueba el warning por stderr, el código de salida cero y que el resto de campos indicados sí se escriben.
-- [ ] 5.3 Implementar la eliminación de la carátula con `remove cover` sobre un `.m4a`.
+- [x] 5.3 Implementar la eliminación de la carátula con `remove cover` sobre un `.m4a`.
       Verificación: test de integración que comprueba la desaparición del átomo `covr` y la supervivencia del resto de átomos.
-- [ ] 5.4 Implementar la escritura de la letra en el átomo `©lyr`.
+- [x] 5.4 Implementar la escritura de la letra en el átomo `©lyr`.
       Verificación: test de integración con `--lyrics` y posterior `show`, comprobando que el texto completo se recupera.
-- [ ] 5.5 Verificar que el idioma de la letra no se propaga a M4A y que la lectura lo refleja.
+- [x] 5.5 Verificar que el idioma de la letra no se propaga a M4A y que la lectura lo refleja.
       Verificación: test que comprueba que el `©lyr` contiene la letra y que no hay ningún campo ni prefijo de idioma; el mismo test sobre MP3 MUST seguir mostrando `spa`.
-- [ ] 5.6 Cubrir los errores de carátula sobre un `.m4a`.
+- [x] 5.6 Cubrir los errores de carátula sobre un `.m4a`.
       Verificación: tests con ruta de imagen inexistente y con extensión no soportada (`imagen.tiff`), comprobando código de salida distinto de cero y mensaje en español.
-- [ ] 5.7 Documentar el cambio de comportamiento observable.
+- [x] 5.7 Documentar el cambio de comportamiento observable.
       Verificación: el `README.md` MUST explicar que `.webp` no es mostrable en `covr` por iTunes/macOS (a diferencia de MP3) y MUST documentar la pérdida del código de idioma `spa` en las letras de MP4.
 
 ## 6. Campos sin equivalente en MP4

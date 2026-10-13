@@ -122,3 +122,14 @@ Al compilar la suite contra el nuevo backend `lofty`, fallaron **8 tests**, y no
 - **Ningún test del grupo 1 o 2 ha visto relajada su expectativa.** En particular, la detección reconoce el fixture MP3 real **sin cabecera ID3** por la vía de la sincronía de frame MPEG válida; si eso fallara sería un bug de detección, no un test a arreglar.
 - Implementación: `detect_format` y `detect_format_from_bytes` en `src/lib.rs`; la guarda `require_mp3_format` en `src/main.rs` se invoca al inicio de `show`, `edit` y `remove` y **antes** de cualquier apertura en escritura, de modo que ningún formato no soportado llega a tocarse.
 - Verificación manual del caso crítico (destrucción silenciosa del baseline): copia de un `.m4a` real de `ffmpeg` (9.435 bytes) y `edit --title "X"` → salida con código 1, mensaje en español y hash SHA-256 idéntico antes y después (`b54527ed…`); `ffprobe` sigue reconociéndolo como contenedor MP4 válido.
+
+## Recuento tras cerrar el grupo 5 (carátulas y letras en MP4)
+
+> [!note] Grupo 4 no dejó entrada propia en este documento
+> El recuento salta del grupo 3 (142) al grupo 5. El grupo 4 (metadatos `ilst`, tareas 4.1–4.11) sí añadió tests, pero no registró aquí su cifra; al abrir el grupo 5 la suite ya partía de **189 tests (113 unitarios + 76 de integración), 0 fallos**.
+
+- La suite pasa a **203 tests (119 unitarios + 84 de integración), 0 fallos**.
+- El grupo 5 añadió **6 tests unitarios** en `src/tests.rs` (carátula JPEG tipo 13, carátula PNG tipo 14, WebP tipo reservado 0 con aviso y resto de campos, extensión no soportada sin escribir, borrado de `covr` conservando el resto y ausencia de idioma en `©lyr`) y **8 tests de integración** en `tests/integration_test.rs` (JPEG, PNG, WebP, ruta inexistente, `.tiff`, `remove cover`, letra visible con `show` y conservación del idioma `spa` en el `USLT` de MP3).
+- **Ningún test de los grupos 1–4 ha visto relajada su expectativa.**
+- La carátula de MP4 (`covr`) se escribe en `edit_mp4`, que **valida el MIME antes de tocar el disco**: una extensión no soportada devuelve error sin modificar un solo byte. El tipo de dato real se comprueba leyendo el `data` box del contenedor ISO-BMFF, no se asume.
+- WebP: `lofty` 0.25.4 devuelve error si se le entrega un MIME de imagen que no reconoce, así que la carátula se escribe **dejando el MIME deliberadamente sin establecer**, que la librería mapea al tipo de dato reservado (0).
