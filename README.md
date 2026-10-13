@@ -471,10 +471,11 @@ En un `.m4a` (y en general en un contenedor MP4 con `ilst`) los metadatos no son
 
 ### Limitaciones conocidas en MP4
 
-Dos comportamientos se degradan al escribir metadatos en un MP4 y quedan documentados aquí de forma explícita:
+Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan documentados aquí de forma explícita:
 
 - **La carátula WebP no se muestra.** El átomo `covr` solo admite los tipos *well-known* JPEG (13), PNG (14), GIF (12) y BMP (27). Ante un `.webp` el CLI **no falla**: escribe la carátula dejando el tipo de dato **reservado (0)** y avisa por stderr de que esa carátula **no será visible en iTunes ni en macOS**. En MP3 el `.webp` sigue funcionando con normalidad vía `APIC`.
 - **La letra pierde el código de idioma.** El átomo `©lyr` no tiene campo de idioma, así que la letra de un MP4 se guarda sin el `spa` que sí lleva el frame `USLT` de MP3. El texto se conserva **íntegro**; lo único que se pierde es la marca de idioma.
+- **`--url` y `--original-artist` se omiten con aviso.** Ninguno de los dos tiene átomo equivalente en `ilst`. Sobre un MP4 el CLI **no falla ni inventa** un átomo *freeform* de reemplazo: avisa por stderr, omite ese campo, escribe el resto con normalidad y termina con código de salida cero. Si son los únicos flags indicados, no hay cambio real que escribir y el archivo **no se reescribe**. En MP3 se comportan con normalidad (`--url` → `WOAR`, `--original-artist` → `TOPE`, sin aviso).
 
 ---
 

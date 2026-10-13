@@ -117,15 +117,15 @@ Los campos de la tabla de mapeo, sobre el árbol `moov.udta.meta.ilst`.
 
 ## 6. Campos sin equivalente en MP4
 
-- [ ] 6.1 Implementar el warning y la omisión de `--url` sobre un archivo MP4, sin escribir ningún átomo y sin abortar.
+- [x] 6.1 Implementar el warning y la omisión de `--url` sobre un archivo MP4, sin escribir ningún átomo y sin abortar.
       Verificación: test de integración con `--url "https://artista.com" --title "Cancion"` que comprueba el warning, el código de salida cero, el `©nam` escrito y la ausencia de átomos freeform de reemplazo.
-- [ ] 6.2 Implementar el warning y la omisión de `--original-artist` sobre un archivo MP4.
+- [x] 6.2 Implementar el warning y la omisión de `--original-artist` sobre un archivo MP4.
       Verificación: test de integración con `--original-artist "Autor" --album "Disco"` que comprueba el warning, el código de salida cero y el `©alb` escrito.
-- [ ] 6.3 Cubrir el caso de los dos flags a la vez.
+- [x] 6.3 Cubrir el caso de los dos flags a la vez.
       Verificación: test que comprueba dos warnings en stderr, código de salida cero y ausencia de átomos nuevos en el archivo.
-- [ ] 6.4 Verificar que ninguno de los avisos anteriores escribe en stdout ni contamina la salida normal.
+- [x] 6.4 Verificar que ninguno de los avisos anteriores escribe en stdout ni contamina la salida normal.
       Verificación: test que captura stdout y stderr por separado y comprueba que los warnings solo aparecen en stderr.
-- [ ] 6.5 Documentar los dos comportamientos.
+- [x] 6.5 Documentar los dos comportamientos.
       Verificación: el `README.md` MUST indicar que `--url` y `--original-artist` se omiten con aviso en MP4.
 
 ## 7. Superficie del CLI y documentación

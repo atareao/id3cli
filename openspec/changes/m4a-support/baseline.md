@@ -133,3 +133,11 @@ Al compilar la suite contra el nuevo backend `lofty`, fallaron **8 tests**, y no
 - **Ningún test de los grupos 1–4 ha visto relajada su expectativa.**
 - La carátula de MP4 (`covr`) se escribe en `edit_mp4`, que **valida el MIME antes de tocar el disco**: una extensión no soportada devuelve error sin modificar un solo byte. El tipo de dato real se comprueba leyendo el `data` box del contenedor ISO-BMFF, no se asume.
 - WebP: `lofty` 0.25.4 devuelve error si se le entrega un MIME de imagen que no reconoce, así que la carátula se escribe **dejando el MIME deliberadamente sin establecer**, que la librería mapea al tipo de dato reservado (0).
+
+## Recuento tras cerrar el grupo 6 (campos sin equivalente en MP4)
+
+- La suite pasa a **211 tests (122 unitarios + 89 de integración), 0 fallos**.
+- El grupo 6 añadió **3 tests unitarios** en `src/tests.rs` (texto del aviso, dos avisos sin cambio real ni reescritura del archivo, y omisión de `--url` conservando la escritura de `©nam`) y **5 tests de integración** en `tests/integration_test.rs` (`--url` + `--title`, `--original-artist` + `--album`, ambos flags con archivo byte a byte idéntico, avisos solo en stderr y paridad de MP3 con `WOAR`/`TOPE` sin aviso).
+- **Ningún test de los grupos 1–5 ha visto relajada su expectativa.**
+- `--url` y `--original-artist` no tienen átomo en `ilst`: se omiten con un warning por stderr (`⚠️  El campo '<flag>' no tiene átomo equivalente en MP4; se omite.`), sin crear ningún átomo *freeform* de reemplazo. Los avisos se acumulan en `Mp4EditReport::warnings` (probado en unitarios) y `edit_mp4` los emite por stderr, de modo que no contaminan stdout.
+- **«Ningún cambio real que escribir»:** como los dos campos omitidos no marcan `report.changed`, `edit_mp4` **no llama** a `write_mp4_tag`; si son los únicos flags el archivo queda byte a byte idéntico (verificado por hash SHA-256 en la prueba manual y por igualdad de bytes en los tests).
