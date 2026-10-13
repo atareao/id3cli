@@ -8,5 +8,12 @@ repository = "https://github.com/atareao/id3cli"
 homepage = "https://github.com/atareao/id3cli"
 
 [dependencies]
-id3 = "1.16.4"
+lofty = "0.25"
 clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+# El backend anterior, solo para tests: la red de seguridad de integración
+# relee los tags escritos por `lofty` con la librería `id3`, de modo que la
+# verificación es entre librerías (lofty escribe, id3 lee). La producción no
+# lo usa: `cargo tree -e normal` NO muestra `id3`.
+id3 = "1.16.4"

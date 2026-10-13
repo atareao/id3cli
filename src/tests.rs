@@ -1,14 +1,33 @@
 // Tests para la librería id3cli
 use super::*;
-use id3::frame::{Content, PictureType};
-use id3::v1v2::FormatVersion;
-use id3::{Tag, TagLike};
+// La producción se apoya en `lofty`; las aserciones en memoria usan su API.
+use lofty::id3::v2::{Frame, Id3v2Tag};
+use lofty::picture::{Picture, PictureType};
+use lofty::tag::Accessor;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Los tests que escriben y releen del disco siguen usando el backend ANTERIOR
+// `id3` (ahora dev-dependency): verifican la paridad entre librerías —`lofty`
+// escribe y `id3` lee— sin tocar ninguna de sus expectativas.
+use id3::{Tag, TagLike};
+
+/// Devuelve las carátulas (`APIC`) del tag en memoria.
+///
+/// `lofty` no expone un `pictures()` sobre `Id3v2Tag`, así que se recogen los
+/// frames de imagen directamente para poder aseverar el MIME y los datos.
+fn collect_pictures(tag: &Id3v2Tag) -> Vec<&Picture> {
+    tag.iter()
+        .filter_map(|frame| match frame {
+            Frame::Picture(apic) => Some(&*apic.picture),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn test_apply_metadata_title_only() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         Some("Test Title"),
@@ -27,13 +46,13 @@ fn test_apply_metadata_title_only() {
     );
 
     assert!(changed);
-    assert_eq!(tag.title(), Some("Test Title"));
-    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.title().as_deref(), Some("Test Title"));
+    assert_eq!(tag.artist().as_deref(), None);
 }
 
 #[test]
 fn test_apply_metadata_all_fields() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let artists = vec!["Artist".to_string()];
     let changed = apply_metadata(
         &mut tag,
@@ -53,25 +72,31 @@ fn test_apply_metadata_all_fields() {
     );
 
     assert!(changed);
-    assert_eq!(tag.title(), Some("Title"));
-    assert_eq!(tag.artist(), Some("Artist"));
-    assert_eq!(tag.album(), Some("Album"));
-    assert_eq!(tag.year(), Some(2026));
-    assert_eq!(tag.genre(), Some("Rock"));
+    assert_eq!(tag.title().as_deref(), Some("Title"));
+    assert_eq!(tag.artist().as_deref(), Some("Artist"));
+    assert_eq!(tag.album().as_deref(), Some("Album"));
+    // `--year` se conserva en el frame `TYER` (no en `TDRC`).
+    assert_eq!(
+        tag.get_text(&frame_id("TYER"))
+            .and_then(|value| value.parse::<i32>().ok()),
+        Some(2026)
+    );
+    assert_eq!(tag.genre().as_deref(), Some("Rock"));
     assert_eq!(tag.track(), Some(5));
+    // `--date` se escribe en el frame `TDRC`; se lee directamente el frame
+    // porque `Id3v2Tag::date()` de `lofty` solo reconoce la variante `Timestamp`
+    // y en memoria el frame se inserta como texto.
     assert_eq!(
-        tag.date_recorded().map(|t| t.to_string()),
-        Some("2026-01-22".to_string())
+        tag.get_text(&frame_id("TDRC")),
+        Some("2026-01-22"),
+        "--date debe escribir el frame TDRC"
     );
-    assert_eq!(
-        tag.get("TCOP").and_then(|f| f.content().text()),
-        Some("© 2026 Test Records")
-    );
+    assert_eq!(tag.get_text(&frame_id("TCOP")), Some("© 2026 Test Records"));
 }
 
 #[test]
 fn test_apply_metadata_no_changes() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -94,7 +119,7 @@ fn test_apply_metadata_no_changes() {
 
 #[test]
 fn test_apply_metadata_partial() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         Some("Title"),
@@ -113,10 +138,10 @@ fn test_apply_metadata_partial() {
     );
 
     assert!(changed);
-    assert_eq!(tag.title(), Some("Title"));
-    assert_eq!(tag.artist(), None);
-    assert_eq!(tag.album(), Some("Album"));
-    assert_eq!(tag.year(), None);
+    assert_eq!(tag.title().as_deref(), Some("Title"));
+    assert_eq!(tag.artist().as_deref(), None);
+    assert_eq!(tag.album().as_deref(), Some("Album"));
+    assert_eq!(tag.get(&frame_id("TYER")), None);
 }
 
 #[test]
@@ -124,32 +149,35 @@ fn test_create_picture_frame() {
     let data = vec![0xFF, 0xD8, 0xFF, 0xE0]; // JPEG magic bytes
     let picture = create_picture_frame(data.clone(), "image/jpeg");
 
-    assert_eq!(picture.mime_type, "image/jpeg");
-    assert_eq!(picture.picture_type, PictureType::CoverFront);
-    assert_eq!(picture.description, "Cover");
-    assert_eq!(picture.data, data);
+    assert_eq!(picture.mime_type().map(|m| m.as_str()), Some("image/jpeg"));
+    assert_eq!(picture.pic_type(), PictureType::CoverFront);
+    assert_eq!(picture.description(), Some("Cover"));
+    assert_eq!(picture.data(), data.as_slice());
 }
 
 #[test]
 fn test_add_cover_art() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
     let path = Path::new("test.jpg");
 
     let result = add_cover_art(&mut tag, path, data.clone());
     assert!(result.is_ok());
 
-    let pictures: Vec<_> = tag.pictures().collect();
+    let pictures = collect_pictures(&tag);
     assert_eq!(pictures.len(), 1);
-    assert_eq!(pictures[0].data, data);
-    assert_eq!(pictures[0].mime_type, "image/jpeg");
+    assert_eq!(pictures[0].data(), data.as_slice());
+    assert_eq!(
+        pictures[0].mime_type().map(|m| m.as_str()),
+        Some("image/jpeg")
+    );
 }
 
 #[test]
 fn test_apply_metadata_preserves_existing() {
-    let mut tag = Tag::new();
-    tag.set_title("Original Title");
-    tag.set_artist("Original Artist");
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Original Title".to_string());
+    tag.set_artist("Original Artist".to_string());
 
     // Solo cambiar el álbum
     apply_metadata(
@@ -170,15 +198,15 @@ fn test_apply_metadata_preserves_existing() {
     );
 
     // El título y artista originales deben preservarse
-    assert_eq!(tag.title(), Some("Original Title"));
-    assert_eq!(tag.artist(), Some("Original Artist"));
-    assert_eq!(tag.album(), Some("New Album"));
+    assert_eq!(tag.title().as_deref(), Some("Original Title"));
+    assert_eq!(tag.artist().as_deref(), Some("Original Artist"));
+    assert_eq!(tag.album().as_deref(), Some("New Album"));
 }
 
 #[test]
 fn test_apply_metadata_overwrites_existing() {
-    let mut tag = Tag::new();
-    tag.set_title("Old Title");
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Old Title".to_string());
 
     apply_metadata(
         &mut tag,
@@ -197,12 +225,12 @@ fn test_apply_metadata_overwrites_existing() {
         None,
     );
 
-    assert_eq!(tag.title(), Some("New Title"));
+    assert_eq!(tag.title().as_deref(), Some("New Title"));
 }
 
 #[test]
 fn test_year_negative() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     apply_metadata(
         &mut tag,
         None,
@@ -220,12 +248,17 @@ fn test_year_negative() {
         None,
     );
 
-    assert_eq!(tag.year(), Some(-1));
+    // El año se escribe (y se lee) en `TYER`.
+    assert_eq!(
+        tag.get_text(&frame_id("TYER"))
+            .and_then(|value| value.parse::<i32>().ok()),
+        Some(-1)
+    );
 }
 
 #[test]
 fn test_year_future() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     apply_metadata(
         &mut tag,
         None,
@@ -243,12 +276,16 @@ fn test_year_future() {
         None,
     );
 
-    assert_eq!(tag.year(), Some(3000));
+    assert_eq!(
+        tag.get_text(&frame_id("TYER"))
+            .and_then(|value| value.parse::<i32>().ok()),
+        Some(3000)
+    );
 }
 
 #[test]
 fn test_empty_strings() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let artists = vec!["".to_string()];
     let changed = apply_metadata(
         &mut tag,
@@ -268,13 +305,13 @@ fn test_empty_strings() {
     );
 
     assert!(changed);
-    assert_eq!(tag.title(), Some(""));
-    assert_eq!(tag.artist(), Some(""));
+    assert_eq!(tag.title().as_deref(), Some(""));
+    assert_eq!(tag.artist().as_deref(), Some(""));
 }
 
 #[test]
 fn test_unicode_characters() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let artists = vec!["Artista 日本語".to_string()];
     apply_metadata(
         &mut tag,
@@ -293,14 +330,14 @@ fn test_unicode_characters() {
         None,
     );
 
-    assert_eq!(tag.title(), Some("Título con ñ y acentos"));
-    assert_eq!(tag.artist(), Some("Artista 日本語"));
-    assert_eq!(tag.album(), Some("Álbum 🎵"));
+    assert_eq!(tag.title().as_deref(), Some("Título con ñ y acentos"));
+    assert_eq!(tag.artist().as_deref(), Some("Artista 日本語"));
+    assert_eq!(tag.album().as_deref(), Some("Álbum 🎵"));
 }
 
 #[test]
 fn test_multiple_artists() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let artists = vec![
         "Artist 1".to_string(),
         "Artist 2".to_string(),
@@ -311,35 +348,41 @@ fn test_multiple_artists() {
     );
 
     assert!(changed);
-    assert_eq!(tag.artist(), Some("Artist 1; Artist 2; Artist 3"));
+    assert_eq!(
+        tag.artist().as_deref(),
+        Some("Artist 1; Artist 2; Artist 3")
+    );
 }
 
 #[test]
 fn test_multiple_artists_unicode() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let artists = vec!["Artista Español".to_string(), "アーティスト".to_string()];
     apply_metadata(
         &mut tag, None, &artists, None, None, None, None, None, None, None, None, None, None, None,
     );
 
-    assert_eq!(tag.artist(), Some("Artista Español; アーティスト"));
+    assert_eq!(
+        tag.artist().as_deref(),
+        Some("Artista Español; アーティスト")
+    );
 }
 
 #[test]
 fn test_display_tags_empty() {
-    let tag = Tag::new();
+    let tag = Id3v2Tag::new();
     // Este test solo verifica que display_tags no hace panic con un tag vacío
     display_tags(&tag);
 }
 
 #[test]
 fn test_display_tags_with_data() {
-    let mut tag = Tag::new();
-    tag.set_title("Test Song");
-    tag.set_artist("Test Artist");
-    tag.set_album("Test Album");
-    tag.set_year(2026);
-    tag.set_genre("Rock");
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Test Song".to_string());
+    tag.set_artist("Test Artist".to_string());
+    tag.set_album("Test Album".to_string());
+    set_year_frame(&mut tag, 2026);
+    tag.set_genre("Rock".to_string());
 
     // Este test verifica que display_tags no hace panic con datos
     display_tags(&tag);
@@ -347,7 +390,7 @@ fn test_display_tags_with_data() {
 
 #[test]
 fn test_track_number() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -371,7 +414,7 @@ fn test_track_number() {
 
 #[test]
 fn test_track_number_zero() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     apply_metadata(
         &mut tag,
         None,
@@ -394,7 +437,7 @@ fn test_track_number_zero() {
 
 #[test]
 fn test_track_with_other_metadata() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let artists = vec!["Artist".to_string()];
     apply_metadata(
         &mut tag,
@@ -413,14 +456,14 @@ fn test_track_with_other_metadata() {
         None,
     );
 
-    assert_eq!(tag.title(), Some("Title"));
-    assert_eq!(tag.artist(), Some("Artist"));
+    assert_eq!(tag.title().as_deref(), Some("Title"));
+    assert_eq!(tag.artist().as_deref(), Some("Artist"));
     assert_eq!(tag.track(), Some(3));
 }
 
 #[test]
 fn test_date_recorded() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -440,14 +483,15 @@ fn test_date_recorded() {
 
     assert!(changed);
     assert_eq!(
-        tag.date_recorded().map(|t| t.to_string()),
-        Some("2026-01-22".to_string())
+        tag.get_text(&frame_id("TDRC")),
+        Some("2026-01-22"),
+        "--date debe escribir el frame TDRC"
     );
 }
 
 #[test]
 fn test_copyright() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -466,15 +510,12 @@ fn test_copyright() {
     );
 
     assert!(changed);
-    assert_eq!(
-        tag.get("TCOP").and_then(|f| f.content().text()),
-        Some("© 2026 Records")
-    );
+    assert_eq!(tag.get_text(&frame_id("TCOP")), Some("© 2026 Records"));
 }
 
 #[test]
 fn test_date_and_copyright() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     apply_metadata(
         &mut tag,
         None,
@@ -493,73 +534,71 @@ fn test_date_and_copyright() {
     );
 
     assert_eq!(
-        tag.date_recorded().map(|t| t.to_string()),
-        Some("2026".to_string())
+        tag.get_text(&frame_id("TDRC")),
+        Some("2026"),
+        "--date debe escribir el frame TDRC"
     );
-    assert_eq!(
-        tag.get("TCOP").and_then(|f| f.content().text()),
-        Some("© Test")
-    );
+    assert_eq!(tag.get_text(&frame_id("TCOP")), Some("© Test"));
 }
 
 #[test]
 fn test_remove_title() {
-    let mut tag = Tag::new();
-    tag.set_title("Test Title");
-    assert_eq!(tag.title(), Some("Test Title"));
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Test Title".to_string());
+    assert_eq!(tag.title().as_deref(), Some("Test Title"));
 
     let changed = remove_tags(&mut tag, &["title".to_string()]);
     assert!(changed);
-    assert_eq!(tag.title(), None);
+    assert_eq!(tag.title().as_deref(), None);
 }
 
 #[test]
 fn test_remove_multiple_tags() {
-    let mut tag = Tag::new();
-    tag.set_title("Title");
-    tag.set_artist("Artist");
-    tag.set_album("Album");
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Title".to_string());
+    tag.set_artist("Artist".to_string());
+    tag.set_album("Album".to_string());
 
     let changed = remove_tags(&mut tag, &["title".to_string(), "artist".to_string()]);
     assert!(changed);
-    assert_eq!(tag.title(), None);
-    assert_eq!(tag.artist(), None);
-    assert_eq!(tag.album(), Some("Album")); // No eliminado
+    assert_eq!(tag.title().as_deref(), None);
+    assert_eq!(tag.artist().as_deref(), None);
+    assert_eq!(tag.album().as_deref(), Some("Album")); // No eliminado
 }
 
 #[test]
 fn test_remove_unknown_tag() {
-    let mut tag = Tag::new();
-    tag.set_title("Title");
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Title".to_string());
 
     let changed = remove_tags(&mut tag, &["invalid_tag".to_string()]);
     assert!(!changed);
-    assert_eq!(tag.title(), Some("Title")); // No afectado
+    assert_eq!(tag.title().as_deref(), Some("Title")); // No afectado
 }
 
 #[test]
 fn test_remove_tags_spanish() {
-    let mut tag = Tag::new();
-    tag.set_title("Título");
-    tag.set_artist("Artista");
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Título".to_string());
+    tag.set_artist("Artista".to_string());
 
     let changed = remove_tags(&mut tag, &["título".to_string(), "artista".to_string()]);
     assert!(changed);
-    assert_eq!(tag.title(), None);
-    assert_eq!(tag.artist(), None);
+    assert_eq!(tag.title().as_deref(), None);
+    assert_eq!(tag.artist().as_deref(), None);
 }
 
 #[test]
 fn test_remove_cover() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let data = vec![0xFF, 0xD8, 0xFF, 0xE0];
     let path = Path::new("test.jpg");
     add_cover_art(&mut tag, path, data).unwrap();
-    assert_eq!(tag.pictures().count(), 1);
+    assert_eq!(collect_pictures(&tag).len(), 1);
 
     let changed = remove_tags(&mut tag, &["cover".to_string()]);
     assert!(changed);
-    assert_eq!(tag.pictures().count(), 0);
+    assert_eq!(collect_pictures(&tag).len(), 0);
 }
 
 #[test]
@@ -611,142 +650,127 @@ fn test_detect_mime_type_unsupported() {
 
 #[test]
 fn test_add_cover_art_png() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let data = vec![0x89, 0x50, 0x4E, 0x47]; // PNG header
     let path = Path::new("cover.png");
 
     let result = add_cover_art(&mut tag, path, data.clone());
     assert!(result.is_ok());
 
-    let pictures: Vec<_> = tag.pictures().collect();
+    let pictures = collect_pictures(&tag);
     assert_eq!(pictures.len(), 1);
-    assert_eq!(pictures[0].mime_type, "image/png");
+    assert_eq!(
+        pictures[0].mime_type().map(|m| m.as_str()),
+        Some("image/png")
+    );
 }
 
 #[test]
 fn test_add_cover_art_webp() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let data = vec![0x52, 0x49, 0x46, 0x46]; // WEBP header
     let path = Path::new("cover.webp");
 
     let result = add_cover_art(&mut tag, path, data.clone());
     assert!(result.is_ok());
 
-    let pictures: Vec<_> = tag.pictures().collect();
+    let pictures = collect_pictures(&tag);
     assert_eq!(pictures.len(), 1);
-    assert_eq!(pictures[0].mime_type, "image/webp");
+    assert_eq!(
+        pictures[0].mime_type().map(|m| m.as_str()),
+        Some("image/webp")
+    );
 }
 
 #[test]
 fn test_add_lyrics() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let lyrics_text = "Primera línea\nSegunda línea\nTercera línea";
 
     let result = add_lyrics(&mut tag, lyrics_text);
     assert!(result);
 
-    // Verificar que se añadió el frame de lyrics
-    let mut found_lyrics = false;
-    for frame in tag.frames() {
-        if let Content::Lyrics(lyrics) = frame.content() {
-            assert_eq!(lyrics.lang, "spa");
-            assert_eq!(lyrics.text, lyrics_text);
-            found_lyrics = true;
-            break;
-        }
-    }
-    assert!(found_lyrics);
+    // Verificar que se añadió el frame de lyrics con idioma "spa"
+    let lyrics = tag
+        .unsync_text()
+        .next()
+        .expect("Debería existir un frame USLT");
+    assert_eq!(lyrics.language, *b"spa");
+    assert_eq!(&*lyrics.content, lyrics_text);
 }
 
 #[test]
 fn test_remove_lyrics() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let lyrics_text = "Test lyrics";
     add_lyrics(&mut tag, lyrics_text);
 
     // Verificar que se añadió
-    let has_lyrics = tag
-        .frames()
-        .any(|f| matches!(f.content(), Content::Lyrics(_)));
-    assert!(has_lyrics);
+    assert!(tag.unsync_text().next().is_some());
 
     // Eliminar lyrics
     let changed = remove_tags(&mut tag, &["lyrics".to_string()]);
     assert!(changed);
 
     // Verificar que se eliminó
-    let has_lyrics = tag
-        .frames()
-        .any(|f| matches!(f.content(), Content::Lyrics(_)));
-    assert!(!has_lyrics);
+    assert!(tag.unsync_text().next().is_none());
 }
 
 #[test]
 fn test_remove_lyrics_spanish() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     add_lyrics(&mut tag, "Test");
 
     let changed = remove_tags(&mut tag, &["letra".to_string()]);
     assert!(changed);
 
-    let has_lyrics = tag
-        .frames()
-        .any(|f| matches!(f.content(), Content::Lyrics(_)));
-    assert!(!has_lyrics);
+    assert!(tag.unsync_text().next().is_none());
 }
 
 #[test]
 fn test_add_url() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let url = "https://example.com/artist";
 
     let result = add_url(&mut tag, url);
     assert!(result);
 
-    // Verificar que se añadió el frame de URL
-    let mut found_url = false;
-    for frame in tag.frames() {
-        if frame.id() == "WOAR"
-            && let Content::Link(link) = frame.content()
-        {
-            assert_eq!(link, url);
-            found_url = true;
-            break;
-        }
+    // Verificar que se añadió el frame de URL `WOAR`
+    let frame = tag.get(&frame_id("WOAR"));
+    assert!(matches!(frame, Some(Frame::Url(_))));
+    if let Some(Frame::Url(link)) = frame {
+        assert_eq!(link.url(), url);
     }
-    assert!(found_url);
 }
 
 #[test]
 fn test_remove_url() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     add_url(&mut tag, "https://test.com");
 
     // Verificar que se añadió
-    let has_url = tag.frames().any(|f| f.id() == "WOAR");
-    assert!(has_url);
+    assert!(tag.get(&frame_id("WOAR")).is_some());
 
     // Eliminar URL
     let changed = remove_tags(&mut tag, &["url".to_string()]);
     assert!(changed);
 
     // Verificar que se eliminó
-    let has_url = tag.frames().any(|f| f.id() == "WOAR");
-    assert!(!has_url);
+    assert!(tag.get(&frame_id("WOAR")).is_none());
 }
 
 #[test]
 fn test_add_apple_metadata_compilation() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = add_apple_metadata(&mut tag, true, None, None, None);
 
     assert!(changed);
-    assert_eq!(tag.get("TCMP").and_then(|f| f.content().text()), Some("1"));
+    assert_eq!(tag.get_text(&frame_id("TCMP")), Some("1"));
 }
 
 #[test]
 fn test_add_apple_metadata_sort_orders() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = add_apple_metadata(
         &mut tag,
         false,
@@ -756,23 +780,14 @@ fn test_add_apple_metadata_sort_orders() {
     );
 
     assert!(changed);
-    assert_eq!(
-        tag.get("TSOA").and_then(|f| f.content().text()),
-        Some("Album Sort")
-    );
-    assert_eq!(
-        tag.get("TSOP").and_then(|f| f.content().text()),
-        Some("Artist Sort")
-    );
-    assert_eq!(
-        tag.get("TSOT").and_then(|f| f.content().text()),
-        Some("Title Sort")
-    );
+    assert_eq!(tag.get_text(&frame_id("TSOA")), Some("Album Sort"));
+    assert_eq!(tag.get_text(&frame_id("TSOP")), Some("Artist Sort"));
+    assert_eq!(tag.get_text(&frame_id("TSOT")), Some("Title Sort"));
 }
 
 #[test]
 fn test_add_apple_metadata_all() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = add_apple_metadata(
         &mut tag,
         true,
@@ -782,24 +797,15 @@ fn test_add_apple_metadata_all() {
     );
 
     assert!(changed);
-    assert_eq!(tag.get("TCMP").and_then(|f| f.content().text()), Some("1"));
-    assert_eq!(
-        tag.get("TSOA").and_then(|f| f.content().text()),
-        Some("Sort Album")
-    );
-    assert_eq!(
-        tag.get("TSOP").and_then(|f| f.content().text()),
-        Some("Sort Artist")
-    );
-    assert_eq!(
-        tag.get("TSOT").and_then(|f| f.content().text()),
-        Some("Sort Title")
-    );
+    assert_eq!(tag.get_text(&frame_id("TCMP")), Some("1"));
+    assert_eq!(tag.get_text(&frame_id("TSOA")), Some("Sort Album"));
+    assert_eq!(tag.get_text(&frame_id("TSOP")), Some("Sort Artist"));
+    assert_eq!(tag.get_text(&frame_id("TSOT")), Some("Sort Title"));
 }
 
 #[test]
 fn test_add_apple_metadata_no_changes() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = add_apple_metadata(&mut tag, false, None, None, None);
 
     assert!(!changed);
@@ -807,17 +813,17 @@ fn test_add_apple_metadata_no_changes() {
 
 #[test]
 fn test_remove_compilation() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     add_apple_metadata(&mut tag, true, None, None, None);
 
     let changed = remove_tags(&mut tag, &["compilation".to_string()]);
     assert!(changed);
-    assert_eq!(tag.get("TCMP"), None);
+    assert!(tag.get(&frame_id("TCMP")).is_none());
 }
 
 #[test]
 fn test_remove_apple_sort_tags() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     add_apple_metadata(&mut tag, false, Some("A"), Some("B"), Some("C"));
 
     let changed = remove_tags(
@@ -830,34 +836,34 @@ fn test_remove_apple_sort_tags() {
     );
 
     assert!(changed);
-    assert_eq!(tag.get("TSOA"), None);
-    assert_eq!(tag.get("TSOP"), None);
-    assert_eq!(tag.get("TSOT"), None);
+    assert!(tag.get(&frame_id("TSOA")).is_none());
+    assert!(tag.get(&frame_id("TSOP")).is_none());
+    assert!(tag.get(&frame_id("TSOT")).is_none());
 }
 
 #[test]
 fn test_remove_compilation_spanish() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     add_apple_metadata(&mut tag, true, None, None, None);
 
     let changed = remove_tags(&mut tag, &["compilación".to_string()]);
     assert!(changed);
-    assert_eq!(tag.get("TCMP"), None);
+    assert!(tag.get(&frame_id("TCMP")).is_none());
 }
 
 #[test]
 fn test_remove_apple_sort_spanish() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     add_apple_metadata(&mut tag, false, Some("A"), None, None);
 
     let changed = remove_tags(&mut tag, &["orden-album".to_string()]);
     assert!(changed);
-    assert_eq!(tag.get("TSOA"), None);
+    assert!(tag.get(&frame_id("TSOA")).is_none());
 }
 
 #[test]
 fn test_add_composer() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -876,15 +882,12 @@ fn test_add_composer() {
     );
 
     assert!(changed);
-    assert_eq!(
-        tag.get("TCOM").and_then(|f| f.content().text()),
-        Some("John Lennon")
-    );
+    assert_eq!(tag.get_text(&frame_id("TCOM")), Some("John Lennon"));
 }
 
 #[test]
 fn test_add_subtitle() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -903,15 +906,12 @@ fn test_add_subtitle() {
     );
 
     assert!(changed);
-    assert_eq!(
-        tag.get("TIT3").and_then(|f| f.content().text()),
-        Some("Extended Version")
-    );
+    assert_eq!(tag.get_text(&frame_id("TIT3")), Some("Extended Version"));
 }
 
 #[test]
 fn test_add_original_artist() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -930,15 +930,12 @@ fn test_add_original_artist() {
     );
 
     assert!(changed);
-    assert_eq!(
-        tag.get("TOPE").and_then(|f| f.content().text()),
-        Some("The Beatles")
-    );
+    assert_eq!(tag.get_text(&frame_id("TOPE")), Some("The Beatles"));
 }
 
 #[test]
 fn test_add_album_artist() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -957,12 +954,12 @@ fn test_add_album_artist() {
     );
 
     assert!(changed);
-    assert_eq!(tag.album_artist(), Some("Various Artists"));
+    assert_eq!(tag.get_text(&frame_id("TPE2")), Some("Various Artists"));
 }
 
 #[test]
 fn test_add_all_new_tags() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         Some("Title"),
@@ -981,65 +978,56 @@ fn test_add_all_new_tags() {
     );
 
     assert!(changed);
-    assert_eq!(tag.title(), Some("Title"));
-    assert_eq!(
-        tag.get("TCOM").and_then(|f| f.content().text()),
-        Some("Compositor")
-    );
-    assert_eq!(
-        tag.get("TIT3").and_then(|f| f.content().text()),
-        Some("Subtitle")
-    );
-    assert_eq!(
-        tag.get("TOPE").and_then(|f| f.content().text()),
-        Some("Original")
-    );
-    assert_eq!(tag.album_artist(), Some("Album Artist"));
+    assert_eq!(tag.title().as_deref(), Some("Title"));
+    assert_eq!(tag.get_text(&frame_id("TCOM")), Some("Compositor"));
+    assert_eq!(tag.get_text(&frame_id("TIT3")), Some("Subtitle"));
+    assert_eq!(tag.get_text(&frame_id("TOPE")), Some("Original"));
+    assert_eq!(tag.get_text(&frame_id("TPE2")), Some("Album Artist"));
 }
 
 #[test]
 fn test_remove_composer() {
-    let mut tag = Tag::new();
-    tag.set_text("TCOM", "Test Composer");
+    let mut tag = Id3v2Tag::new();
+    insert_text_frame(&mut tag, "TCOM", "Test Composer");
 
     let changed = remove_tags(&mut tag, &["composer".to_string()]);
     assert!(changed);
-    assert_eq!(tag.get("TCOM"), None);
+    assert!(tag.get(&frame_id("TCOM")).is_none());
 }
 
 #[test]
 fn test_remove_subtitle() {
-    let mut tag = Tag::new();
-    tag.set_text("TIT3", "Test Subtitle");
+    let mut tag = Id3v2Tag::new();
+    insert_text_frame(&mut tag, "TIT3", "Test Subtitle");
 
     let changed = remove_tags(&mut tag, &["subtitle".to_string()]);
     assert!(changed);
-    assert_eq!(tag.get("TIT3"), None);
+    assert!(tag.get(&frame_id("TIT3")).is_none());
 }
 
 #[test]
 fn test_remove_original_artist() {
-    let mut tag = Tag::new();
-    tag.set_text("TOPE", "Test Original");
+    let mut tag = Id3v2Tag::new();
+    insert_text_frame(&mut tag, "TOPE", "Test Original");
 
     let changed = remove_tags(&mut tag, &["original_artist".to_string()]);
     assert!(changed);
-    assert_eq!(tag.get("TOPE"), None);
+    assert!(tag.get(&frame_id("TOPE")).is_none());
 }
 
 #[test]
 fn test_remove_album_artist() {
-    let mut tag = Tag::new();
-    tag.set_album_artist("Test Album Artist");
+    let mut tag = Id3v2Tag::new();
+    insert_text_frame(&mut tag, "TPE2", "Test Album Artist");
 
     let changed = remove_tags(&mut tag, &["album_artist".to_string()]);
     assert!(changed);
-    assert_eq!(tag.album_artist(), None);
+    assert!(tag.get(&frame_id("TPE2")).is_none());
 }
 
 #[test]
 fn test_add_season() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         None,
@@ -1058,12 +1046,12 @@ fn test_add_season() {
     );
 
     assert!(changed);
-    assert_eq!(tag.disc(), Some(2));
+    assert_eq!(tag.disk(), Some(2));
 }
 
 #[test]
 fn test_add_season_with_track() {
-    let mut tag = Tag::new();
+    let mut tag = Id3v2Tag::new();
     let changed = apply_metadata(
         &mut tag,
         Some("Episode 5"),
@@ -1082,30 +1070,30 @@ fn test_add_season_with_track() {
     );
 
     assert!(changed);
-    assert_eq!(tag.title(), Some("Episode 5"));
+    assert_eq!(tag.title().as_deref(), Some("Episode 5"));
     assert_eq!(tag.track(), Some(5));
-    assert_eq!(tag.disc(), Some(2));
+    assert_eq!(tag.disk(), Some(2));
 }
 
 #[test]
 fn test_remove_season() {
-    let mut tag = Tag::new();
-    tag.set_disc(3);
-    assert_eq!(tag.disc(), Some(3));
+    let mut tag = Id3v2Tag::new();
+    tag.set_disk(3);
+    assert_eq!(tag.disk(), Some(3));
 
     let changed = remove_tags(&mut tag, &["season".to_string()]);
     assert!(changed);
-    assert_eq!(tag.disc(), None);
+    assert_eq!(tag.disk(), None);
 }
 
 #[test]
 fn test_remove_season_spanish() {
-    let mut tag = Tag::new();
-    tag.set_disc(5);
+    let mut tag = Id3v2Tag::new();
+    tag.set_disk(5);
 
     let changed = remove_tags(&mut tag, &["temporada".to_string()]);
     assert!(changed);
-    assert_eq!(tag.disc(), None);
+    assert_eq!(tag.disk(), None);
 }
 
 /// Ruta absoluta al fixture MP3 real y sin tags, versionado en el repositorio.
@@ -1158,7 +1146,7 @@ fn test_remove_all_id3_removes_v2() {
     assert!(Tag::read_from_path(&path).is_ok());
 
     let format = remove_all_id3(&path).unwrap();
-    assert!(matches!(format, FormatVersion::Id3v2));
+    assert!(matches!(format, RemovedId3::Id3v2));
 
     // Verificar ausencia física del tag
     assert!(Tag::read_from_path(&path).is_err());
@@ -1185,7 +1173,7 @@ fn test_remove_all_id3_removes_both_v1_and_v2() {
     tag.write_to_path(&path, id3::Version::Id3v24).unwrap();
 
     let format = remove_all_id3(&path).unwrap();
-    assert!(matches!(format, FormatVersion::Both));
+    assert!(matches!(format, RemovedId3::Both));
 
     assert!(Tag::read_from_path(&path).is_err());
     // ID3v1 debe haber desaparecido (el archivo ya no termina en "TAG")
@@ -1214,7 +1202,7 @@ fn test_remove_all_id3_removes_only_v1() {
     assert!(Tag::read_from_path(&path).is_err());
 
     let format = remove_all_id3(&path).unwrap();
-    assert!(matches!(format, FormatVersion::Id3v1));
+    assert!(matches!(format, RemovedId3::Id3v1));
 
     // Verificar ausencia física del tag
     assert!(id3::v1::Tag::read_from_path(&path).is_err());
@@ -1231,7 +1219,7 @@ fn test_remove_all_id3_no_tags_returns_none() {
 
     // MP3 sin tags
     let format = remove_all_id3(&path).unwrap();
-    assert!(matches!(format, FormatVersion::None));
+    assert!(matches!(format, RemovedId3::None));
 
     cleanup_file(&path);
 }

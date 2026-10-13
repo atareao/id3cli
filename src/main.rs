@@ -1,9 +1,69 @@
 use clap::{Parser, Subcommand};
-use id3::Tag;
-use id3::v1v2::FormatVersion;
 use id3cli::*;
+use lofty::config::{ParseOptions, WriteOptions};
+use lofty::file::AudioFile;
+use lofty::id3::v2::Id3v2Tag;
+use lofty::mpeg::MpegFile;
+use lofty::tag::TagExt;
+use lofty::tag::TagType;
+use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+
+/// Lee el tag ID3v2 del archivo MP3, si existe.
+///
+/// Devuelve `None` tanto cuando el archivo no se puede interpretar como MPEG
+/// como cuando es un MP3 sin tag ID3v2; el CLI trata ambos casos igual que
+/// trataba el fallo de `id3::Tag::read_from_path`.
+fn read_id3v2_tag(file: &Path) -> Option<Id3v2Tag> {
+    let mut handle = File::open(file).ok()?;
+    let mpeg = MpegFile::read_from(&mut handle, ParseOptions::default()).ok()?;
+    mpeg.id3v2().cloned()
+}
+
+/// Escribe el tag ID3v2 en el archivo conservando la paridad observable del
+/// backend anterior.
+///
+/// `lofty` elimina físicamente el bloque ID3v2 cuando se guarda un tag sin
+/// ningún frame; el contrato conserva un bloque ID3v2 vacío (como hacía el
+/// crate `id3`), de modo que tras borrar el último frame el archivo sigue
+/// teniendo un tag legible. Por eso, cuando el tag queda vacío se retira el
+/// bloque existente y se antepone a mano una cabecera ID3v2.4 vacía de 10 bytes.
+fn save_tag(file: &Path, tag: &Id3v2Tag) -> Result<(), Box<dyn std::error::Error>> {
+    if !tag.is_empty() {
+        tag.save_to_path(file, WriteOptions::default())?;
+        return Ok(());
+    }
+
+    let mut handle = File::options().read(true).write(true).open(file)?;
+    TagType::Id3v2.remove_from(&mut handle, WriteOptions::default())?;
+    drop(handle);
+
+    let audio = fs::read(file)?;
+    let mut contents = Vec::with_capacity(10 + audio.len());
+    // Cabecera ID3v2.4 vacía: "ID3", versión 4.0, flags 0, tamaño sincsafe 0.
+    contents.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x00\x00");
+    contents.extend_from_slice(&audio);
+    fs::write(file, &contents)?;
+
+    Ok(())
+}
+
+/// Imprime el error con toda su cadena de causas y termina con código 1.
+///
+/// Se imprime la causa subyacente porque `lofty` oculta el error de E/S real en
+/// su `Debug` (`FileEncodingError { .. }`); la causa conserva el mensaje del
+/// sistema (p. ej. `Permission denied`).
+fn report_error(error: Box<dyn Error>) -> ! {
+    eprintln!("Error: {}", error);
+    let mut source = error.source();
+    while let Some(cause) = source {
+        eprintln!("  Causado por: {}", cause);
+        source = cause.source();
+    }
+    std::process::exit(1);
+}
 
 /// CLI para añadir tags ID3 y carátulas a archivos MP3
 #[derive(Parser, Debug)]
@@ -133,9 +193,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Leer tag
-            let tag = match Tag::read_from_path(file) {
-                Ok(tag) => tag,
-                Err(_) => {
+            let tag = match read_id3v2_tag(file) {
+                Some(tag) => tag,
+                None => {
                     eprintln!("⚠️  No se encontraron tags ID3 en '{}'", file.display());
                     std::process::exit(0);
                 }
@@ -173,14 +233,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Leer o crear tag
-            let mut tag = match Tag::read_from_path(file) {
-                Ok(tag) => {
+            let mut tag = match read_id3v2_tag(file) {
+                Some(tag) => {
                     println!("Tags existentes encontrados en '{}'", file.display());
                     tag
                 }
-                Err(_) => {
+                None => {
                     println!("Creando nuevos tags para '{}'", file.display());
-                    Tag::new()
+                    Id3v2Tag::new()
                 }
             };
 
@@ -308,7 +368,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Guardar cambios
             if changed || cover_added || lyrics_added || url_added || apple_added {
-                tag.write_to_path(file, id3::Version::Id3v24)?;
+                if let Err(e) = save_tag(file, &tag) {
+                    report_error(e);
+                }
                 println!("\n✅ Tags guardados correctamente en '{}'", file.display());
             } else {
                 println!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
@@ -325,16 +387,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if *all {
                 let format = remove_all_id3(file)?;
                 match format {
-                    FormatVersion::None => {
+                    RemovedId3::None => {
                         println!("⚠️  El archivo '{}' no tenía tags ID3", file.display());
                     }
-                    FormatVersion::Id3v1 => {
+                    RemovedId3::Id3v1 => {
                         println!("✅ Tag ID3v1 eliminado de '{}'", file.display());
                     }
-                    FormatVersion::Id3v2 => {
+                    RemovedId3::Id3v2 => {
                         println!("✅ Tag ID3v2 eliminado de '{}'", file.display());
                     }
-                    FormatVersion::Both => {
+                    RemovedId3::Both => {
                         println!("✅ Tags ID3v1 e ID3v2 eliminados de '{}'", file.display());
                     }
                 }
@@ -349,9 +411,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Leer tag
-            let mut tag = match Tag::read_from_path(file) {
-                Ok(tag) => tag,
-                Err(_) => {
+            let mut tag = match read_id3v2_tag(file) {
+                Some(tag) => tag,
+                None => {
                     eprintln!("Error: No se encontraron tags ID3 en '{}'", file.display());
                     std::process::exit(1);
                 }
@@ -361,7 +423,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let removed = remove_tags(&mut tag, tags);
 
             if removed {
-                tag.write_to_path(file, id3::Version::Id3v24)?;
+                if let Err(e) = save_tag(file, &tag) {
+                    report_error(e);
+                }
                 println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
             } else {
                 println!("\n⚠️  No se encontraron tags válidos para eliminar.");
