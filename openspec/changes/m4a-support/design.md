@@ -64,17 +64,25 @@ Alternativas descartadas: escribir átomos freeform propietarios (invisibles par
 
 Alternativas descartadas: que gane `--year` (pierde información y es contraintuitivo); concatenar ambos en un solo valor (produce un `©day` inválido que ningún reproductor interpreta); escribir el año en un átomo freeform aparte (invisible para iTunes y contrario a la decisión 3).
 
-### 5. Fixtures `.m4a` reales generados con `ffmpeg` y commiteados
+### 5. Fixtures con audio real, generados una sola vez con `ffmpeg` y commiteados
 
-El truco actual de `create_temp_mp3()` crea un MP3 falso con solo la cabecera ID3, y es suficiente para MP3 porque el tag vive en la cabecera del archivo. Con MP4 eso es imposible: hace falta una estructura `ftyp`+`moov`+`udta`+`meta`+`ilst` real para poder escribir y releer metadatos. La decisión es generar un `.m4a` mínimo y determinista con `ffmpeg`, commitearlo en `tests/fixtures/` y hacer que los tests copien ese fixture a un directorio temporal para operar sobre él.
+El truco actual de `create_temp_mp3()` crea un MP3 falso con solo la cabecera ID3, y se creía suficiente para MP3 porque el tag vive en la cabecera del archivo. Un spike real contra `lofty` 0.25.4 demuestra que no lo es: sobre un fichero que solo tiene el header ID3v2.4 y ningún frame MPEG, lofty **no puede leer ni escribir** y falla con `failed to parse Mpeg file`. Tampoco sirven los fixtures de 4 bytes tipo `[0xFF,0xFB,0x90,0x44]` que ya usan los tests: con ellos la escritura funciona pero la lectura falla, así que rompen cualquier ida y vuelta. Con MP4 la limitación es la misma y por la misma razón: hace falta una estructura `ftyp`+`moov`+`udta`+`meta`+`ilst` real para poder escribir y releer metadatos.
 
-Alternativas descartadas: construir el contenedor MP4 a mano byte a byte en los tests (frágil y ajeno al producto); generar el fixture en tiempo de test invocando `ffmpeg` (introduce una dependencia de entorno en la suite y hace los tests no herméticos); usar `mp4ameta` en los tests para construir el fixture (mete una dependencia de test que no existe en el producto y adelanta justo el diseño descartado en la decisión 1).
+La decisión es por tanto común a los dos formatos: generar con `ffmpeg` dos fixtures mínimos y deterministas con **audio real** —uno de MP3 **sin ningún tag ID3** y uno de `.m4a`—, commitearlos en `tests/fixtures/` y hacer que los helpers de test **copien** el fixture a un directorio temporal para operar sobre él, en lugar de fabricar bytes falsos. El MP3 se genera sin ningún tag ID3 para que la escritura de frames se pruebe desde cero y no desde un tag preexistente.
+
+Alternativas descartadas: construir los fixtures byte a byte a mano en los tests (inviable para lofty, que exige contenido MPEG real para parsear, y frágil y ajeno al producto en el caso del contenedor MP4); generar el fixture en tiempo de test invocando `ffmpeg` (introduce una dependencia de entorno en la suite y hace los tests no herméticos); usar `mp4ameta` en los tests para construir el fixture (mete una dependencia de test que no existe en el producto y adelanta justo el diseño descartado en la decisión 1).
 
 ### 6. Se conserva `TYER` para `--year`, en lugar de unificar en `TDRC` dentro de este cambio
 
 Se conserva `TYER` **aunque esté obsoleto en ID3v2.4**, para que la migración de backend sea puramente mecánica y la paridad de MP3 sea verificable con los tests actuales sin tocar sus expectativas. Se implementa con la API de bajo nivel de lofty (`Frame::Text` con `FrameId::new("TYER")`, que lofty acepta como ID válido de v2.3/4).
 
 Alternativa descartada: unificar en `TDRC` **en este mismo cambio**. Mezcla un cambio de comportamiento intencionado con la migración de backend, y entonces el diff de los tests deja de distinguir una adaptación de firma de una expectativa relajada, que es justo la red de seguridad en la que se apoya todo el cambio. La unificación corresponde a un cambio posterior.
+
+### 7. Los fixtures se cambian antes y bajo el backend actual, en un paso separado de la migración
+
+El cambio de fixtures y la migración del backend MUST ser pasos separados, cada uno con su propio commit, porque si se hacen a la vez no se puede distinguir una regresión del backend de un problema del fixture: cualquier test en rojo sería ambiguo justo cuando la red de seguridad es lo único que hay para atribuir el fallo. El orden es estricto: primero se sustituyen los fixtures falsos por los reales **manteniendo `id3` como backend** y se exige que la suite completa de 106 tests siga verde con los fixtures nuevos, y solo después se migra el backend (grupo 2 de `tasks.md`).
+
+Alternativa descartada: hacerlo todo junto en un único paso (ahorra un commit, pero destruye la capacidad de atribuir cualquier fallo, que es justo el valor de la red de seguridad).
 
 ## Risks / Trade-offs
 
