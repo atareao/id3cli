@@ -3502,3 +3502,213 @@ fn test_cli_lyrics_language_spa_in_mp3_still_preserved() {
 
     cleanup_file(&mp3_path);
 }
+
+// ---------------------------------------------------------------------------
+// MP4 (M4A): campos sin equivalente (`--url`, `--original-artist`) — grupo 6
+// ---------------------------------------------------------------------------
+
+/// Prefijo de todo átomo *freeform* `ilst`. Se usa para comprobar que el CLI no
+/// suple la omisión de un campo con un átomo propietario.
+const FREEFORM_PREFIX: &[u8] = b"----:com.apple.iTunes";
+
+#[test]
+fn test_cli_m4a_url_is_omitted_with_warning() {
+    let path = create_temp_m4a("url_omitted");
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--title",
+        "Cancion",
+    ]);
+
+    // No aborta: termina con código de salida cero.
+    assert!(out.status.success(), "`--url` en MP4 no debe abortar");
+
+    // Avisa por stderr de que la URL se omite por no tener equivalente.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--url") && stderr.contains("se omite"),
+        "debe avisar de la omisión de --url por stderr, fue: {stderr}"
+    );
+
+    // El resto de campos indicados sí se escriben: `©nam` con "Cancion".
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Cancion"));
+
+    // No se crea ningún átomo freeform de reemplazo para la URL.
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        !contains_bytes(&bytes, FREEFORM_PREFIX),
+        "el CLI no debe crear un átomo freeform para suplir la URL"
+    );
+    assert!(
+        !contains_bytes(&bytes, b"URL"),
+        "no debe existir ningún átomo que represente la URL"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_original_artist_is_omitted_with_warning() {
+    let path = create_temp_m4a("original_artist_omitted");
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--original-artist",
+        "Autor",
+        "--album",
+        "Disco",
+    ]);
+
+    assert!(
+        out.status.success(),
+        "`--original-artist` en MP4 no debe abortar"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--original-artist") && stderr.contains("se omite"),
+        "debe avisar de la omisión de --original-artist por stderr, fue: {stderr}"
+    );
+
+    // El resto de campos indicados sí se escriben: `©alb` con "Disco".
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::AlbumTitle), Some("Disco"));
+
+    // Ningún átomo freeform de reemplazo.
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), FREEFORM_PREFIX),
+        "el CLI no debe crear un átomo freeform para el artista original"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_both_unequivalent_flags_warn_and_leave_file_untouched() {
+    let path = create_temp_m4a("both_omitted");
+    let before = fs::read(&path).unwrap();
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--original-artist",
+        "Autor",
+    ]);
+
+    assert!(out.status.success(), "no debe abortar");
+
+    // Sendos avisos por stderr (uno por campo omitido).
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--url") && stderr.contains("--original-artist"),
+        "deben emitirse los dos avisos, fue: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("se omite").count(),
+        2,
+        "deben ser exactamente dos avisos, fue: {stderr}"
+    );
+
+    // Si esos dos son los únicos flags, no hay cambio real que escribir: el
+    // archivo queda byte a byte idéntico.
+    let after = fs::read(&path).unwrap();
+    assert_eq!(
+        before, after,
+        "sin cambios reales, `edit` no debe reescribir el archivo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_omission_warnings_go_only_to_stderr() {
+    let path = create_temp_m4a("warn_streams");
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--original-artist",
+        "Autor",
+        "--title",
+        "Cancion",
+    ]);
+    assert!(out.status.success());
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Los avisos van a stderr…
+    assert!(
+        stderr.contains("se omite"),
+        "el aviso de omisión va en stderr, fue: {stderr}"
+    );
+    // …y no contaminan stdout.
+    assert!(
+        !stdout.contains("se omite")
+            && !stdout.contains("--url")
+            && !stdout.contains("--original-artist"),
+        "los avisos no deben aparecer en stdout, fue: {stdout}"
+    );
+    // La confirmación normal del campo que sí se escribe sigue en stdout.
+    assert!(
+        stdout.contains("Cancion"),
+        "la confirmación normal va en stdout, fue: {stdout}"
+    );
+
+    // Y el campo que sí tiene equivalente se escribió.
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Cancion"));
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_mp3_url_and_original_artist_still_write_without_warning() {
+    let mp3_path = create_temp_mp3();
+
+    let out = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--original-artist",
+        "Autor",
+    ]);
+    assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "en MP3 no debe emitirse ningún aviso, fue: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // En MP3 `--url` escribe `WOAR` y `--original-artist`, `TOPE`.
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+
+    let mut url = None;
+    for frame in tag.frames() {
+        if frame.id() == "WOAR"
+            && let id3::frame::Content::Link(link) = frame.content()
+        {
+            url = Some(link.clone());
+        }
+    }
+    assert_eq!(
+        url.as_deref(),
+        Some("https://artista.com"),
+        "debe escribir WOAR"
+    );
+    assert_eq!(
+        tag.get("TOPE").and_then(|f| f.content().text()),
+        Some("Autor"),
+        "debe escribir TOPE"
+    );
+
+    cleanup_file(&mp3_path);
+}

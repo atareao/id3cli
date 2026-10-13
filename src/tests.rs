@@ -2027,6 +2027,83 @@ fn test_m4a_year_and_date_collide_date_wins_with_warning() {
     cleanup_file(&path);
 }
 
+// --- Campos sin átomo equivalente en MP4 (`--url`, `--original-artist`) -----
+
+#[test]
+fn test_mp4_field_omitted_warning_names_flag_and_reason() {
+    let warning = mp4_field_omitted_warning("--url");
+    assert!(warning.contains("--url"), "el aviso debe nombrar el flag");
+    assert!(
+        warning.contains("no tiene átomo equivalente en MP4"),
+        "el aviso debe explicar el motivo"
+    );
+    assert!(
+        warning.contains("se omite"),
+        "el aviso debe indicar la omisión"
+    );
+}
+
+#[test]
+fn test_m4a_url_and_original_artist_omitted_with_two_warnings_and_no_write() {
+    let path = create_temp_m4a("omit_warn");
+    let before = fs::read(&path).unwrap();
+
+    let options = Mp4EditOptions {
+        url: Some("https://artista.com"),
+        original_artist: Some("Autor"),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).unwrap();
+
+    // Los dos campos omitidos no constituyen un cambio real…
+    assert!(
+        !report.changed,
+        "los dos campos omitidos no implican cambio"
+    );
+    // …pero sí dos avisos, uno por campo.
+    assert_eq!(report.warnings.len(), 2, "debe haber dos avisos");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("--url")),
+        "debe avisarse de --url"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("--original-artist")),
+        "debe avisarse de --original-artist"
+    );
+
+    // El archivo no se reescribe (byte a byte idéntico) y no se creó ningún tag.
+    assert_eq!(before, fs::read(&path).unwrap());
+    assert!(read_mp4_tag(&path).unwrap().is_none());
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_m4a_url_omitted_but_title_still_written() {
+    let path = create_temp_m4a("url_with_title");
+    let options = Mp4EditOptions {
+        url: Some("https://artista.com"),
+        title: Some("Cancion"),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).unwrap();
+    assert!(report.changed);
+    assert_eq!(report.warnings.len(), 1, "solo `--url` avisa");
+
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Cancion"));
+    // No se crea ningún átomo freeform de reemplazo.
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), b"----:com.apple.iTunes"),
+        "no debe crearse un átomo freeform para la URL"
+    );
+
+    cleanup_file(&path);
+}
+
 // --- Tabla de alias compartida por MP3 y MP4 --------------------------------
 
 #[test]

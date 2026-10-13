@@ -1057,6 +1057,12 @@ pub struct Mp4EditOptions<'a> {
     pub album_sort: Option<&'a str>,
     /// Carátula (`covr`); `None` si no se indicó `--cover`.
     pub cover: Option<Mp4Cover<'a>>,
+    /// URL asociada (`--url`). No tiene átomo equivalente en MP4: se omite con
+    /// aviso, sin escribir nada.
+    pub url: Option<&'a str>,
+    /// Artista original (`--original-artist`). No tiene átomo equivalente en
+    /// MP4: se omite con aviso, sin escribir nada.
+    pub original_artist: Option<&'a str>,
 }
 
 /// Resultado de aplicar metadatos a un tag MP4.
@@ -1091,6 +1097,15 @@ pub fn mp4_year_absorbed_warning(date: &str, year: i32) -> String {
         "⚠️  Advertencia: --year {year} queda absorbido por --date \"{date}\" en el átomo ©day \
          (el año es el prefijo de la fecha); se escribe la fecha."
     )
+}
+
+/// Construye el warning (en español) de un campo de `edit` que no tiene átomo
+/// equivalente en MP4 (`--url` y `--original-artist`).
+///
+/// Se emite por stderr, el campo se omite y la operación continúa con el resto
+/// de flags. No se crea ningún átomo *freeform* que supla la omisión.
+pub fn mp4_field_omitted_warning(flag: &str) -> String {
+    format!("⚠️  El campo '{flag}' no tiene átomo equivalente en MP4; se omite.")
 }
 
 /// Construye el warning (en español) que acompaña a una carátula WebP escrita en
@@ -1260,6 +1275,18 @@ pub fn apply_metadata_mp4(tag: &mut Tag, options: &Mp4EditOptions<'_>) -> Mp4Edi
             options.date.unwrap_or_default(),
             options.year.unwrap_or_default(),
         ));
+    }
+
+    // `--url` y `--original-artist` no tienen átomo equivalente en `ilst`: se
+    // omiten con aviso, sin escribir ningún átomo y sin marcar el reporte como
+    // cambiado (para que, si son los únicos flags, el archivo no se reescriba).
+    if options.url.is_some() {
+        report.warnings.push(mp4_field_omitted_warning("--url"));
+    }
+    if options.original_artist.is_some() {
+        report
+            .warnings
+            .push(mp4_field_omitted_warning("--original-artist"));
     }
 
     report

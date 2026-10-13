@@ -505,6 +505,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     artist_sort: artist_sort.as_deref(),
                     album_sort: album_sort.as_deref(),
                     cover: cover_input,
+                    url: url.as_deref(),
+                    original_artist: original_artist.as_deref(),
                 };
 
                 let report = match edit_mp4(file, &mp4_options) {
@@ -513,8 +515,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 // Confirmaciones. `--url` y `--original-artist` no tienen
-                // átomo en MP4, así que no se confirman aquí (su aviso llega
-                // con el grupo 6).
+                // átomo en MP4: `edit_mp4` ya avisa por stderr de su omisión,
+                // así que aquí no se confirman.
                 if let Some(title) = title {
                     println!("✓ Título: {}", title);
                 }
