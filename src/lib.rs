@@ -16,16 +16,25 @@
 //! La librería también expone la detección del formato de audio por *magic
 //! bytes* ([`detect_format`]), que decide sobre el contenido del archivo y
 //! nunca sobre la extensión del nombre.
+//!
+//! Para los contenedores MP4 (`.m4a`, `.mp4`, `.m4b`) la librería trabaja sobre
+//! el tag genérico [`lofty::tag::Tag`] de tipo [`TagType::Mp4Ilst`], que cubre
+//! todo el mapeo de átomos `ilst` que necesita el CLI. El mapeo flag→átomo vive
+//! en una única tabla ([`MP4_ATOM_MAP`]) y la escritura se orquesta con
+//! [`edit_mp4`], que crea el árbol `moov.udta.meta.ilst` cuando el archivo no lo
+//! tiene. El subtítulo se escribe en el átomo *freeform*
+//! `----:com.apple.iTunes:SUBTITLE`, que `lofty` mapea a
+//! [`ItemKey::TrackSubtitle`].
 
 use lofty::TextEncoding;
 use lofty::config::WriteOptions;
+use lofty::file::TaggedFileExt;
 use lofty::id3::v2::{
     Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
 use lofty::picture::{MimeType, Picture, PictureType};
-use lofty::tag::Accessor;
-use lofty::tag::TagType;
 use lofty::tag::items::Timestamp;
+use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
@@ -315,7 +324,100 @@ pub fn add_cover_art(
     Ok(())
 }
 
-/// Elimina tags específicos del archivo
+/// Identificador canónico de un tag del CLI, independiente del nombre (inglés o
+/// español) con el que se indique y del formato del archivo.
+///
+/// Es la salida de [`classify_tag_alias`], la **única** tabla de alias del
+/// proyecto: tanto el borrado de MP3 ([`remove_tags`]) como el de MP4
+/// ([`remove_tags_mp4`]) parten de este mismo identificador, de modo que la
+/// lista de nombres aceptados no está duplicada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagKind {
+    /// Título de la canción.
+    Title,
+    /// Artista.
+    Artist,
+    /// Álbum.
+    Album,
+    /// Año.
+    Year,
+    /// Género.
+    Genre,
+    /// Número de pista.
+    Track,
+    /// Temporada.
+    Season,
+    /// Fecha de grabación.
+    Date,
+    /// Copyright.
+    Copyright,
+    /// Compositor.
+    Composer,
+    /// Subtítulo / descripción.
+    Subtitle,
+    /// Artista original (sin equivalente en MP4).
+    OriginalArtist,
+    /// Artista del álbum.
+    AlbumArtist,
+    /// Carátula.
+    Cover,
+    /// Letra.
+    Lyrics,
+    /// URL asociada (sin equivalente en MP4).
+    Url,
+    /// Flag de compilación (Apple).
+    Compilation,
+    /// Orden de clasificación del álbum (Apple).
+    AlbumSort,
+    /// Orden de clasificación del artista (Apple).
+    ArtistSort,
+    /// Orden de clasificación del título (Apple).
+    TitleSort,
+}
+
+/// Lista de nombres de tag válidos, tal y como se muestra al usuario cuando
+/// indica uno desconocido. Es la representación legible de la tabla de alias.
+pub const VALID_TAG_NAMES: &str = "title, artist, album, year, genre, track, season, date, \
+                                    copyright, composer, subtitle, original_artist, album_artist, \
+                                    cover, lyrics, url, compilation, album_sort, artist_sort, \
+                                    title_sort";
+
+/// Clasifica un nombre de tag (en inglés o en español) en su [`TagKind`].
+///
+/// Es la **única** tabla de alias del proyecto: la comparten el borrado de MP3
+/// y el de MP4. La comparación no distingue mayúsculas. Devuelve `None` para un
+/// nombre desconocido.
+pub fn classify_tag_alias(name: &str) -> Option<TagKind> {
+    Some(match name.to_lowercase().as_str() {
+        "title" | "título" => TagKind::Title,
+        "artist" | "artista" => TagKind::Artist,
+        "album" | "álbum" => TagKind::Album,
+        "year" | "año" => TagKind::Year,
+        "genre" | "género" | "genero" => TagKind::Genre,
+        "track" | "pista" => TagKind::Track,
+        "season" | "temporada" => TagKind::Season,
+        "date" | "fecha" => TagKind::Date,
+        "copyright" => TagKind::Copyright,
+        "composer" | "compositor" => TagKind::Composer,
+        "subtitle" | "subtítulo" | "subtitulo" | "description" | "descripción" | "descripcion" => {
+            TagKind::Subtitle
+        }
+        "original_artist" | "original-artist" | "artista_original" | "artista-original" => {
+            TagKind::OriginalArtist
+        }
+        "album_artist" | "album-artist" | "artista_album" | "artista-album" => TagKind::AlbumArtist,
+        "cover" | "carátula" | "caratula" => TagKind::Cover,
+        "lyrics" | "letra" => TagKind::Lyrics,
+        "url" => TagKind::Url,
+        "compilation" | "compilación" | "compilacion" => TagKind::Compilation,
+        "album_sort" | "album-sort" | "orden_album" | "orden-album" => TagKind::AlbumSort,
+        "artist_sort" | "artist-sort" | "orden_artista" | "orden-artista" => TagKind::ArtistSort,
+        "title_sort" | "title-sort" | "orden_titulo" | "orden-titulo" => TagKind::TitleSort,
+        _ => return None,
+    })
+}
+
+/// Elimina tags específicos del tag ID3
 ///
 /// # Tags soportados (con nombres alternativos en español)
 ///
@@ -347,92 +449,91 @@ pub fn remove_tags(tag: &mut Id3v2Tag, tags_to_remove: &[String]) -> bool {
     let mut changed = false;
 
     for tag_name in tags_to_remove {
-        let removed = match tag_name.to_lowercase().as_str() {
-            "title" | "título" => {
+        let removed = match classify_tag_alias(tag_name) {
+            Some(TagKind::Title) => {
                 tag.remove_title();
                 true
             }
-            "artist" | "artista" => {
+            Some(TagKind::Artist) => {
                 tag.remove_artist();
                 true
             }
-            "album" | "álbum" => {
+            Some(TagKind::Album) => {
                 tag.remove_album();
                 true
             }
-            "year" | "año" => {
+            Some(TagKind::Year) => {
                 let _ = tag.remove(&frame_id("TYER"));
                 true
             }
-            "genre" | "género" | "genero" => {
+            Some(TagKind::Genre) => {
                 tag.remove_genre();
                 true
             }
-            "track" | "pista" => {
+            Some(TagKind::Track) => {
                 tag.remove_track();
                 true
             }
-            "season" | "temporada" => {
+            Some(TagKind::Season) => {
                 tag.remove_disk();
                 true
             }
-            "date" | "fecha" => {
+            Some(TagKind::Date) => {
                 tag.remove_date();
                 true
             }
-            "copyright" => {
+            Some(TagKind::Copyright) => {
                 let _ = tag.remove(&frame_id("TCOP"));
                 true
             }
-            "composer" | "compositor" => {
+            Some(TagKind::Composer) => {
                 let _ = tag.remove(&frame_id("TCOM"));
                 true
             }
-            "subtitle" | "subtítulo" | "subtitulo" | "description" | "descripción"
-            | "descripcion" => {
+            Some(TagKind::Subtitle) => {
                 let _ = tag.remove(&frame_id("TIT3"));
                 true
             }
-            "original_artist" | "original-artist" | "artista_original" | "artista-original" => {
+            Some(TagKind::OriginalArtist) => {
                 let _ = tag.remove(&frame_id("TOPE"));
                 true
             }
-            "album_artist" | "album-artist" | "artista_album" | "artista-album" => {
+            Some(TagKind::AlbumArtist) => {
                 let _ = tag.remove(&frame_id("TPE2"));
                 true
             }
-            "cover" | "carátula" | "caratula" => {
+            Some(TagKind::Cover) => {
                 tag.retain(|frame| !matches!(frame, Frame::Picture(_)));
                 true
             }
-            "lyrics" | "letra" => {
+            Some(TagKind::Lyrics) => {
                 let _ = tag.remove(&frame_id("USLT"));
                 true
             }
-            "url" => {
+            Some(TagKind::Url) => {
                 let _ = tag.remove(&frame_id("WOAR"));
                 true
             }
-            "compilation" | "compilación" | "compilacion" => {
+            Some(TagKind::Compilation) => {
                 let _ = tag.remove(&frame_id("TCMP"));
                 true
             }
-            "album_sort" | "album-sort" | "orden_album" | "orden-album" => {
+            Some(TagKind::AlbumSort) => {
                 let _ = tag.remove(&frame_id("TSOA"));
                 true
             }
-            "artist_sort" | "artist-sort" | "orden_artista" | "orden-artista" => {
+            Some(TagKind::ArtistSort) => {
                 let _ = tag.remove(&frame_id("TSOP"));
                 true
             }
-            "title_sort" | "title-sort" | "orden_titulo" | "orden-titulo" => {
+            Some(TagKind::TitleSort) => {
                 let _ = tag.remove(&frame_id("TSOT"));
                 true
             }
-            _ => {
+            None => {
                 eprintln!(
-                    "⚠️  Tag desconocido: '{}'. Tags válidos: title, artist, album, year, genre, track, season, date, copyright, composer, subtitle, original_artist, album_artist, cover, lyrics, url, compilation, album_sort, artist_sort, title_sort",
-                    tag_name
+                    "⚠️  Tag desconocido: '{}'. Tags válidos: {}",
+                    tag_name, VALID_TAG_NAMES
                 );
                 false
             }
@@ -757,6 +858,631 @@ fn is_valid_mpeg_frame_header(header: &[u8]) -> bool {
     }
 
     true
+}
+
+// ---------------------------------------------------------------------------
+// Backend MP4 (metadatos estilo iTunes: átomos `ilst`)
+// ---------------------------------------------------------------------------
+
+/// Asignación de un flag del subcomando `edit` a su átomo `ilst` de MP4 y a la
+/// clave genérica [`ItemKey`] con la que `lofty` lo representa.
+///
+/// Esta estructura y la tabla [`MP4_ATOM_MAP`] son la **única fuente** del
+/// mapeo flag → átomo del backend MP4: tanto la escritura
+/// ([`apply_metadata_mp4`]) como los tests la consultan, de modo que el mapeo
+/// no queda repartido en ramas dispersas por función.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mp4AtomMapping {
+    /// Nombre del flag del CLI, tal y como lo acepta `edit` (p. ej. `--title`).
+    pub flag: &'static str,
+    /// Identificador del átomo dentro de `ilst`. Para los átomos de copyright la
+    /// forma es `©xxx`; el subtítulo es un átomo *freeform* con la forma
+    /// `----:com.apple.iTunes:SUBTITLE`.
+    pub atom: &'static str,
+    /// Clave genérica de `lofty` asociada al átomo, o `None` cuando el valor no
+    /// se guarda como item de texto (la carátula `covr`, que se gestiona como
+    /// [`Picture`]).
+    pub item_key: Option<ItemKey>,
+}
+
+/// Mapeo único de los 18 flags del CLI a los átomos `ilst` de MP4.
+///
+/// Cubre las 18 asignaciones de la tabla del contrato (`specs/m4a-tagging`) con
+/// 17 átomos distintos, porque `--date` y `--year` comparten el átomo `©day`.
+pub const MP4_ATOM_MAP: &[Mp4AtomMapping] = &[
+    Mp4AtomMapping {
+        flag: "--title",
+        atom: "©nam",
+        item_key: Some(ItemKey::TrackTitle),
+    },
+    Mp4AtomMapping {
+        flag: "--artist",
+        atom: "©ART",
+        item_key: Some(ItemKey::TrackArtist),
+    },
+    Mp4AtomMapping {
+        flag: "--album",
+        atom: "©alb",
+        item_key: Some(ItemKey::AlbumTitle),
+    },
+    Mp4AtomMapping {
+        flag: "--album-artist",
+        atom: "aART",
+        item_key: Some(ItemKey::AlbumArtist),
+    },
+    Mp4AtomMapping {
+        flag: "--date",
+        atom: "©day",
+        item_key: Some(ItemKey::RecordingDate),
+    },
+    Mp4AtomMapping {
+        flag: "--year",
+        atom: "©day",
+        item_key: Some(ItemKey::RecordingDate),
+    },
+    Mp4AtomMapping {
+        flag: "--genre",
+        atom: "©gen",
+        item_key: Some(ItemKey::Genre),
+    },
+    Mp4AtomMapping {
+        flag: "--track",
+        atom: "trkn",
+        item_key: Some(ItemKey::TrackNumber),
+    },
+    Mp4AtomMapping {
+        flag: "--season",
+        atom: "disk",
+        item_key: Some(ItemKey::DiscNumber),
+    },
+    Mp4AtomMapping {
+        flag: "--composer",
+        atom: "©wrt",
+        item_key: Some(ItemKey::Composer),
+    },
+    Mp4AtomMapping {
+        flag: "--copyright",
+        atom: "cprt",
+        item_key: Some(ItemKey::CopyrightMessage),
+    },
+    Mp4AtomMapping {
+        flag: "--lyrics",
+        atom: "©lyr",
+        item_key: Some(ItemKey::UnsyncLyrics),
+    },
+    Mp4AtomMapping {
+        flag: "--cover",
+        atom: "covr",
+        item_key: None,
+    },
+    Mp4AtomMapping {
+        flag: "--compilation",
+        atom: "cpil",
+        item_key: Some(ItemKey::FlagCompilation),
+    },
+    Mp4AtomMapping {
+        flag: "--title-sort",
+        atom: "sonm",
+        item_key: Some(ItemKey::TrackTitleSortOrder),
+    },
+    Mp4AtomMapping {
+        flag: "--artist-sort",
+        atom: "soar",
+        item_key: Some(ItemKey::TrackArtistSortOrder),
+    },
+    Mp4AtomMapping {
+        flag: "--album-sort",
+        atom: "soal",
+        item_key: Some(ItemKey::AlbumTitleSortOrder),
+    },
+    Mp4AtomMapping {
+        flag: "--subtitle",
+        atom: "----:com.apple.iTunes:SUBTITLE",
+        item_key: Some(ItemKey::TrackSubtitle),
+    },
+];
+
+impl Mp4AtomMapping {
+    /// Devuelve la asignación del flag indicado, si existe en [`MP4_ATOM_MAP`].
+    pub fn for_flag(flag: &str) -> Option<&'static Mp4AtomMapping> {
+        MP4_ATOM_MAP.iter().find(|mapping| mapping.flag == flag)
+    }
+}
+
+/// Opciones de edición de metadatos sobre un contenedor MP4.
+///
+/// Refleja uno a uno los flags del subcomando `edit`. Los campos que no se
+/// indican quedan a `None` (o a `false`/vacío) y no se escriben.
+#[derive(Debug, Clone, Default)]
+pub struct Mp4EditOptions<'a> {
+    /// Título de la canción (`©nam`).
+    pub title: Option<&'a str>,
+    /// Artistas; se unen con `"; "` en un único átomo `©ART`.
+    pub artists: &'a [String],
+    /// Álbum (`©alb`).
+    pub album: Option<&'a str>,
+    /// Artista del álbum (`aART`).
+    pub album_artist: Option<&'a str>,
+    /// Año (`©day`, compartido con `date`).
+    pub year: Option<i32>,
+    /// Género (`©gen`).
+    pub genre: Option<&'a str>,
+    /// Número de pista (`trkn`).
+    pub track: Option<u32>,
+    /// Temporada / número de disco (`disk`).
+    pub season: Option<u32>,
+    /// Fecha de grabación (`©day`, compartido con `year`).
+    pub date: Option<&'a str>,
+    /// Copyright (`cprt`).
+    pub copyright: Option<&'a str>,
+    /// Compositor (`©wrt`).
+    pub composer: Option<&'a str>,
+    /// Subtítulo (`----:com.apple.iTunes:SUBTITLE`).
+    pub subtitle: Option<&'a str>,
+    /// Letra (`©lyr`).
+    pub lyrics: Option<&'a str>,
+    /// Marca de compilación (`cpil`).
+    pub compilation: bool,
+    /// Orden de clasificación del título (`sonm`).
+    pub title_sort: Option<&'a str>,
+    /// Orden de clasificación del artista (`soar`).
+    pub artist_sort: Option<&'a str>,
+    /// Orden de clasificación del álbum (`soal`).
+    pub album_sort: Option<&'a str>,
+}
+
+/// Resultado de aplicar metadatos a un tag MP4.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Mp4EditReport {
+    /// `true` si se aplicó al menos un cambio.
+    pub changed: bool,
+    /// Warnings en español que el CLI debe emitir por stderr (p. ej. la colisión
+    /// de fecha y año). [`edit_mp4`] ya los emite, y además los devuelve para
+    /// que sean verificables por los tests.
+    pub warnings: Vec<String>,
+}
+
+/// Resuelve el valor del átomo `©day`, compartido por `--date` y `--year`.
+///
+/// Devuelve el valor a escribir y si el año quedó absorbido por la fecha. La
+/// regla es que `--date` gana por ser el valor más específico y que el año es su
+/// prefijo; si solo se indica uno de los dos, se escribe sin colisión.
+pub fn resolve_mp4_date(date: Option<&str>, year: Option<i32>) -> (Option<String>, bool) {
+    match (date, year) {
+        (Some(date), Some(_)) => (Some(date.to_owned()), true),
+        (Some(date), None) => (Some(date.to_owned()), false),
+        (None, Some(year)) => (Some(year.to_string()), false),
+        (None, None) => (None, false),
+    }
+}
+
+/// Construye el warning (en español) de la colisión de `--year` y `--date` en
+/// el átomo `©day`, cuando gana la fecha.
+pub fn mp4_year_absorbed_warning(date: &str, year: i32) -> String {
+    format!(
+        "⚠️  Advertencia: --year {year} queda absorbido por --date \"{date}\" en el átomo ©day \
+         (el año es el prefijo de la fecha); se escribe la fecha."
+    )
+}
+
+/// Devuelve la [`ItemKey`] de texto asociada a un flag del CLI según
+/// [`MP4_ATOM_MAP`].
+///
+/// Solo se invoca con los flags constantes que tienen átomo de texto, por lo
+/// que la ausencia de mapeo es inalcanzable.
+fn mp4_item_key(flag: &str) -> ItemKey {
+    Mp4AtomMapping::for_flag(flag)
+        .and_then(|mapping| mapping.item_key)
+        .expect("todo flag de texto tiene una ItemKey asociada en MP4_ATOM_MAP")
+}
+
+/// Escribe un valor de texto en el átomo MP4 que corresponde al flag, tomando
+/// la [`ItemKey`] de la tabla [`MP4_ATOM_MAP`] como única fuente del mapeo.
+fn set_mp4_text(tag: &mut Tag, flag: &str, value: &str) {
+    tag.insert_text(mp4_item_key(flag), value.to_owned());
+}
+
+/// Aplica los metadatos indicados a un tag [`TagType::Mp4Ilst`].
+///
+/// El mapeo de cada flag a su átomo se resuelve siempre a través de
+/// [`MP4_ATOM_MAP`]. La carátula (`--cover`) no se escribe aquí: se gestiona
+/// como [`Picture`] y es responsabilidad del grupo de carátulas.
+///
+/// # Colisión de fecha
+///
+/// `--date` y `--year` comparten el átomo `©day`. Cuando se indican ambos, gana
+/// `--date` y se añade un warning al informe (sin abortar la operación).
+#[must_use]
+pub fn apply_metadata_mp4(tag: &mut Tag, options: &Mp4EditOptions<'_>) -> Mp4EditReport {
+    let mut report = Mp4EditReport::default();
+
+    if let Some(title) = options.title {
+        set_mp4_text(tag, "--title", title);
+        report.changed = true;
+    }
+
+    if !options.artists.is_empty() {
+        set_mp4_text(tag, "--artist", &options.artists.join("; "));
+        report.changed = true;
+    }
+
+    if let Some(album) = options.album {
+        set_mp4_text(tag, "--album", album);
+        report.changed = true;
+    }
+
+    if let Some(album_artist) = options.album_artist {
+        set_mp4_text(tag, "--album-artist", album_artist);
+        report.changed = true;
+    }
+
+    if let Some(genre) = options.genre {
+        set_mp4_text(tag, "--genre", genre);
+        report.changed = true;
+    }
+
+    if let Some(track) = options.track {
+        set_mp4_text(tag, "--track", &track.to_string());
+        report.changed = true;
+    }
+
+    if let Some(season) = options.season {
+        set_mp4_text(tag, "--season", &season.to_string());
+        report.changed = true;
+    }
+
+    if let Some(copyright) = options.copyright {
+        set_mp4_text(tag, "--copyright", copyright);
+        report.changed = true;
+    }
+
+    if let Some(composer) = options.composer {
+        set_mp4_text(tag, "--composer", composer);
+        report.changed = true;
+    }
+
+    if let Some(subtitle) = options.subtitle {
+        set_mp4_text(tag, "--subtitle", subtitle);
+        report.changed = true;
+    }
+
+    if let Some(lyrics) = options.lyrics {
+        set_mp4_text(tag, "--lyrics", lyrics);
+        report.changed = true;
+    }
+
+    if options.compilation {
+        set_mp4_text(tag, "--compilation", "1");
+        report.changed = true;
+    }
+
+    if let Some(title_sort) = options.title_sort {
+        set_mp4_text(tag, "--title-sort", title_sort);
+        report.changed = true;
+    }
+
+    if let Some(artist_sort) = options.artist_sort {
+        set_mp4_text(tag, "--artist-sort", artist_sort);
+        report.changed = true;
+    }
+
+    if let Some(album_sort) = options.album_sort {
+        set_mp4_text(tag, "--album-sort", album_sort);
+        report.changed = true;
+    }
+
+    // `--date` y `--year` comparten `©day`: gana `--date`, con aviso.
+    let (day, year_absorbed) = resolve_mp4_date(options.date, options.year);
+    if let Some(value) = day {
+        set_mp4_text(tag, "--date", &value);
+        report.changed = true;
+    }
+    if year_absorbed {
+        // En esta rama ambos están presentes, así que los desempaquetados son
+        // seguros; se usan valores por defecto solo como red de seguridad.
+        report.warnings.push(mp4_year_absorbed_warning(
+            options.date.unwrap_or_default(),
+            options.year.unwrap_or_default(),
+        ));
+    }
+
+    report
+}
+
+/// Lee el tag `ilst` (tipo [`TagType::Mp4Ilst`]) de un contenedor MP4.
+///
+/// Devuelve `Ok(None)` cuando el archivo es un MP4 válido pero no tiene átomo
+/// de metadatos.
+///
+/// El formato se decide por el **contenido**, no por la extensión del nombre: se
+/// usa [`lofty::read_from`], que sondea los *magic bytes*, en lugar de
+/// `lofty::read_from_path`, que adivina el formato a partir del sufijo del
+/// archivo. Así un MP4 renombrado a `.mp3` se interpreta como MP4.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer o no se puede interpretar
+/// como contenedor MP4.
+pub fn read_mp4_tag(path: &Path) -> Result<Option<Tag>, Box<dyn std::error::Error>> {
+    let mut file = File::open(path)?;
+    let tagged = lofty::read_from(&mut file)?;
+    Ok(tagged.tag(TagType::Mp4Ilst).cloned())
+}
+
+/// Escribe el tag en un contenedor MP4.
+///
+/// `lofty` crea el árbol `moov.udta.meta.ilst` cuando no existe y actualiza los
+/// tamaños de `moov`/`udta` preservando el resto de átomos (en especial las
+/// pistas de audio).
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no existe, no es escribible o no se puede
+/// interpretar como contenedor MP4.
+pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::Error>> {
+    tag.save_to_path(path, WriteOptions::default())?;
+    Ok(())
+}
+
+/// Lee, aplica y guarda los metadatos MP4 indicados sobre un archivo.
+///
+/// Es la operación completa del subcomando `edit` sobre un MP4: lee el tag
+/// existente (o crea uno nuevo `Mp4Ilst` si el archivo no tiene metadatos),
+/// aplica los cambios y, solo si hay alguno, reescribe el archivo. Los warnings
+/// de la operación se emiten por stderr y además se devuelven en el informe.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar o escribir.
+pub fn edit_mp4(
+    path: &Path,
+    options: &Mp4EditOptions<'_>,
+) -> Result<Mp4EditReport, Box<dyn std::error::Error>> {
+    let mut tag = read_mp4_tag(path)?.unwrap_or_else(|| Tag::new(TagType::Mp4Ilst));
+
+    let report = apply_metadata_mp4(&mut tag, options);
+
+    if report.changed {
+        write_mp4_tag(path, &tag)?;
+    }
+
+    for warning in &report.warnings {
+        eprintln!("{warning}");
+    }
+
+    Ok(report)
+}
+
+/// Elimina del tag `ilst` todos los átomos que corresponden a un [`TagKind`].
+///
+/// La carátula se elimina vaciando la lista de imágenes; el resto de campos se
+/// borra con [`Tag::remove_key`]. Los dos tags sin equivalente en MP4
+/// ([`TagKind::Url`] y [`TagKind::OriginalArtist`]) no tienen átomo asociado.
+fn remove_mp4_kind(tag: &mut Tag, kind: TagKind) -> bool {
+    let item_key = match kind {
+        TagKind::Title => ItemKey::TrackTitle,
+        TagKind::Artist => ItemKey::TrackArtist,
+        TagKind::Album => ItemKey::AlbumTitle,
+        TagKind::Year | TagKind::Date => ItemKey::RecordingDate,
+        TagKind::Genre => ItemKey::Genre,
+        TagKind::Track => ItemKey::TrackNumber,
+        TagKind::Season => ItemKey::DiscNumber,
+        TagKind::Copyright => ItemKey::CopyrightMessage,
+        TagKind::Composer => ItemKey::Composer,
+        TagKind::Subtitle => ItemKey::TrackSubtitle,
+        TagKind::AlbumArtist => ItemKey::AlbumArtist,
+        TagKind::Lyrics => {
+            // `©lyr` se lee como `Lyrics` o `UnsyncLyrics`; se borran ambos.
+            tag.remove_key(ItemKey::UnsyncLyrics);
+            tag.remove_key(ItemKey::Lyrics);
+            return true;
+        }
+        TagKind::Compilation => ItemKey::FlagCompilation,
+        TagKind::AlbumSort => ItemKey::AlbumTitleSortOrder,
+        TagKind::ArtistSort => ItemKey::TrackArtistSortOrder,
+        TagKind::TitleSort => ItemKey::TrackTitleSortOrder,
+        TagKind::Cover => {
+            for index in (0..tag.pictures().len()).rev() {
+                tag.remove_picture(index);
+            }
+            return true;
+        }
+        // Sin átomo equivalente en MP4: no hay nada que eliminar.
+        TagKind::Url | TagKind::OriginalArtist => return false,
+    };
+
+    tag.remove_key(item_key);
+    true
+}
+
+/// Elimina tags específicos de un tag `ilst` de MP4.
+///
+/// Acepta **los mismos nombres** (en inglés y en español) que [`remove_tags`]
+/// sobre MP3, porque ambos comparten la tabla de alias [`classify_tag_alias`].
+/// Los tags sin átomo equivalente en MP4 ([`TagKind::Url`] y
+/// [`TagKind::OriginalArtist`]) se omiten con un aviso, sin abortar.
+///
+/// # Retorna
+///
+/// `true` si se reconoció al menos un tag (aunque el átomo no existiera), del
+/// mismo modo que [`remove_tags`].
+pub fn remove_tags_mp4(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
+    let mut changed = false;
+
+    for tag_name in tags_to_remove {
+        let removed = match classify_tag_alias(tag_name) {
+            Some(TagKind::Url | TagKind::OriginalArtist) => {
+                eprintln!(
+                    "⚠️  El tag '{}' no tiene átomo equivalente en MP4; se omite.",
+                    tag_name
+                );
+                false
+            }
+            Some(kind) => remove_mp4_kind(tag, kind),
+            None => {
+                eprintln!(
+                    "⚠️  Tag desconocido: '{}'. Tags válidos: {}",
+                    tag_name, VALID_TAG_NAMES
+                );
+                false
+            }
+        };
+
+        if removed {
+            println!("✓ Eliminado: {}", tag_name);
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Elimina físicamente el bloque de metadatos `ilst` de un contenedor MP4.
+///
+/// Borra el árbol `moov.udta.meta.ilst` dejando el audio (`mdat`) intacto, del
+/// mismo modo que [`remove_all_id3`] hace con los bloques ID3 de un MP3. La
+/// presencia previa se determina leyendo el propio archivo con `lofty`.
+///
+/// # Retorna
+///
+/// `true` si el archivo tenía metadatos (y se eliminaron), `false` si no tenía.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar como MP4 o
+/// escribir.
+pub fn remove_all_mp4(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let had_metadata = read_mp4_tag(file)?.is_some();
+
+    if had_metadata {
+        let mut handle = OpenOptions::new().read(true).write(true).open(file)?;
+        TagType::Mp4Ilst.remove_from(&mut handle, WriteOptions::default())?;
+    }
+
+    Ok(had_metadata)
+}
+
+/// Indica si un valor de fecha `©day` es un año suelto (`YYYY`).
+///
+/// El átomo `©day` lo comparten `--year` (que escribe `YYYY`) y `--date` (que
+/// escribe `YYYY`, `YYYY-MM` o `YYYY-MM-DD`). Esta heurística decide bajo qué
+/// etiqueta mostrarlo en [`display_tags_mp4`] conservando la coherencia con MP3.
+fn is_year_only(value: &str) -> bool {
+    value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Muestra los metadatos de un tag `ilst` de MP4 en el mismo formato legible
+/// (mismos emojis y mismos nombres de campo) que [`display_tags`] usa en MP3.
+///
+/// El átomo `©day` se muestra como «Año» cuando contiene un año suelto y como
+/// «Fecha» en caso contrario, de modo que el conjunto de campos coincide con el
+/// que produce `show` sobre MP3 para los mismos flags.
+pub fn display_tags_mp4(tag: &Tag) {
+    println!("\n📋 Metadatos encontrados:\n");
+    println!("═══════════════════════════════════════");
+
+    if let Some(title) = tag.get_string(ItemKey::TrackTitle) {
+        println!("🎵 Título:    {}", title);
+    }
+
+    if let Some(artist) = tag.get_string(ItemKey::TrackArtist) {
+        println!("🎤 Artista:   {}", artist);
+    }
+
+    if let Some(album) = tag.get_string(ItemKey::AlbumTitle) {
+        println!("💿 Álbum:     {}", album);
+    }
+
+    if let Some(day) = tag.get_string(ItemKey::RecordingDate) {
+        if is_year_only(day) {
+            println!("📅 Año:       {}", day);
+        } else {
+            println!("📆 Fecha:     {}", day);
+        }
+    }
+
+    if let Some(genre) = tag.get_string(ItemKey::Genre) {
+        println!("🎸 Género:    {}", genre);
+    }
+
+    if let Some(track) = tag.track() {
+        println!("#️⃣  Pista:     {}", track);
+    }
+
+    if let Some(season) = tag.disk() {
+        println!("📺 Temporada: {}", season);
+    }
+
+    if let Some(copyright) = tag.get_string(ItemKey::CopyrightMessage) {
+        println!("©️  Copyright: {}", copyright);
+    }
+
+    if let Some(composer) = tag.get_string(ItemKey::Composer) {
+        println!("🎼 Compositor: {}", composer);
+    }
+
+    if let Some(subtitle) = tag.get_string(ItemKey::TrackSubtitle) {
+        println!("📄 Subtítulo: {}", subtitle);
+    }
+
+    if let Some(album_artist) = tag.get_string(ItemKey::AlbumArtist) {
+        println!("👥 Artista del álbum: {}", album_artist);
+    }
+
+    // Mostrar carátulas si existen
+    let pictures = tag.pictures();
+    if !pictures.is_empty() {
+        println!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+        for (i, pic) in pictures.iter().enumerate() {
+            println!(
+                "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
+                i + 1,
+                pic.pic_type(),
+                pic.mime_type().map(|m| m.as_str()).unwrap_or(""),
+                pic.data().len()
+            );
+        }
+    }
+
+    // Mostrar letra si existe (`©lyr` se lee como `Lyrics`/`UnsyncLyrics`)
+    if let Some(lyrics) = tag
+        .get_string(ItemKey::UnsyncLyrics)
+        .or_else(|| tag.get_string(ItemKey::Lyrics))
+    {
+        println!("📝 Letra:");
+        // Mostrar solo las primeras 3 líneas como preview
+        let lines: Vec<&str> = lyrics.lines().collect();
+        for line in lines.iter().take(3) {
+            println!("   {}", line);
+        }
+        if lines.len() > 3 {
+            println!("   ... ({} líneas más)", lines.len() - 3);
+        }
+    }
+
+    // Mostrar metadatos de Apple si existen
+    if tag.get_string(ItemKey::FlagCompilation) == Some("1") {
+        println!(" Compilación: Sí");
+    }
+
+    if let Some(album_sort) = tag.get_string(ItemKey::AlbumTitleSortOrder) {
+        println!("🔤 Orden álbum: {}", album_sort);
+    }
+
+    if let Some(artist_sort) = tag.get_string(ItemKey::TrackArtistSortOrder) {
+        println!("🔤 Orden artista: {}", artist_sort);
+    }
+
+    if let Some(title_sort) = tag.get_string(ItemKey::TrackTitleSortOrder) {
+        println!("🔤 Orden título: {}", title_sort);
+    }
+
+    let item_count = tag.items().len();
+    if item_count > 0 {
+        println!("\n📦 Total de metadatos: {}", item_count);
+    }
+
+    println!("═══════════════════════════════════════\n");
 }
 
 #[cfg(test)]

@@ -181,34 +181,40 @@ enum Command {
     },
 }
 
-/// Comprueba el formato del archivo por su **contenido** y aborta si no es MP3.
+/// Backend con el que se procesa un archivo ya aceptado.
+///
+/// El enrutado es la única pieza que decide entre el camino MP3 y el MP4; los
+/// subcomandos nunca vuelven a consultar el formato.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    /// MP3: se usa el backend ID3v2.
+    Mp3,
+    /// MP4/M4A: se usa el backend `ilst`.
+    Mp4,
+}
+
+/// Comprueba que el archivo existe y que su formato (por contenido) está
+/// soportado, y devuelve el backend con el que hay que procesarlo.
 ///
 /// La decisión se toma sobre los *magic bytes* del archivo, nunca sobre la
-/// extensión del nombre. Ante un formato no soportado —incluido MP4, cuyo
-/// backend todavía no existe— se escribe un mensaje en español en stderr, se
-/// sale con código distinto de cero y **no se escribe ni un byte del archivo**.
+/// extensión del nombre. Ante un formato no soportado (FLAC, OGG, WAV, …) o
+/// contenido no reconocible se escribe un mensaje en español en stderr, se sale
+/// con código distinto de cero y **no se escribe ni un byte del archivo**.
 ///
 /// Se mantiene el mensaje literal de archivo inexistente que ya usaba el CLI.
-fn require_mp3_format(file: &Path) {
+fn detect_supported_format(file: &Path) -> Backend {
     if !file.exists() {
         eprintln!("Error: El archivo '{}' no existe", file.display());
         std::process::exit(1);
     }
 
     match detect_format(file) {
-        Ok(AudioFormat::Mp3) => {}
-        Ok(AudioFormat::Mp4) => {
-            eprintln!(
-                "Error: El archivo '{}' está en un formato MP4/M4A que todavía no está soportado. \
-                 Formatos soportados: MP3.",
-                file.display()
-            );
-            std::process::exit(1);
-        }
+        Ok(AudioFormat::Mp3) => Backend::Mp3,
+        Ok(AudioFormat::Mp4) => Backend::Mp4,
         Ok(AudioFormat::Unsupported) => {
             eprintln!(
                 "Error: El archivo '{}' está en un formato de audio no soportado. \
-                 Formatos soportados: MP3.",
+                 Formatos soportados: MP3 y MP4.",
                 file.display()
             );
             std::process::exit(1);
@@ -216,7 +222,7 @@ fn require_mp3_format(file: &Path) {
         Ok(AudioFormat::Unknown) => {
             eprintln!(
                 "Error: No se pudo determinar el formato del archivo '{}'. \
-                 Formatos soportados: MP3.",
+                 Formatos soportados: MP3 y MP4.",
                 file.display()
             );
             std::process::exit(1);
@@ -232,25 +238,54 @@ fn require_mp3_format(file: &Path) {
     }
 }
 
+/// Informa de un fallo al procesar un contenedor MP4 y termina con código 1.
+///
+/// El mensaje enumera los formatos soportados (MP3 y MP4) además de la causa,
+/// de modo que un archivo con cabecera MP4 pero estructura inválida se rechaza
+/// con un error legible y sin haberlo modificado.
+fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
+    eprintln!(
+        "Error: No se pudo procesar el archivo MP4 '{}': {}",
+        file.display(),
+        error
+    );
+    eprintln!(
+        "  El archivo tiene formato MP4/M4A pero no se pudo interpretar. \
+         Formatos soportados: MP3 y MP4."
+    );
+    std::process::exit(1);
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match &args.command {
-        Command::Show { file } => {
-            // Verificar que el archivo existe y que su formato (por contenido) es MP3
-            require_mp3_format(file);
+        Command::Show { file } => match detect_supported_format(file) {
+            Backend::Mp3 => {
+                // Leer tag
+                let tag = match read_id3v2_tag(file) {
+                    Some(tag) => tag,
+                    None => {
+                        eprintln!("⚠️  No se encontraron tags ID3 en '{}'", file.display());
+                        std::process::exit(0);
+                    }
+                };
 
-            // Leer tag
-            let tag = match read_id3v2_tag(file) {
-                Some(tag) => tag,
-                None => {
-                    eprintln!("⚠️  No se encontraron tags ID3 en '{}'", file.display());
-                    std::process::exit(0);
-                }
-            };
+                display_tags(&tag);
+            }
+            Backend::Mp4 => {
+                let tag = match read_mp4_tag(file) {
+                    Ok(Some(tag)) => tag,
+                    Ok(None) => {
+                        eprintln!("⚠️  No se encontraron metadatos en '{}'", file.display());
+                        std::process::exit(0);
+                    }
+                    Err(error) => report_mp4_error(file, error),
+                };
 
-            display_tags(&tag);
-        }
+                display_tags_mp4(&tag);
+            }
+        },
         Command::Edit {
             file,
             title,
@@ -273,206 +308,350 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             album_sort,
             artist_sort,
             title_sort,
-        } => {
-            // Verificar que el archivo existe y que su formato (por contenido) es MP3
-            require_mp3_format(file);
-
-            // Leer o crear tag
-            let mut tag = match read_id3v2_tag(file) {
-                Some(tag) => {
-                    println!("Tags existentes encontrados en '{}'", file.display());
-                    tag
-                }
-                None => {
-                    println!("Creando nuevos tags para '{}'", file.display());
-                    Id3v2Tag::new()
-                }
-            };
-
-            // Aplicar metadatos
-            let changed = apply_metadata(
-                &mut tag,
-                title.as_deref(),
-                artist,
-                album.as_deref(),
-                *year,
-                genre.as_deref(),
-                *track,
-                *season,
-                date.as_deref(),
-                copyright.as_deref(),
-                composer.as_deref(),
-                subtitle.as_deref(),
-                original_artist.as_deref(),
-                album_artist.as_deref(),
-            );
-
-            // Imprimir cambios aplicados
-            if let Some(title) = title {
-                println!("✓ Título: {}", title);
-            }
-            if !artist.is_empty() {
-                println!("✓ Artista(s): {}", artist.join("; "));
-            }
-            if let Some(album) = album {
-                println!("✓ Álbum: {}", album);
-            }
-            if let Some(year) = year {
-                println!("✓ Año: {}", year);
-            }
-            if let Some(genre) = genre {
-                println!("✓ Género: {}", genre);
-            }
-            if let Some(track) = track {
-                println!("✓ Pista: {}", track);
-            }
-            if let Some(season) = season {
-                println!("✓ Temporada: {}", season);
-            }
-            if let Some(date) = date {
-                println!("✓ Fecha: {}", date);
-            }
-            if let Some(copyright) = copyright {
-                println!("✓ Copyright: {}", copyright);
-            }
-            if let Some(composer) = composer {
-                println!("✓ Compositor: {}", composer);
-            }
-            if let Some(subtitle) = subtitle {
-                println!("✓ Subtítulo: {}", subtitle);
-            }
-            if let Some(original_artist) = original_artist {
-                println!("✓ Artista original: {}", original_artist);
-            }
-            if let Some(album_artist) = album_artist {
-                println!("✓ Artista del álbum: {}", album_artist);
-            }
-
-            // Añadir lyrics
-            let mut lyrics_added = false;
-            if let Some(lyrics_text) = lyrics {
-                add_lyrics(&mut tag, lyrics_text);
-                let line_count = lyrics_text.lines().count();
-                println!("✓ Letra: {} línea(s)", line_count);
-                lyrics_added = true;
-            }
-
-            // Añadir URL
-            let mut url_added = false;
-            if let Some(url) = url {
-                add_url(&mut tag, url);
-                println!("✓ URL: {}", url);
-                url_added = true;
-            }
-
-            // Añadir metadatos de Apple
-            let apple_added = add_apple_metadata(
-                &mut tag,
-                *compilation,
-                album_sort.as_deref(),
-                artist_sort.as_deref(),
-                title_sort.as_deref(),
-            );
-
-            if *compilation {
-                println!("✓ Compilación: Sí");
-            }
-            if let Some(sort) = album_sort {
-                println!("✓ Orden álbum: {}", sort);
-            }
-            if let Some(sort) = artist_sort {
-                println!("✓ Orden artista: {}", sort);
-            }
-            if let Some(sort) = title_sort {
-                println!("✓ Orden título: {}", sort);
-            }
-
-            // Añadir carátula
-            let mut cover_added = false;
-            if let Some(cover_path) = cover {
-                if !cover_path.exists() {
-                    eprintln!(
-                        "Error: El archivo de carátula '{}' no existe",
-                        cover_path.display()
-                    );
-                    std::process::exit(1);
-                }
-
-                let cover_data = fs::read(cover_path)?;
-                match add_cover_art(&mut tag, cover_path, cover_data) {
-                    Ok(_) => {
-                        println!("✓ Carátula añadida desde: {}", cover_path.display());
-                        cover_added = true;
+        } => match detect_supported_format(file) {
+            Backend::Mp3 => {
+                // Leer o crear tag
+                let mut tag = match read_id3v2_tag(file) {
+                    Some(tag) => {
+                        println!("Tags existentes encontrados en '{}'", file.display());
+                        tag
                     }
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
+                    None => {
+                        println!("Creando nuevos tags para '{}'", file.display());
+                        Id3v2Tag::new()
+                    }
+                };
+
+                // Aplicar metadatos
+                let changed = apply_metadata(
+                    &mut tag,
+                    title.as_deref(),
+                    artist,
+                    album.as_deref(),
+                    *year,
+                    genre.as_deref(),
+                    *track,
+                    *season,
+                    date.as_deref(),
+                    copyright.as_deref(),
+                    composer.as_deref(),
+                    subtitle.as_deref(),
+                    original_artist.as_deref(),
+                    album_artist.as_deref(),
+                );
+
+                // Imprimir cambios aplicados
+                if let Some(title) = title {
+                    println!("✓ Título: {}", title);
+                }
+                if !artist.is_empty() {
+                    println!("✓ Artista(s): {}", artist.join("; "));
+                }
+                if let Some(album) = album {
+                    println!("✓ Álbum: {}", album);
+                }
+                if let Some(year) = year {
+                    println!("✓ Año: {}", year);
+                }
+                if let Some(genre) = genre {
+                    println!("✓ Género: {}", genre);
+                }
+                if let Some(track) = track {
+                    println!("✓ Pista: {}", track);
+                }
+                if let Some(season) = season {
+                    println!("✓ Temporada: {}", season);
+                }
+                if let Some(date) = date {
+                    println!("✓ Fecha: {}", date);
+                }
+                if let Some(copyright) = copyright {
+                    println!("✓ Copyright: {}", copyright);
+                }
+                if let Some(composer) = composer {
+                    println!("✓ Compositor: {}", composer);
+                }
+                if let Some(subtitle) = subtitle {
+                    println!("✓ Subtítulo: {}", subtitle);
+                }
+                if let Some(original_artist) = original_artist {
+                    println!("✓ Artista original: {}", original_artist);
+                }
+                if let Some(album_artist) = album_artist {
+                    println!("✓ Artista del álbum: {}", album_artist);
+                }
+
+                // Añadir lyrics
+                let mut lyrics_added = false;
+                if let Some(lyrics_text) = lyrics {
+                    add_lyrics(&mut tag, lyrics_text);
+                    let line_count = lyrics_text.lines().count();
+                    println!("✓ Letra: {} línea(s)", line_count);
+                    lyrics_added = true;
+                }
+
+                // Añadir URL
+                let mut url_added = false;
+                if let Some(url) = url {
+                    add_url(&mut tag, url);
+                    println!("✓ URL: {}", url);
+                    url_added = true;
+                }
+
+                // Añadir metadatos de Apple
+                let apple_added = add_apple_metadata(
+                    &mut tag,
+                    *compilation,
+                    album_sort.as_deref(),
+                    artist_sort.as_deref(),
+                    title_sort.as_deref(),
+                );
+
+                if *compilation {
+                    println!("✓ Compilación: Sí");
+                }
+                if let Some(sort) = album_sort {
+                    println!("✓ Orden álbum: {}", sort);
+                }
+                if let Some(sort) = artist_sort {
+                    println!("✓ Orden artista: {}", sort);
+                }
+                if let Some(sort) = title_sort {
+                    println!("✓ Orden título: {}", sort);
+                }
+
+                // Añadir carátula
+                let mut cover_added = false;
+                if let Some(cover_path) = cover {
+                    if !cover_path.exists() {
+                        eprintln!(
+                            "Error: El archivo de carátula '{}' no existe",
+                            cover_path.display()
+                        );
                         std::process::exit(1);
                     }
-                }
-            }
 
-            // Guardar cambios
-            if changed || cover_added || lyrics_added || url_added || apple_added {
-                if let Err(e) = save_tag(file, &tag) {
-                    report_error(e);
-                }
-                println!("\n✅ Tags guardados correctamente en '{}'", file.display());
-            } else {
-                println!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
-            }
-        }
-        Command::Remove { file, tags, all } => {
-            // Verificar que el archivo existe y que su formato (por contenido) es MP3
-            require_mp3_format(file);
-
-            // Eliminar todos los tags (ID3v1 e ID3v2) físicamente
-            if *all {
-                let format = remove_all_id3(file)?;
-                match format {
-                    RemovedId3::None => {
-                        println!("⚠️  El archivo '{}' no tenía tags ID3", file.display());
-                    }
-                    RemovedId3::Id3v1 => {
-                        println!("✅ Tag ID3v1 eliminado de '{}'", file.display());
-                    }
-                    RemovedId3::Id3v2 => {
-                        println!("✅ Tag ID3v2 eliminado de '{}'", file.display());
-                    }
-                    RemovedId3::Both => {
-                        println!("✅ Tags ID3v1 e ID3v2 eliminados de '{}'", file.display());
+                    let cover_data = fs::read(cover_path)?;
+                    match add_cover_art(&mut tag, cover_path, cover_data) {
+                        Ok(_) => {
+                            println!("✓ Carátula añadida desde: {}", cover_path.display());
+                            cover_added = true;
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
                     }
                 }
-                return Ok(());
-            }
 
-            // Verificar que se especificaron tags para eliminar
-            if tags.is_empty() {
-                eprintln!("Error: Debes especificar al menos un tag para eliminar");
-                eprintln!("Ejemplo: id3cli remove cancion.mp3 title artist");
-                std::process::exit(1);
+                // Guardar cambios
+                if changed || cover_added || lyrics_added || url_added || apple_added {
+                    if let Err(e) = save_tag(file, &tag) {
+                        report_error(e);
+                    }
+                    println!("\n✅ Tags guardados correctamente en '{}'", file.display());
+                } else {
+                    println!(
+                        "\n⚠️  No se especificaron cambios. Usa --help para ver las opciones."
+                    );
+                }
             }
+            Backend::Mp4 => {
+                let mp4_options = Mp4EditOptions {
+                    title: title.as_deref(),
+                    artists: artist,
+                    album: album.as_deref(),
+                    album_artist: album_artist.as_deref(),
+                    year: *year,
+                    genre: genre.as_deref(),
+                    track: *track,
+                    season: *season,
+                    date: date.as_deref(),
+                    copyright: copyright.as_deref(),
+                    composer: composer.as_deref(),
+                    subtitle: subtitle.as_deref(),
+                    lyrics: lyrics.as_deref(),
+                    compilation: *compilation,
+                    title_sort: title_sort.as_deref(),
+                    artist_sort: artist_sort.as_deref(),
+                    album_sort: album_sort.as_deref(),
+                };
 
-            // Leer tag
-            let mut tag = match read_id3v2_tag(file) {
-                Some(tag) => tag,
-                None => {
-                    eprintln!("Error: No se encontraron tags ID3 en '{}'", file.display());
+                // La carátula de MP4 se implementa en el grupo 5 del cambio
+                // `m4a-support`; hasta entonces se avisa y se omite, sin
+                // escribir nada en el archivo.
+                if cover.is_some() {
+                    eprintln!(
+                        "⚠️  La carátula (--cover) todavía no está soportada en archivos MP4; se omite."
+                    );
+                }
+
+                let report = match edit_mp4(file, &mp4_options) {
+                    Ok(report) => report,
+                    Err(error) => report_mp4_error(file, error),
+                };
+
+                // Confirmaciones. `--url` y `--original-artist` no tienen
+                // átomo en MP4, así que no se confirman aquí (su aviso llega
+                // con el grupo 6).
+                if let Some(title) = title {
+                    println!("✓ Título: {}", title);
+                }
+                if !artist.is_empty() {
+                    println!("✓ Artista(s): {}", artist.join("; "));
+                }
+                if let Some(album) = album {
+                    println!("✓ Álbum: {}", album);
+                }
+                if let Some(album_artist) = album_artist {
+                    println!("✓ Artista del álbum: {}", album_artist);
+                }
+                if let Some(year) = year
+                    && date.is_none()
+                {
+                    println!("✓ Año: {}", year);
+                }
+                if let Some(genre) = genre {
+                    println!("✓ Género: {}", genre);
+                }
+                if let Some(track) = track {
+                    println!("✓ Pista: {}", track);
+                }
+                if let Some(season) = season {
+                    println!("✓ Temporada: {}", season);
+                }
+                if let Some(date) = date {
+                    println!("✓ Fecha: {}", date);
+                }
+                if let Some(copyright) = copyright {
+                    println!("✓ Copyright: {}", copyright);
+                }
+                if let Some(composer) = composer {
+                    println!("✓ Compositor: {}", composer);
+                }
+                if let Some(subtitle) = subtitle {
+                    println!("✓ Subtítulo: {}", subtitle);
+                }
+                if let Some(lyrics_text) = lyrics {
+                    println!("✓ Letra: {} línea(s)", lyrics_text.lines().count());
+                }
+                if *compilation {
+                    println!("✓ Compilación: Sí");
+                }
+                if let Some(sort) = album_sort {
+                    println!("✓ Orden álbum: {}", sort);
+                }
+                if let Some(sort) = artist_sort {
+                    println!("✓ Orden artista: {}", sort);
+                }
+                if let Some(sort) = title_sort {
+                    println!("✓ Orden título: {}", sort);
+                }
+
+                if report.changed {
+                    println!("\n✅ Tags guardados correctamente en '{}'", file.display());
+                } else {
+                    println!(
+                        "\n⚠️  No se especificaron cambios. Usa --help para ver las opciones."
+                    );
+                }
+            }
+        },
+        Command::Remove { file, tags, all } => match detect_supported_format(file) {
+            Backend::Mp3 => {
+                // Eliminar todos los tags (ID3v1 e ID3v2) físicamente
+                if *all {
+                    let format = remove_all_id3(file)?;
+                    match format {
+                        RemovedId3::None => {
+                            println!("⚠️  El archivo '{}' no tenía tags ID3", file.display());
+                        }
+                        RemovedId3::Id3v1 => {
+                            println!("✅ Tag ID3v1 eliminado de '{}'", file.display());
+                        }
+                        RemovedId3::Id3v2 => {
+                            println!("✅ Tag ID3v2 eliminado de '{}'", file.display());
+                        }
+                        RemovedId3::Both => {
+                            println!("✅ Tags ID3v1 e ID3v2 eliminados de '{}'", file.display());
+                        }
+                    }
+                    return Ok(());
+                }
+
+                // Verificar que se especificaron tags para eliminar
+                if tags.is_empty() {
+                    eprintln!("Error: Debes especificar al menos un tag para eliminar");
+                    eprintln!("Ejemplo: id3cli remove cancion.mp3 title artist");
                     std::process::exit(1);
                 }
-            };
 
-            // Eliminar tags
-            let removed = remove_tags(&mut tag, tags);
+                // Leer tag
+                let mut tag = match read_id3v2_tag(file) {
+                    Some(tag) => tag,
+                    None => {
+                        eprintln!("Error: No se encontraron tags ID3 en '{}'", file.display());
+                        std::process::exit(1);
+                    }
+                };
 
-            if removed {
-                if let Err(e) = save_tag(file, &tag) {
-                    report_error(e);
+                // Eliminar tags
+                let removed = remove_tags(&mut tag, tags);
+
+                if removed {
+                    if let Err(e) = save_tag(file, &tag) {
+                        report_error(e);
+                    }
+                    println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
+                } else {
+                    println!("\n⚠️  No se encontraron tags válidos para eliminar.");
                 }
-                println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
-            } else {
-                println!("\n⚠️  No se encontraron tags válidos para eliminar.");
             }
-        }
+            Backend::Mp4 => {
+                // Eliminar el bloque de metadatos `ilst` completo
+                if *all {
+                    match remove_all_mp4(file) {
+                        Ok(true) => {
+                            println!("✅ Metadatos eliminados de '{}'", file.display());
+                        }
+                        Ok(false) => {
+                            println!("⚠️  El archivo '{}' no tenía metadatos", file.display());
+                        }
+                        Err(error) => report_mp4_error(file, error),
+                    }
+                    return Ok(());
+                }
+
+                // Verificar que se especificaron tags para eliminar
+                if tags.is_empty() {
+                    eprintln!("Error: Debes especificar al menos un tag para eliminar");
+                    eprintln!("Ejemplo: id3cli remove cancion.m4a title artist");
+                    std::process::exit(1);
+                }
+
+                // Leer tag
+                let mut tag = match read_mp4_tag(file) {
+                    Ok(Some(tag)) => tag,
+                    Ok(None) => {
+                        eprintln!("Error: No se encontraron metadatos en '{}'", file.display());
+                        std::process::exit(1);
+                    }
+                    Err(error) => report_mp4_error(file, error),
+                };
+
+                // Eliminar tags (misma tabla de alias que en MP3)
+                let removed = remove_tags_mp4(&mut tag, tags);
+
+                if removed {
+                    if let Err(e) = write_mp4_tag(file, &tag) {
+                        report_mp4_error(file, e);
+                    }
+                    println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
+                } else {
+                    println!("\n⚠️  No se encontraron tags válidos para eliminar.");
+                }
+            }
+        },
     }
 
     Ok(())

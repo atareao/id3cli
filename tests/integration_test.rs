@@ -1,6 +1,8 @@
 use id3::{Tag, TagLike};
+use lofty::file::TaggedFileExt;
+use lofty::tag::{ItemKey, TagType};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -2614,7 +2616,9 @@ fn write_temp_bytes(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
-/// Cabecera mínima con el átomo `ftyp` en el offset 4 (contenedor MP4/M4A).
+/// Contenedor MP4 **malformado** a propósito: declara `ftyp` en el offset 4
+/// (por lo que se detecta como MP4/M4A) pero carece del átomo `moov`, de modo
+/// que cualquier backend que lo intente interpretar debe fallar de forma limpia.
 fn fake_mp4_bytes() -> Vec<u8> {
     let mut bytes = vec![0x00, 0x00, 0x00, 0x20];
     bytes.extend_from_slice(b"ftypM4A \x00\x00\x02\x00");
@@ -2653,9 +2657,12 @@ fn test_cli_mp3_renamed_to_m4a_is_edited_as_mp3() {
 }
 
 #[test]
-fn test_cli_rejects_m4a_and_leaves_file_untouched() {
-    // Mientras el backend MP4 no exista, un archivo detectado como MP4 se
-    // rechaza en las tres operaciones sin modificar un solo byte.
+fn test_cli_rejects_malformed_mp4_and_leaves_file_untouched() {
+    // El backend MP4 (`.m4a`, `.mp4`, `.m4b`) ya está soportado, así que este
+    // test NO comprueba que MP4 esté sin soportar. `fake_mp4_bytes` solo declara
+    // el átomo `ftyp`: le falta `moov`, así que no es un contenedor válido. Un
+    // MP4 malformado debe fallar en las tres operaciones con un error legible
+    // (que enumera los formatos soportados) y sin tocar un solo byte del archivo.
     for (op, extra) in [
         ("show", Vec::<&str>::new()),
         ("edit", vec!["--title", "X"]),
@@ -2674,16 +2681,16 @@ fn test_cli_rejects_m4a_and_leaves_file_untouched() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !output.status.success(),
-            "'{op}' sobre un .m4a debe terminar con código distinto de cero (stderr: {stderr})"
+            "'{op}' sobre un MP4 malformado debe terminar con código distinto de cero (stderr: {stderr})"
         );
         assert!(
-            stderr.contains("MP3"),
-            "'{op}' debe enumerar los formatos soportados en stderr, fue: {stderr}"
+            stderr.contains("MP3") && stderr.contains("MP4"),
+            "'{op}' debe enumerar los formatos soportados (MP3 y MP4) en stderr, fue: {stderr}"
         );
         assert_eq!(
             fs::read(&path).expect("Failed to read temp file"),
             before,
-            "'{op}' NO debe modificar el archivo .m4a"
+            "'{op}' NO debe modificar un MP4 malformado"
         );
 
         cleanup_file(&path);
@@ -2691,38 +2698,62 @@ fn test_cli_rejects_m4a_and_leaves_file_untouched() {
 }
 
 #[test]
-fn test_cli_mp4_renamed_to_mp3_is_rejected() {
-    // Contenido MP4 (ftyp en el offset 4) con extensión `.mp3`: se decide por el
-    // contenido real, así que se rechaza en vez de tratarse como MP3.
-    let path = write_temp_bytes("clip_as_mp3", "mp3", &fake_mp4_bytes());
-    let before = fs::read(&path).expect("Failed to read temp file");
+fn test_cli_mp4_renamed_to_mp3_is_detected_by_content() {
+    // La extensión del nombre NO decide el formato: el contenido sí. Un M4A
+    // **válido** renombrado a `.mp3` debe detectarse por sus magic bytes como
+    // MP4 y procesarse con el backend MP4, no como MP3 ni rechazarse.
+    let path = unique_temp_path("clip_as_mp3", "mp3");
+    fs::copy(fixture_m4a_path(), &path).expect("Failed to copy M4A fixture");
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--quiet",
-            "--",
-            "edit",
-            path.to_str().unwrap(),
-            "--title",
-            "X",
-        ])
-        .output()
-        .expect("Failed to execute command");
+    // `edit` debe tener éxito: el enrutado llega al backend MP4 por contenido.
+    let edit = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Renombrado a mp3",
+    ]);
+    assert!(
+        edit.status.success(),
+        "un M4A con nombre .mp3 debe editarse por su contenido, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // El título se relee a través del propio CLI, que vuelve a decidir por
+    // contenido pese a la extensión `.mp3`.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
     assert!(
-        !output.status.success(),
-        "un MP4 con nombre .mp3 debe rechazarse por su contenido (stderr: {stderr})"
+        show.status.success(),
+        "`show` sobre un M4A con nombre .mp3 no debe fallar por formato, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
     );
+    let stdout = String::from_utf8_lossy(&show.stdout);
     assert!(
-        stderr.contains("MP4") || stderr.contains("MP3"),
-        "stderr debería indicar el problema de formato, fue: {stderr}"
+        stdout.contains("Renombrado a mp3"),
+        "el título escrito debe releerse, stdout: {stdout}"
     );
+
+    // `remove` también opera por contenido sobre el archivo renombrado.
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "title"]);
+    assert!(
+        remove.status.success(),
+        "`remove` sobre un M4A con nombre .mp3 debe funcionar, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    let show_after = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show_after.status.success());
+    assert!(
+        !String::from_utf8_lossy(&show_after.stdout).contains("Renombrado a mp3"),
+        "el título debe haberse eliminado, stdout: {}",
+        String::from_utf8_lossy(&show_after.stdout)
+    );
+
+    // Y sigue siendo un MP4 válido: conserva el átomo `ftyp` en el offset 4,
+    // luego nunca se ha reescrito como MP3.
+    let bytes = fs::read(&path).expect("Failed to read temp file");
     assert_eq!(
-        fs::read(&path).expect("Failed to read temp file"),
-        before,
-        "el archivo no debe modificarse"
+        &bytes[4..8],
+        b"ftyp",
+        "el archivo debe seguir siendo MP4 por contenido"
     );
 
     cleanup_file(&path);
@@ -2853,6 +2884,315 @@ fn test_cli_rejects_too_short_file() {
         "un archivo demasiado corto debe informar de que no se pudo decidir, fue: {stderr}"
     );
     assert_eq!(fs::read(&path).expect("Failed to read temp file"), before);
+
+    cleanup_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// MP4 (M4A): enrutado del CLI y operaciones completas (tareas 4.9–4.11)
+// ---------------------------------------------------------------------------
+
+/// Ruta absoluta al fixture MP4 real y sin metadatos, versionado en el repo.
+fn fixture_m4a_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.m4a")
+}
+
+/// Copia el fixture MP4 real a una ruta temporal única sobre la que trabajar.
+///
+/// Nunca se opera sobre el fixture versionado directamente.
+fn create_temp_m4a(label: &str) -> PathBuf {
+    let path = unique_temp_path(label, "m4a");
+    fs::copy(fixture_m4a_path(), &path).expect("Failed to copy M4A fixture");
+    path
+}
+
+/// Comprueba si un bloque de bytes contiene una secuencia dada.
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// Devuelve el *payload* del átomo `mdat` (sin su cabecera), delimitado por su
+/// tamaño declarado.
+///
+/// Sirve para comprobar que el audio sobrevive byte a byte a las operaciones
+/// que solo tocan el árbol de metadatos `moov.udta.meta.ilst`. Se compara solo
+/// el payload porque en este fixture `moov` va **después** de `mdat` y cambia
+/// al escribir metadatos.
+fn mdat_payload(bytes: &[u8]) -> Vec<u8> {
+    let pos = bytes
+        .windows(4)
+        .position(|window| window == b"mdat")
+        .expect("el archivo MP4 debe contener el átomo `mdat`");
+    let size32 = u32::from_be_bytes(bytes[pos - 4..pos].try_into().unwrap());
+    let payload_end = if size32 == 0 {
+        bytes.len()
+    } else if size32 == 1 {
+        let size64 = u64::from_be_bytes(bytes[pos + 4..pos + 12].try_into().unwrap());
+        (pos - 4) + size64 as usize
+    } else {
+        (pos - 4) + size32 as usize
+    };
+    let payload_start = if size32 == 1 { pos + 12 } else { pos + 4 };
+    bytes[payload_start..payload_end].to_vec()
+}
+
+/// Lee el tag `ilst` de un M4A que se acaba de escribir con el CLI.
+fn read_m4a_tag(path: &Path) -> Option<lofty::tag::Tag> {
+    let tagged = lofty::read_from_path(path).expect("lofty debe leer el M4A");
+    tagged.tag(TagType::Mp4Ilst).cloned()
+}
+
+/// Ejecuta `cargo run -- <args>` y devuelve la salida, fallando con contexto.
+fn run_cli(args: &[&str]) -> std::process::Output {
+    let mut full = vec!["run", "--quiet", "--"];
+    full.extend_from_slice(args);
+    let output = Command::new("cargo")
+        .args(&full)
+        .output()
+        .expect("Failed to execute command");
+    if !output.status.success() {
+        eprintln!("args: {args:?}");
+        eprintln!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    output
+}
+
+#[test]
+fn test_cli_m4a_edit_then_show_roundtrip() {
+    let path = create_temp_m4a("roundtrip");
+
+    let output = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Canción M4A",
+        "--artist",
+        "Artista",
+        "--album",
+        "Álbum",
+        "--genre",
+        "Rock",
+        "--date",
+        "2026-10-13",
+    ]);
+    assert!(output.status.success());
+
+    // Los valores vuelven a leerse con `lofty` desde el propio archivo.
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Canción M4A"));
+    assert_eq!(tag.get_string(ItemKey::TrackArtist), Some("Artista"));
+    assert_eq!(tag.get_string(ItemKey::AlbumTitle), Some("Álbum"));
+    assert_eq!(tag.get_string(ItemKey::Genre), Some("Rock"));
+    assert_eq!(tag.get_string(ItemKey::RecordingDate), Some("2026-10-13"));
+
+    // Y `show` los muestra.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(stdout.contains("Canción M4A"), "stdout: {stdout}");
+    assert!(stdout.contains("Artista"), "stdout: {stdout}");
+    assert!(stdout.contains("Álbum"), "stdout: {stdout}");
+    assert!(stdout.contains("Rock"), "stdout: {stdout}");
+    assert!(stdout.contains("2026-10-13"), "stdout: {stdout}");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_three_operations_do_not_fail_for_format() {
+    let path = create_temp_m4a("three_ops");
+    let file = path.to_str().unwrap();
+
+    // `show` sobre un M4A sin metadatos: aviso, sin error.
+    let show_empty = run_cli(&["show", file]);
+    assert!(show_empty.status.success());
+    let stderr = String::from_utf8_lossy(&show_empty.stderr);
+    assert!(
+        !stderr.contains("no soportado") && !stderr.contains("no está soportado"),
+        "`show` no debe fallar por formato: {stderr}"
+    );
+
+    // `edit`: escribe y no falla por formato.
+    let edit = run_cli(&["edit", file, "--title", "X"]);
+    assert!(edit.status.success());
+
+    // `show` de nuevo: ya hay metadatos.
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    assert!(String::from_utf8_lossy(&show.stdout).contains('X'));
+
+    // `remove` de un tag concreto: no falla por formato.
+    let remove = run_cli(&["remove", file, "title"]);
+    assert!(remove.status.success());
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_and_mp3_show_same_field_set() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("coherence");
+
+    let common: [&str; 12] = [
+        "--title",
+        "Canción",
+        "--artist",
+        "Artista",
+        "--album",
+        "Álbum",
+        "--genre",
+        "Rock",
+        "--track",
+        "4",
+        "--date",
+        "2026-10-13",
+    ];
+
+    for path in [&mp3_path, &m4a_path] {
+        let mut args = vec!["edit", path.to_str().unwrap()];
+        args.extend_from_slice(&common);
+        let edit = run_cli(&args);
+        assert!(edit.status.success());
+    }
+
+    let mp3_out = run_cli(&["show", mp3_path.to_str().unwrap()]);
+    let m4a_out = run_cli(&["show", m4a_path.to_str().unwrap()]);
+    assert!(mp3_out.status.success());
+    assert!(m4a_out.status.success());
+    let mp3_stdout = String::from_utf8_lossy(&mp3_out.stdout);
+    let m4a_stdout = String::from_utf8_lossy(&m4a_out.stdout);
+
+    // El mismo conjunto de campos debe mostrarse en ambos formatos.
+    for label in [
+        "🎵 Título:",
+        "🎤 Artista:",
+        "💿 Álbum:",
+        "🎸 Género:",
+        "#️⃣  Pista:",
+        "📆 Fecha:",
+    ] {
+        assert!(mp3_stdout.contains(label), "MP3 debería mostrar {label}");
+        assert!(m4a_stdout.contains(label), "M4A debería mostrar {label}");
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+}
+
+#[test]
+fn test_cli_m4a_remove_spanish_tag_keeps_rest() {
+    let path = create_temp_m4a("remove_es");
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit", file, "--title", "T", "--artist", "A", "--album", "Alb",
+    ]);
+    assert!(edit.status.success());
+
+    // Eliminar SOLO el título, con su nombre en español.
+    let remove = run_cli(&["remove", file, "título"]);
+    assert!(remove.status.success());
+
+    let tag = read_m4a_tag(&path).expect("el resto de átomos debe seguir legible");
+    assert_eq!(
+        tag.get_string(ItemKey::TrackTitle),
+        None,
+        "título eliminado"
+    );
+    assert_eq!(
+        tag.get_string(ItemKey::TrackArtist),
+        Some("A"),
+        "el artista no mencionado debe sobrevivir"
+    );
+    assert_eq!(
+        tag.get_string(ItemKey::AlbumTitle),
+        Some("Alb"),
+        "el álbum no mencionado debe sobrevivir"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_remove_all_removes_ilst_and_preserves_audio() {
+    let path = create_temp_m4a("remove_all");
+
+    // El audio del fixture (a partir de `mdat`) es lo que debe sobrevivir.
+    let audio_before = mdat_payload(&fs::read(&path).expect("leer fixture"));
+
+    let edit = run_cli(&["edit", path.to_str().unwrap(), "--title", "T"]);
+    assert!(edit.status.success());
+
+    // Editar crea el bloque `ilst` sin tocar el audio.
+    let with_meta = fs::read(&path).expect("leer tras edit");
+    assert!(
+        contains_bytes(&with_meta, b"ilst"),
+        "edit debe crear el bloque ilst"
+    );
+    assert_eq!(
+        mdat_payload(&with_meta),
+        audio_before,
+        "editar no debe modificar el audio"
+    );
+
+    // `remove --all` elimina el bloque completo.
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "--all"]);
+    assert!(remove.status.success());
+    assert!(
+        String::from_utf8_lossy(&remove.stdout).contains("eliminados"),
+        "debe confirmar el borrado"
+    );
+
+    let after = fs::read(&path).expect("leer tras remove --all");
+    assert!(
+        !contains_bytes(&after, b"ilst"),
+        "el bloque de metadatos ilst debe desaparecer"
+    );
+    assert_eq!(
+        mdat_payload(&after),
+        audio_before,
+        "el audio debe permanecer intacto tras remove --all"
+    );
+    // El archivo sigue siendo MP4 por contenido.
+    assert_eq!(&after[4..8], b"ftyp", "ftyp debe seguir en el offset 4");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_remove_all_without_metadata_warns() {
+    // Copia del fixture recién generado: no tiene metadatos.
+    let path = create_temp_m4a("remove_all_empty");
+
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "--all"]);
+    assert!(remove.status.success(), "sin metadatos debe salir con 0");
+    let stdout = String::from_utf8_lossy(&remove.stdout);
+    assert!(
+        stdout.contains("no tenía metadatos"),
+        "debe avisar de que no había metadatos, fue: {stdout}"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_unsupported_format_message_lists_mp3_and_mp4() {
+    let path = write_temp_bytes("flac_msg", "flac", b"fLaC\x00\x00\x00\x22");
+
+    let output = run_cli(&["edit", path.to_str().unwrap(), "--title", "X"]);
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MP3") && stderr.contains("MP4"),
+        "el mensaje de formato no soportado debe enumerar MP3 y MP4, fue: {stderr}"
+    );
 
     cleanup_file(&path);
 }
