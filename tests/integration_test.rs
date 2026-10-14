@@ -951,12 +951,23 @@ fn test_cli_remove_lyrics() {
 
     assert!(output.status.success());
 
-    // Verificar que se eliminó
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    let has_lyrics = tag
-        .frames()
-        .any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
-    assert!(!has_lyrics);
+    // Verificar que se eliminó el último campo y, con él, el bloque ID3v2: el
+    // archivo queda solo con audio, de modo que releerlo NO debe encontrar
+    // ninguna etiqueta. `Tag::read_from_path` devuelve error cuando no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar el último campo el archivo no debe conservar ningún bloque ID3v2"
+    );
+
+    // El audio MUST quedar byte a byte intacto: tras añadir y luego eliminar el
+    // único campo, el archivo debe volver a ser idéntico al fixture original
+    // (audio sin ningún tag).
+    let original = fs::read(fixture_mp3_path()).expect("Failed to read fixture");
+    let resulting = fs::read(&mp3_path).expect("Failed to read resulting file");
+    assert_eq!(
+        resulting, original,
+        "el audio debe quedar byte a byte intacto tras eliminar el último campo"
+    );
 
     cleanup_file(&mp3_path);
 }
@@ -1071,10 +1082,13 @@ fn test_cli_remove_url() {
 
     assert!(output.status.success());
 
-    // Verificar que se eliminó
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    let has_url = tag.frames().any(|f| f.id() == "WOAR");
-    assert!(!has_url);
+    // Verificar que se eliminó el último campo y, con él, el bloque ID3v2: el
+    // archivo queda solo con audio, de modo que releerlo NO debe encontrar
+    // ninguna etiqueta. `Tag::read_from_path` devuelve error cuando no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar el último campo el archivo no debe conservar ningún bloque ID3v2"
+    );
 
     cleanup_file(&mp3_path);
 }
@@ -1215,9 +1229,13 @@ fn test_cli_remove_compilation() {
 
     assert!(output.status.success());
 
-    // Verificar que se eliminó
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert!(tag.get("TCMP").is_none());
+    // Verificar que se eliminó el último campo y, con él, el bloque ID3v2: el
+    // archivo queda solo con audio, de modo que releerlo NO debe encontrar
+    // ninguna etiqueta. `Tag::read_from_path` devuelve error cuando no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar el último campo el archivo no debe conservar ningún bloque ID3v2"
+    );
 
     cleanup_file(&mp3_path);
 }
@@ -1263,10 +1281,14 @@ fn test_cli_remove_apple_sort_orders() {
 
     assert!(output.status.success());
 
-    // Verificar que se eliminaron
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert!(tag.get("TSOA").is_none());
-    assert!(tag.get("TSOP").is_none());
+    // Verificar que se eliminaron los últimos campos y, con ellos, el bloque
+    // ID3v2: el archivo queda solo con audio, de modo que releerlo NO debe
+    // encontrar ninguna etiqueta. `Tag::read_from_path` devuelve error cuando
+    // no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar los últimos campos el archivo no debe conservar ningún bloque ID3v2"
+    );
 
     cleanup_file(&mp3_path);
 }
@@ -1525,12 +1547,14 @@ fn test_cli_remove_new_tags() {
 
     assert!(output.status.success());
 
-    // Verificar eliminación
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert!(tag.get("TCOM").is_none());
-    assert!(tag.get("TIT3").is_none());
-    assert!(tag.get("TOPE").is_none());
-    assert!(tag.album_artist().is_none());
+    // Verificar que se eliminaron los últimos campos y, con ellos, el bloque
+    // ID3v2: el archivo queda solo con audio, de modo que releerlo NO debe
+    // encontrar ninguna etiqueta. `Tag::read_from_path` devuelve error cuando
+    // no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar los últimos campos el archivo no debe conservar ningún bloque ID3v2"
+    );
 
     cleanup_file(&mp3_path);
 }
@@ -1671,9 +1695,13 @@ fn test_cli_remove_season() {
 
     assert!(output.status.success());
 
-    // Verificar eliminación
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert!(tag.disc().is_none());
+    // Verificar que se eliminó el último campo y, con él, el bloque ID3v2: el
+    // archivo queda solo con audio, de modo que releerlo NO debe encontrar
+    // ninguna etiqueta. `Tag::read_from_path` devuelve error cuando no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar el último campo el archivo no debe conservar ningún bloque ID3v2"
+    );
 
     cleanup_file(&mp3_path);
 }
@@ -2401,13 +2429,14 @@ fn test_cli_remove_mixed_language_names() {
         .expect("Failed to execute command");
     assert!(output.status.success());
 
-    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
-    assert_eq!(tag.title(), None, "title debería eliminarse");
-    assert_eq!(tag.artist(), None, "artista debería eliminarse");
-    let has_lyrics = tag
-        .frames()
-        .any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
-    assert!(!has_lyrics, "letra debería eliminar el frame USLT");
+    // Se eliminaron los tres campos del tag (title, artist y lyrics), es decir
+    // el último de ellos y, con él, el bloque ID3v2 completo: el archivo queda
+    // solo con audio, de modo que releerlo NO debe encontrar ninguna etiqueta.
+    // `Tag::read_from_path` devuelve error cuando no hay tag.
+    assert!(
+        Tag::read_from_path(&mp3_path).is_err(),
+        "tras eliminar el último campo el archivo no debe conservar ningún bloque ID3v2"
+    );
 
     cleanup_file(&mp3_path);
 }
