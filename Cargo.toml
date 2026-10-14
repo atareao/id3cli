@@ -6,6 +6,8 @@ description = "CLI para leer y escribir metadatos ID3v2.4 en MP3 y átomos estil
 license = "MIT"
 repository = "https://github.com/atareao/id3cli"
 homepage = "https://github.com/atareao/id3cli"
+keywords = ["id3", "mp3", "mp4", "metadata", "cli"]
+categories = ["command-line-utilities", "multimedia::audio", "filesystem"]
 
 [dependencies]
 lofty = "0.25"

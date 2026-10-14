@@ -53,6 +53,9 @@ jobs:
       - name: Generate changelog
         run: git-cliff -o CHANGELOG.md --tag "v${{ steps.version.outputs.value }}"
 
+      - name: Refresh Cargo.lock
+        run: cargo metadata --format-version 1 > /dev/null
+
       - name: Commit, tag and push
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
