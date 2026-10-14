@@ -2559,3 +2559,105 @@ fn mdat_payload(bytes: &[u8]) -> Vec<u8> {
     let payload_start = if size32 == 1 { pos + 12 } else { pos + 4 };
     bytes[payload_start..payload_end].to_vec()
 }
+
+/// Extrae la lista entrecomillada de una clave que el cambio fija en UNA sola
+/// línea dentro de `[package]` (p. ej. `keywords = ["id3", ...]`).
+///
+/// Sin dependencias de TOML: recorrido de líneas y recorte de comillas. Si la
+/// clave no aparece o no se puede interpretar devuelve un `Err` con un mensaje
+/// legible, para que el test falle por el contrato y no por un pánico opaco.
+fn lista_manifiesto(manifiesto: &str, clave: &str) -> Result<Vec<String>, String> {
+    let prefijo = format!("{clave} = [");
+    let linea = manifiesto
+        .lines()
+        .map(str::trim)
+        .find(|linea| linea.starts_with(&prefijo))
+        .ok_or_else(|| {
+            format!("`Cargo.toml` no declara `{clave}` en una línea `{clave} = [...]`")
+        })?;
+
+    let interior = linea
+        .strip_prefix(&prefijo)
+        .and_then(|resto| resto.strip_suffix(']'))
+        .ok_or_else(|| {
+            format!("la línea de `{clave}` debe ser `{clave} = [\"…\"]` en una sola línea: {linea}")
+        })?;
+
+    let mut elementos = Vec::new();
+    for trozo in interior.split(',') {
+        let trozo = trozo.trim();
+        if trozo.is_empty() {
+            continue; // permite la coma final
+        }
+        let valor = trozo
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .ok_or_else(|| {
+                format!("el elemento `{trozo}` de `{clave}` debe ir entre comillas dobles")
+            })?;
+        elementos.push(valor.to_string());
+    }
+    Ok(elementos)
+}
+
+#[test]
+fn test_manifiesto_keywords_validos() {
+    let manifiesto = include_str!("../Cargo.toml");
+    let keywords =
+        lista_manifiesto(manifiesto, "keywords").unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(
+        (1..=5).contains(&keywords.len()),
+        "crates.io admite entre 1 y 5 keywords, pero `Cargo.toml` declara {}: {keywords:?}",
+        keywords.len()
+    );
+    for keyword in &keywords {
+        assert!(
+            keyword.len() <= 20,
+            "la keyword `{keyword}` supera los 20 caracteres que exige crates.io"
+        );
+        assert!(keyword.is_ascii(), "la keyword `{keyword}` debe ser ASCII");
+        assert_eq!(
+            keyword.to_ascii_lowercase(),
+            *keyword,
+            "la keyword `{keyword}` debe estar en minúsculas"
+        );
+        assert!(
+            keyword
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'),
+            "la keyword `{keyword}` solo admite caracteres de `[a-z0-9_-]`"
+        );
+    }
+    assert_eq!(
+        keywords.as_slice(),
+        ["id3", "mp3", "mp4", "metadata", "cli"],
+        "el cambio fija estas keywords exactas en `Cargo.toml`"
+    );
+}
+
+#[test]
+fn test_manifiesto_categories_validas() {
+    let manifiesto = include_str!("../Cargo.toml");
+    let categories =
+        lista_manifiesto(manifiesto, "categories").unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(
+        !categories.is_empty(),
+        "`categories` no puede estar vacío en `Cargo.toml`"
+    );
+
+    // Slugs verificados contra la taxonomía oficial de crates.io.
+    const SLUGS_VALIDOS: [&str; 3] = ["command-line-utilities", "multimedia::audio", "filesystem"];
+    for category in &categories {
+        assert!(
+            SLUGS_VALIDOS.contains(&category.as_str()),
+            "la categoría `{category}` no pertenece a la taxonomía de crates.io: {SLUGS_VALIDOS:?}"
+        );
+    }
+    assert_eq!(
+        categories.as_slice(),
+        ["command-line-utilities", "multimedia::audio", "filesystem"],
+        "el cambio fija estas categorías exactas en `Cargo.toml`"
+    );
+}
