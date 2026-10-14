@@ -1,35 +1,53 @@
 use id3::{Tag, TagLike};
+use lofty::file::TaggedFileExt;
+use lofty::tag::{ItemKey, TagType};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-/// Helper para crear un archivo MP3 temporal válido para testing
+/// Ruta absoluta al fixture MP3 real y sin tags, versionado en el repositorio.
+///
+/// El fixture contiene audio MPEG reproducible (0,5 s de tono a 32 kbps) y
+/// **ningún** tag ID3 (ni v1 ni v2). Se usa en lugar de fabricar bytes falsos
+/// para que el fichero sea también parseable por el futuro backend `lofty`.
+fn fixture_mp3_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.mp3")
+}
+
+/// Helper para crear un archivo MP3 temporal válido para testing.
+///
+/// Copia el fixture MP3 real (audio sin tags) a una ruta temporal única en
+/// lugar de escribir bytes falsos. El archivo devuelto NO tiene ningún tag
+/// ID3, de modo que `edit` ejercita la rama de creación de tags nuevos.
 fn create_temp_mp3() -> PathBuf {
-    let temp_dir = std::env::temp_dir();
-    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
-    let mp3_path = temp_dir.join(format!("test_{}_{}.mp3", timestamp, id));
-
-    // Crear un archivo MP3 mínimo (solo tag ID3v2.4)
-    // El crate id3 puede trabajar con archivos que solo tienen el tag
-    let minimal_id3 = vec![
-        0x49, 0x44, 0x33, 0x04, 0x00, 0x00, // ID3v2.4 header
-        0x00, 0x00, 0x00, 0x00, // Size (0)
-    ];
-    fs::write(&mp3_path, minimal_id3).expect("Failed to create temp MP3");
-
+    let mp3_path = unique_temp_path("audio", "mp3");
+    fs::copy(fixture_mp3_path(), &mp3_path).expect("Failed to copy MP3 fixture");
     mp3_path
 }
 
 /// Helper para limpiar archivos temporales
 fn cleanup_file(path: &PathBuf) {
     let _ = fs::remove_file(path);
+}
+
+/// Helper para generar una ruta temporal única SIN crear el archivo.
+///
+/// Se deriva del contador atómico y del timestamp para evitar colisiones
+/// entre ejecuciones concurrentes o residuos de ejecuciones abortadas.
+fn unique_temp_path(label: &str, extension: &str) -> PathBuf {
+    let temp_dir = std::env::temp_dir();
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    temp_dir.join(format!("test_{}_{}_{}.{}", label, timestamp, id, extension))
 }
 
 #[test]
@@ -120,7 +138,11 @@ fn test_cli_fails_with_nonexistent_file() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no existe") || stderr.contains("Error"));
+    assert!(
+        stderr.contains("Error: El archivo") && stderr.contains("nonexistent_file_12345.mp3"),
+        "El mensaje de error no es el esperado, fue: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -579,11 +601,9 @@ fn test_cli_remove_multiple_tags() {
 
 #[test]
 fn test_cli_remove_all() {
-    // MP3 con bytes de audio puros (sin header ID3v2 vacío inicial,
-    // para que el tag añadido vía `edit` sea el único bloque ID3)
+    // MP3 de audio real y sin tag ID3 (el fixture): el tag añadido vía `edit`
+    // será el único bloque ID3 del archivo.
     let mp3_path = create_temp_mp3();
-    // Sobrescribir el header ID3v2 vacío del helper con audio MP3 puro
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to write audio bytes");
 
     // Añadir tags
     Command::new("cargo")
@@ -638,11 +658,9 @@ fn test_cli_remove_all() {
 
 #[test]
 fn test_cli_remove_all_removes_v1() {
-    // MP3 con bytes de audio puros (sin header ID3v2 vacío inicial,
-    // para que el tag ID3v1 sea el único bloque ID3 del archivo)
+    // MP3 de audio real y sin tag ID3 (el fixture): el tag ID3v1 será el
+    // único bloque ID3 del archivo.
     let mp3_path = create_temp_mp3();
-    // Sobrescribir el header ID3v2 vacío del helper con audio MP3 puro
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to write audio bytes");
 
     // Añadir un tag ID3v1 (128 bytes al final, termina en "TAG")
     let mut bytes = fs::read(&mp3_path).unwrap();
@@ -689,16 +707,8 @@ fn test_cli_remove_all_removes_v1() {
 
 #[test]
 fn test_cli_remove_all_no_tags_warns() {
-    // MP3 sin ningún tag ID3 (usamos un archivo con bytes de MP3 puros,
-    // no el helper create_temp_mp3 que ya incluye un header ID3v2 vacío)
-    let temp_dir = std::env::temp_dir();
-    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
-    let mp3_path = temp_dir.join(format!("test_{}_{}.mp3", timestamp, id));
-    fs::write(&mp3_path, [0xFF, 0xFB, 0x90, 0x44]).expect("Failed to create temp MP3");
+    // MP3 sin ningún tag ID3: el fixture de audio real no lleva tags.
+    let mp3_path = create_temp_mp3();
 
     let output = Command::new("cargo")
         .args([
@@ -727,8 +737,7 @@ fn test_cli_remove_all_no_tags_warns() {
 #[test]
 fn test_cli_cover_png() {
     let mp3_path = create_temp_mp3();
-    let temp_dir = std::env::temp_dir();
-    let cover_path = temp_dir.join("test_cover.png");
+    let cover_path = unique_temp_path("cover", "png");
 
     // Crear un archivo PNG mínimo
     let png_data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -763,8 +772,7 @@ fn test_cli_cover_png() {
 #[test]
 fn test_cli_cover_webp() {
     let mp3_path = create_temp_mp3();
-    let temp_dir = std::env::temp_dir();
-    let cover_path = temp_dir.join("test_cover.webp");
+    let cover_path = unique_temp_path("cover", "webp");
 
     // Crear un archivo WEBP mínimo
     let webp_data = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
@@ -799,11 +807,10 @@ fn test_cli_cover_webp() {
 #[test]
 fn test_cli_cover_unsupported_format() {
     let mp3_path = create_temp_mp3();
-    let temp_dir = std::env::temp_dir();
-    let cover_path = temp_dir.join("test_cover.gif");
+    let cover_path = unique_temp_path("cover", "tiff");
 
-    // Crear un archivo GIF (no soportado)
-    fs::write(&cover_path, b"GIF89a").expect("Failed to create GIF");
+    // Crear un archivo TIFF (no soportado)
+    fs::write(&cover_path, b"II*\x00").expect("Failed to create TIFF");
 
     let output = Command::new("cargo")
         .args([
@@ -818,10 +825,14 @@ fn test_cli_cover_unsupported_format() {
         .output()
         .expect("Failed to execute command");
 
-    // Debe fallar con formato no soportado
+    // Debe fallar con el mensaje exacto de formato no soportado para .tiff
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no soportado") || stderr.contains("gif"));
+    assert!(
+        stderr.contains("Formato de imagen no soportado: .tiff"),
+        "stderr debería contener el mensaje de formato no soportado, fue: {}",
+        stderr
+    );
 
     cleanup_file(&mp3_path);
     cleanup_file(&cover_path);
@@ -1695,4 +1706,2192 @@ fn test_cli_add_album() {
     assert_eq!(tag.album(), Some("My Test Album"));
 
     cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Tests de caracterización (fase RED de TDD) — fijan el comportamiento ACTUAL
+// del CLI antes de migrar el backend de `id3` a `lofty`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_writes_id3v24_header() {
+    // Se parte del fixture de audio real SIN header ID3 (create_temp_mp3 ya
+    // no inyecta un header vacío), de modo que la aserción no es
+    // semi-tautológica: el test falla si `edit` no escribe. Además ejercita
+    // la rama "Creando nuevos tags" de main.rs.
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // El tag debe escribirse siempre como ID3v2.4: header "ID3" + 0x04 0x00
+    let bytes = fs::read(&mp3_path).expect("Failed to read file");
+    assert!(
+        bytes.len() >= 5,
+        "El archivo es demasiado corto para contener un header ID3"
+    );
+    assert_eq!(
+        &bytes[0..5],
+        &[0x49, 0x44, 0x33, 0x04, 0x00],
+        "El header no es ID3v2.4, fue: {:02X?}",
+        &bytes[0..5]
+    );
+
+    // Y el título se escribió de verdad (si `edit` no escribiera, esto fallaría)
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("X"));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_without_flags_does_not_touch_file() {
+    let mp3_path = create_temp_mp3();
+
+    let before_bytes = fs::read(&mp3_path).expect("Failed to read file before");
+    let before_mtime = fs::metadata(&mp3_path)
+        .expect("Failed to stat file before")
+        .modified()
+        .expect("Failed to read mtime before");
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "edit", mp3_path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let after_bytes = fs::read(&mp3_path).expect("Failed to read file after");
+    let after_mtime = fs::metadata(&mp3_path)
+        .expect("Failed to stat file after")
+        .modified()
+        .expect("Failed to read mtime after");
+
+    assert_eq!(
+        before_bytes, after_bytes,
+        "El contenido cambió aunque no se pasó ningún flag"
+    );
+    assert_eq!(
+        before_mtime, after_mtime,
+        "La fecha de modificación cambió aunque no se pasó ningún flag"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_empty_title_writes() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // Un título vacío cuenta como cambio: el frame TIT2 existe con valor vacío
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert!(
+        tag.get("TIT2").is_some(),
+        "El frame TIT2 debería existir aunque el título esté vacío"
+    );
+    assert_eq!(tag.title(), Some(""));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_preserves_existing_id3v1() {
+    let mp3_path = create_temp_mp3();
+
+    // Añadir un tag ID3v1 (128 bytes al final, empieza por "TAG")
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    v1[33..39].copy_from_slice(b"Artist");
+    let original_bytes = fs::read(&mp3_path).expect("Failed to read file");
+    let mut bytes = original_bytes.clone();
+    bytes.extend_from_slice(&v1);
+    fs::write(&mp3_path, &bytes).expect("Failed to write file with ID3v1");
+
+    // Editar vía ID3v2
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "Nuevo",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // El ID3v1 debe seguir presente e intacto al final del archivo
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert!(
+        result.len() >= 128,
+        "El archivo resultante perdió el bloque ID3v1"
+    );
+    let tail = &result[result.len() - 128..];
+    assert_eq!(tail[0..3], *b"TAG", "El ID3v1 no empieza por TAG");
+    assert_eq!(tail, v1.as_slice(), "El ID3v1 fue modificado");
+
+    // Y además se escribió el ID3v2
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Nuevo"));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_year_writes_tyer() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--year",
+            "2026",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "--year debe escribir el frame TYER"
+    );
+    assert!(
+        tag.get("TDRC").is_none(),
+        "--year no debe escribir el frame TDRC"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_date_writes_tdrc() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--date",
+            "2026-10-13",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TDRC").and_then(|f| f.content().text()),
+        Some("2026-10-13"),
+        "--date debe escribir el frame TDRC"
+    );
+    assert!(
+        tag.get("TYER").is_none(),
+        "--date no debe escribir el frame TYER"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_year_and_date_coexist() {
+    let mp3_path = create_temp_mp3();
+
+    // 1ª invocación: solo --year → TYER presente, TDRC ausente
+    let output_year = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--year",
+            "2026",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output_year.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "--year debe escribir TYER"
+    );
+    assert!(tag.get("TDRC").is_none(), "--year no debe escribir TDRC");
+
+    // 2ª invocación sobre el mismo fichero: solo --date.
+    // El frame TYER ya escrito debe SOBREVIVIR a la reescritura.
+    let output_date = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--date",
+            "2026-10-13",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output_date.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "TYER (frame previo) debe sobrevivir a una reescritura con --date"
+    );
+    assert_eq!(
+        tag.get("TDRC").and_then(|f| f.content().text()),
+        Some("2026-10-13"),
+        "--date debe escribir TDRC"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_without_tags_fails() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "remove", mp3_path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "remove sin tags y sin --all debería salir con código distinto de cero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("al menos un tag"),
+        "stderr debería indicar que hay que especificar al menos un tag, fue: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_cover_missing_file_fails() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--cover",
+            "/ruta/que/no/existe.jpg",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "edit con una carátula inexistente debería fallar"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("El archivo de carátula") && stderr.contains("no existe"),
+        "stderr debería indicar que la carátula no existe, fue: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_unknown_tag_warns_and_does_not_modify() {
+    let mp3_path = create_temp_mp3();
+
+    // Añadir un tag válido para tener algo legible
+    Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "Keep",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let before_bytes = fs::read(&mp3_path).expect("Failed to read file before");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "inventado",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Tags válidos") && stderr.contains("title, artist, album"),
+        "stderr debería listar los tags válidos, fue: {}",
+        stderr
+    );
+
+    let after_bytes = fs::read(&mp3_path).expect("Failed to read file after");
+    assert_eq!(
+        before_bytes, after_bytes,
+        "El archivo no debe modificarse cuando solo se pasan tags desconocidos"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_all_preserves_audio() {
+    let mp3_path = create_temp_mp3();
+
+    // El audio real del fixture es lo que debe sobrevivir byte a byte.
+    let audio = fs::read(&mp3_path).expect("Failed to read fixture copy");
+
+    // Añadir un tag ID3v2 (se antepone) y un ID3v1 (se anexa) para que
+    // `remove --all` tenga ambos bloques de tags que eliminar alrededor del
+    // audio.
+    let mut tag = Tag::new();
+    tag.set_title("Title");
+    tag.write_to_path(&mp3_path, id3::Version::Id3v24)
+        .expect("Failed to write ID3v2 tag");
+    let mut bytes = fs::read(&mp3_path).expect("Failed to read file with ID3v2");
+    let mut v1 = vec![0u8; 128];
+    v1[0..3].copy_from_slice(b"TAG");
+    v1[3..8].copy_from_slice(b"Title");
+    bytes.extend_from_slice(&v1);
+    fs::write(&mp3_path, &bytes).expect("Failed to write composed file");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "--all",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    // Solo deben desaparecer los bloques de tags: el audio permanece byte a byte
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert_eq!(
+        result, audio,
+        "El audio debería permanecer intacto tras remove --all"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_edit_non_writable_file_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mp3_path = create_temp_mp3();
+
+    // Poner el archivo en solo lectura
+    let mut perms = fs::metadata(&mp3_path)
+        .expect("Failed to stat file")
+        .permissions();
+    perms.set_mode(0o444);
+    fs::set_permissions(&mp3_path, perms).expect("Failed to set read-only permission");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Restaurar permisos para poder limpiar el archivo con seguridad
+    let mut perms = fs::metadata(&mp3_path)
+        .expect("Failed to stat file")
+        .permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&mp3_path, perms).expect("Failed to restore permission");
+
+    if output.status.success() {
+        // Si el proceso corre como root, la escritura en solo lectura tiene éxito
+        // y este test no puede caracterizar el fallo de permisos. Terminamos sin
+        // ninguna aserción para no ser frágiles.
+        eprintln!(
+            "AVISO: se pudo escribir en un archivo de solo lectura (¿proceso ejecutándose como root?); \
+             se omite la caracterización del error de permisos."
+        );
+        cleanup_file(&mp3_path);
+        return;
+    }
+
+    assert!(
+        !output.status.success(),
+        "edit sobre un archivo de solo lectura debería fallar"
+    );
+
+    // CARACTERIZACIÓN: al baseline el error de E/S propagado por la librería
+    // `id3` sale en INGLÉS (`Permission denied`), no en español. El spec se
+    // alineará con este texto real observado.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Permission denied") || stderr.contains("denied"),
+        "stderr debería contener el error real de permisos, fue: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Tests de caracterización adicionales (auditoría: cierre de agujeros).
+// ---------------------------------------------------------------------------
+
+/// Escribe un PNG mínimo válido en la ruta indicada.
+fn write_minimal_png(path: &std::path::Path) {
+    fs::write(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        .expect("Failed to create PNG");
+}
+
+#[test]
+fn test_cli_remove_spanish_names_all_four() {
+    let mp3_path = create_temp_mp3();
+    let cover_path = unique_temp_path("cover", "png");
+    write_minimal_png(&cover_path);
+
+    // Título, artista, álbum (superviviente), título de orden y carátula
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--artist",
+            "A",
+            "--album",
+            "Alb",
+            "--title-sort",
+            "TS",
+            "--cover",
+            cover_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Eliminar usando SOLO nombres en español
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "título",
+            "artista",
+            "carátula",
+            "orden-titulo",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None, "título debería eliminarse");
+    assert_eq!(tag.artist(), None, "artista debería eliminarse");
+    assert_eq!(
+        tag.get("TSOT").and_then(|f| f.content().text()),
+        None,
+        "orden-titulo debería eliminar TSOT"
+    );
+    assert_eq!(tag.pictures().count(), 0, "carátula debería eliminarse");
+    assert_eq!(
+        tag.album(),
+        Some("Alb"),
+        "el álbum no mencionado debe sobrevivir"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_rewrite_preserves_id3v24() {
+    let mp3_path = create_temp_mp3();
+
+    // Primera escritura
+    let output1 = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "First",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output1.status.success());
+
+    // Segunda escritura (campo distinto) sobre el mismo archivo
+    let output2 = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--artist",
+            "Second",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output2.status.success());
+
+    // Tras la SEGUNDA escritura el header debe seguir siendo ID3v2.4
+    let bytes = fs::read(&mp3_path).expect("Failed to read file");
+    assert!(bytes.len() >= 5, "El archivo es demasiado corto");
+    assert_eq!(
+        &bytes[0..5],
+        &[0x49, 0x44, 0x33, 0x04, 0x00],
+        "El header no es ID3v2.4 tras reescribir, fue: {:02X?}",
+        &bytes[0..5]
+    );
+
+    // Sanity check: ambos campos presentes
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("First"));
+    assert_eq!(tag.artist(), Some("Second"));
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_lyrics_empty() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--lyrics",
+            "",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let mut found = false;
+    for frame in tag.frames() {
+        if let id3::frame::Content::Lyrics(lyrics) = frame.content() {
+            assert_eq!(lyrics.lang, "spa");
+            assert_eq!(lyrics.text, "");
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "Debería existir un frame USLT con texto vacío");
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_mixed_language_names() {
+    let mp3_path = create_temp_mp3();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--artist",
+            "A",
+            "--lyrics",
+            "Línea",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Mezcla de nombres en inglés y español en la misma invocación
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "title",
+            "artista",
+            "letra",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), None, "title debería eliminarse");
+    assert_eq!(tag.artist(), None, "artista debería eliminarse");
+    let has_lyrics = tag
+        .frames()
+        .any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
+    assert!(!has_lyrics, "letra debería eliminar el frame USLT");
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_remove_accent_folding_limit() {
+    let mp3_path = create_temp_mp3();
+    let cover_path = unique_temp_path("cover", "png");
+    write_minimal_png(&cover_path);
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--genre",
+            "Rock",
+            "--cover",
+            cover_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // "titulo" (sin tilde) NO está en la lista de alias → el título NO se elimina
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "titulo",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.title(),
+        Some("T"),
+        "la variante sin tilde 'titulo' no debe eliminar el título"
+    );
+
+    // "genero" (sin tilde) SÍ está en la lista de alias → elimina el género
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "genero",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.genre(),
+        None,
+        "la variante 'genero' sí debe eliminar el género"
+    );
+
+    // "caratula" (sin tilde) SÍ está en la lista de alias → elimina la carátula
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "remove",
+            mp3_path.to_str().unwrap(),
+            "caratula",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(
+        tag.pictures().count(),
+        0,
+        "la variante 'caratula' sí debe eliminar la carátula"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_cover_preserves_existing_metadata() {
+    let mp3_path = create_temp_mp3();
+    let cover_path = unique_temp_path("cover", "png");
+    write_minimal_png(&cover_path);
+
+    // Metadatos previos: título, artista y letra
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--title",
+            "T",
+            "--artist",
+            "A",
+            "--lyrics",
+            "Línea 1\nLínea 2",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    // Añadir SOLO la carátula
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--cover",
+            cover_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("T"), "el título debe conservarse");
+    assert_eq!(tag.artist(), Some("A"), "el artista debe conservarse");
+    let has_lyrics = tag
+        .frames()
+        .any(|f| matches!(f.content(), id3::frame::Content::Lyrics(_)));
+    assert!(has_lyrics, "la letra debe conservarse");
+    assert_eq!(tag.pictures().count(), 1, "la carátula debe añadirse");
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+#[test]
+fn test_cli_album_artist_separator_not_applied() {
+    let mp3_path = create_temp_mp3();
+
+    // Varios --artist (se unen con "; ") junto con un --album-artist
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            mp3_path.to_str().unwrap(),
+            "--artist",
+            "Luis Fonsi",
+            "--artist",
+            "Daddy Yankee",
+            "--album-artist",
+            "Various Artists",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+
+    // El separador "; " se aplica SOLO al frame del artista (TPE1)...
+    assert_eq!(tag.artist(), Some("Luis Fonsi; Daddy Yankee"));
+    assert_eq!(
+        tag.get("TPE1").and_then(|f| f.content().text()),
+        Some("Luis Fonsi; Daddy Yankee")
+    );
+
+    // ...mientras que el artista del álbum (TPE2) conserva el valor literal
+    assert_eq!(tag.album_artist(), Some("Various Artists"));
+    assert_eq!(
+        tag.get("TPE2").and_then(|f| f.content().text()),
+        Some("Various Artists")
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Detección del formato por contenido (magic bytes)
+// ---------------------------------------------------------------------------
+
+/// Copia el fixture MP3 real a una ruta temporal con la extensión indicada.
+///
+/// Sirve para comprobar que el formato se decide por el contenido y no por la
+/// extensión del nombre.
+fn create_temp_fixture(extension: &str) -> PathBuf {
+    let path = unique_temp_path("fixture", extension);
+    fs::copy(fixture_mp3_path(), &path).expect("Failed to copy MP3 fixture");
+    path
+}
+
+/// Escribe los bytes indicados (cabecera mágica incluida) en un temporal.
+fn write_temp_bytes(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
+    let path = unique_temp_path(label, extension);
+    fs::write(&path, bytes).expect("Failed to write temp file");
+    path
+}
+
+/// Contenedor MP4 **malformado** a propósito: declara `ftyp` en el offset 4
+/// (por lo que se detecta como MP4/M4A) pero carece del átomo `moov`, de modo
+/// que cualquier backend que lo intente interpretar debe fallar de forma limpia.
+fn fake_mp4_bytes() -> Vec<u8> {
+    let mut bytes = vec![0x00, 0x00, 0x00, 0x20];
+    bytes.extend_from_slice(b"ftypM4A \x00\x00\x02\x00");
+    bytes.extend_from_slice(b"mp42M4A ");
+    bytes.extend_from_slice(&[0u8; 16]);
+    bytes
+}
+
+#[test]
+fn test_cli_mp3_renamed_to_m4a_is_edited_as_mp3() {
+    // Un MP3 con extensión `.m4a` debe seguir editándose: la extensión no decide.
+    let path = create_temp_fixture("m4a");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            path.to_str().unwrap(),
+            "--title",
+            "Renombrado",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    if !output.status.success() {
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success());
+
+    let tag = Tag::read_from_path(&path).expect("Failed to read tag");
+    assert_eq!(tag.title(), Some("Renombrado"));
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_malformed_mp4_and_leaves_file_untouched() {
+    // El backend MP4 (`.m4a`, `.mp4`, `.m4b`) ya está soportado, así que este
+    // test NO comprueba que MP4 esté sin soportar. `fake_mp4_bytes` solo declara
+    // el átomo `ftyp`: le falta `moov`, así que no es un contenedor válido. Un
+    // MP4 malformado debe fallar en las tres operaciones con un error legible
+    // (que enumera los formatos soportados) y sin tocar un solo byte del archivo.
+    for (op, extra) in [
+        ("show", Vec::<&str>::new()),
+        ("edit", vec!["--title", "X"]),
+        ("remove", vec!["--all"]),
+    ] {
+        let path = write_temp_bytes("clip_m4a", "m4a", &fake_mp4_bytes());
+        let before = fs::read(&path).expect("Failed to read temp file");
+
+        let mut args = vec!["run", "--quiet", "--", op, path.to_str().unwrap()];
+        args.extend_from_slice(&extra);
+        let output = Command::new("cargo")
+            .args(&args)
+            .output()
+            .expect("Failed to execute command");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "'{op}' sobre un MP4 malformado debe terminar con código distinto de cero (stderr: {stderr})"
+        );
+        assert!(
+            stderr.contains("MP3") && stderr.contains("MP4"),
+            "'{op}' debe enumerar los formatos soportados (MP3 y MP4) en stderr, fue: {stderr}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("Failed to read temp file"),
+            before,
+            "'{op}' NO debe modificar un MP4 malformado"
+        );
+
+        cleanup_file(&path);
+    }
+}
+
+#[test]
+fn test_cli_mp4_renamed_to_mp3_is_detected_by_content() {
+    // La extensión del nombre NO decide el formato: el contenido sí. Un M4A
+    // **válido** renombrado a `.mp3` debe detectarse por sus magic bytes como
+    // MP4 y procesarse con el backend MP4, no como MP3 ni rechazarse.
+    let path = unique_temp_path("clip_as_mp3", "mp3");
+    fs::copy(fixture_m4a_path(), &path).expect("Failed to copy M4A fixture");
+
+    // `edit` debe tener éxito: el enrutado llega al backend MP4 por contenido.
+    let edit = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Renombrado a mp3",
+    ]);
+    assert!(
+        edit.status.success(),
+        "un M4A con nombre .mp3 debe editarse por su contenido, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // El título se relee a través del propio CLI, que vuelve a decidir por
+    // contenido pese a la extensión `.mp3`.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show` sobre un M4A con nombre .mp3 no debe fallar por formato, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("Renombrado a mp3"),
+        "el título escrito debe releerse, stdout: {stdout}"
+    );
+
+    // `remove` también opera por contenido sobre el archivo renombrado.
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "title"]);
+    assert!(
+        remove.status.success(),
+        "`remove` sobre un M4A con nombre .mp3 debe funcionar, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    let show_after = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show_after.status.success());
+    assert!(
+        !String::from_utf8_lossy(&show_after.stdout).contains("Renombrado a mp3"),
+        "el título debe haberse eliminado, stdout: {}",
+        String::from_utf8_lossy(&show_after.stdout)
+    );
+
+    // Y sigue siendo un MP4 válido: conserva el átomo `ftyp` en el offset 4,
+    // luego nunca se ha reescrito como MP3.
+    let bytes = fs::read(&path).expect("Failed to read temp file");
+    assert_eq!(
+        &bytes[4..8],
+        b"ftyp",
+        "el archivo debe seguir siendo MP4 por contenido"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_unsupported_formats_and_leaves_file_untouched() {
+    let cases: [(&str, &str, &[u8]); 4] = [
+        ("flac", "flac", b"fLaC\x00\x00\x00\x22"),
+        ("ogg", "ogg", b"OggS\x00\x02"),
+        ("wav", "wav", b"RIFF\x00\x00\x00\x00WAVE"),
+        ("aif", "aif", b"FORM\x00\x00\x00\x00AIFF"),
+    ];
+
+    for (label, extension, magic) in cases {
+        let mut bytes = magic.to_vec();
+        bytes.extend_from_slice(&[0u8; 32]);
+        let path = write_temp_bytes(label, extension, &bytes);
+        let before = fs::read(&path).expect("Failed to read temp file");
+
+        let output = Command::new("cargo")
+            .args([
+                "run",
+                "--quiet",
+                "--",
+                "edit",
+                path.to_str().unwrap(),
+                "--title",
+                "X",
+            ])
+            .output()
+            .expect("Failed to execute command");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "'edit' sobre un .{extension} debe fallar (stderr: {stderr})"
+        );
+        assert!(
+            stderr.contains("soportado"),
+            "'edit' sobre un .{extension} debe indicar formato no soportado, fue: {stderr}"
+        );
+        assert!(
+            stderr.contains("MP3"),
+            "el mensaje debe enumerar los formatos soportados, fue: {stderr}"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "el error no debe ir a stdout, fue: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            fs::read(&path).expect("Failed to read temp file"),
+            before,
+            "'edit' NO debe modificar el archivo .{extension}"
+        );
+
+        cleanup_file(&path);
+    }
+}
+
+#[test]
+fn test_cli_rejects_empty_file() {
+    let path = write_temp_bytes("empty", "mp3", &[]);
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("formato"),
+        "'show' sobre un archivo vacío debe informar del formato, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).expect("Failed to read temp file"),
+        Vec::<u8>::new()
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_unrecognized_content() {
+    let path = write_temp_bytes("text", "mp3", b"Esto no es un archivo de audio valido");
+
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("formato") && stderr.contains("MP3"),
+        "'show' sobre contenido no reconocible debe informar del formato, fue: {stderr}"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_too_short_file() {
+    // `0xFF` + bits altos a 1, pero sin bytes suficientes para validar la
+    // cabecera MPEG: no se puede decidir el formato.
+    let path = write_temp_bytes("short", "mp3", &[0xFF, 0xFB]);
+    let before = fs::read(&path).expect("Failed to read temp file");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "edit",
+            path.to_str().unwrap(),
+            "--title",
+            "X",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("formato"),
+        "un archivo demasiado corto debe informar de que no se pudo decidir, fue: {stderr}"
+    );
+    assert_eq!(fs::read(&path).expect("Failed to read temp file"), before);
+
+    cleanup_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// MP4 (M4A): enrutado del CLI y operaciones completas (tareas 4.9–4.11)
+// ---------------------------------------------------------------------------
+
+/// Ruta absoluta al fixture MP4 real y sin metadatos, versionado en el repo.
+fn fixture_m4a_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.m4a")
+}
+
+/// Copia el fixture MP4 real a una ruta temporal única sobre la que trabajar.
+///
+/// Nunca se opera sobre el fixture versionado directamente.
+fn create_temp_m4a(label: &str) -> PathBuf {
+    let path = unique_temp_path(label, "m4a");
+    fs::copy(fixture_m4a_path(), &path).expect("Failed to copy M4A fixture");
+    path
+}
+
+/// Comprueba si un bloque de bytes contiene una secuencia dada.
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// Devuelve el *payload* del átomo `mdat` (sin su cabecera), delimitado por su
+/// tamaño declarado.
+///
+/// Sirve para comprobar que el audio sobrevive byte a byte a las operaciones
+/// que solo tocan el árbol de metadatos `moov.udta.meta.ilst`. Se compara solo
+/// el payload porque en este fixture `moov` va **después** de `mdat` y cambia
+/// al escribir metadatos.
+fn mdat_payload(bytes: &[u8]) -> Vec<u8> {
+    let pos = bytes
+        .windows(4)
+        .position(|window| window == b"mdat")
+        .expect("el archivo MP4 debe contener el átomo `mdat`");
+    let size32 = u32::from_be_bytes(bytes[pos - 4..pos].try_into().unwrap());
+    let payload_end = if size32 == 0 {
+        bytes.len()
+    } else if size32 == 1 {
+        let size64 = u64::from_be_bytes(bytes[pos + 4..pos + 12].try_into().unwrap());
+        (pos - 4) + size64 as usize
+    } else {
+        (pos - 4) + size32 as usize
+    };
+    let payload_start = if size32 == 1 { pos + 12 } else { pos + 4 };
+    bytes[payload_start..payload_end].to_vec()
+}
+
+/// Lee el tag `ilst` de un M4A que se acaba de escribir con el CLI.
+fn read_m4a_tag(path: &Path) -> Option<lofty::tag::Tag> {
+    let tagged = lofty::read_from_path(path).expect("lofty debe leer el M4A");
+    tagged.tag(TagType::Mp4Ilst).cloned()
+}
+
+/// Ejecuta `cargo run -- <args>` y devuelve la salida, fallando con contexto.
+fn run_cli(args: &[&str]) -> std::process::Output {
+    let mut full = vec!["run", "--quiet", "--"];
+    full.extend_from_slice(args);
+    let output = Command::new("cargo")
+        .args(&full)
+        .output()
+        .expect("Failed to execute command");
+    if !output.status.success() {
+        eprintln!("args: {args:?}");
+        eprintln!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    output
+}
+
+#[test]
+fn test_cli_m4a_edit_then_show_roundtrip() {
+    let path = create_temp_m4a("roundtrip");
+
+    let output = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Canción M4A",
+        "--artist",
+        "Artista",
+        "--album",
+        "Álbum",
+        "--genre",
+        "Rock",
+        "--date",
+        "2026-10-13",
+    ]);
+    assert!(output.status.success());
+
+    // Los valores vuelven a leerse con `lofty` desde el propio archivo.
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Canción M4A"));
+    assert_eq!(tag.get_string(ItemKey::TrackArtist), Some("Artista"));
+    assert_eq!(tag.get_string(ItemKey::AlbumTitle), Some("Álbum"));
+    assert_eq!(tag.get_string(ItemKey::Genre), Some("Rock"));
+    assert_eq!(tag.get_string(ItemKey::RecordingDate), Some("2026-10-13"));
+
+    // Y `show` los muestra.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(stdout.contains("Canción M4A"), "stdout: {stdout}");
+    assert!(stdout.contains("Artista"), "stdout: {stdout}");
+    assert!(stdout.contains("Álbum"), "stdout: {stdout}");
+    assert!(stdout.contains("Rock"), "stdout: {stdout}");
+    assert!(stdout.contains("2026-10-13"), "stdout: {stdout}");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_three_operations_do_not_fail_for_format() {
+    let path = create_temp_m4a("three_ops");
+    let file = path.to_str().unwrap();
+
+    // `show` sobre un M4A sin metadatos: aviso, sin error.
+    let show_empty = run_cli(&["show", file]);
+    assert!(show_empty.status.success());
+    let stderr = String::from_utf8_lossy(&show_empty.stderr);
+    assert!(
+        !stderr.contains("no soportado") && !stderr.contains("no está soportado"),
+        "`show` no debe fallar por formato: {stderr}"
+    );
+
+    // `edit`: escribe y no falla por formato.
+    let edit = run_cli(&["edit", file, "--title", "X"]);
+    assert!(edit.status.success());
+
+    // `show` de nuevo: ya hay metadatos.
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    assert!(String::from_utf8_lossy(&show.stdout).contains('X'));
+
+    // `remove` de un tag concreto: no falla por formato.
+    let remove = run_cli(&["remove", file, "title"]);
+    assert!(remove.status.success());
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_and_mp3_show_same_field_set() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("coherence");
+
+    let common: [&str; 12] = [
+        "--title",
+        "Canción",
+        "--artist",
+        "Artista",
+        "--album",
+        "Álbum",
+        "--genre",
+        "Rock",
+        "--track",
+        "4",
+        "--date",
+        "2026-10-13",
+    ];
+
+    for path in [&mp3_path, &m4a_path] {
+        let mut args = vec!["edit", path.to_str().unwrap()];
+        args.extend_from_slice(&common);
+        let edit = run_cli(&args);
+        assert!(edit.status.success());
+    }
+
+    let mp3_out = run_cli(&["show", mp3_path.to_str().unwrap()]);
+    let m4a_out = run_cli(&["show", m4a_path.to_str().unwrap()]);
+    assert!(mp3_out.status.success());
+    assert!(m4a_out.status.success());
+    let mp3_stdout = String::from_utf8_lossy(&mp3_out.stdout);
+    let m4a_stdout = String::from_utf8_lossy(&m4a_out.stdout);
+
+    // El mismo conjunto de campos debe mostrarse en ambos formatos.
+    for label in [
+        "🎵 Título:",
+        "🎤 Artista:",
+        "💿 Álbum:",
+        "🎸 Género:",
+        "#️⃣  Pista:",
+        "📆 Fecha:",
+    ] {
+        assert!(mp3_stdout.contains(label), "MP3 debería mostrar {label}");
+        assert!(m4a_stdout.contains(label), "M4A debería mostrar {label}");
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+}
+
+#[test]
+fn test_cli_m4a_remove_spanish_tag_keeps_rest() {
+    let path = create_temp_m4a("remove_es");
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit", file, "--title", "T", "--artist", "A", "--album", "Alb",
+    ]);
+    assert!(edit.status.success());
+
+    // Eliminar SOLO el título, con su nombre en español.
+    let remove = run_cli(&["remove", file, "título"]);
+    assert!(remove.status.success());
+
+    let tag = read_m4a_tag(&path).expect("el resto de átomos debe seguir legible");
+    assert_eq!(
+        tag.get_string(ItemKey::TrackTitle),
+        None,
+        "título eliminado"
+    );
+    assert_eq!(
+        tag.get_string(ItemKey::TrackArtist),
+        Some("A"),
+        "el artista no mencionado debe sobrevivir"
+    );
+    assert_eq!(
+        tag.get_string(ItemKey::AlbumTitle),
+        Some("Alb"),
+        "el álbum no mencionado debe sobrevivir"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_remove_all_removes_ilst_and_preserves_audio() {
+    let path = create_temp_m4a("remove_all");
+
+    // El audio del fixture (a partir de `mdat`) es lo que debe sobrevivir.
+    let audio_before = mdat_payload(&fs::read(&path).expect("leer fixture"));
+
+    let edit = run_cli(&["edit", path.to_str().unwrap(), "--title", "T"]);
+    assert!(edit.status.success());
+
+    // Editar crea el bloque `ilst` sin tocar el audio.
+    let with_meta = fs::read(&path).expect("leer tras edit");
+    assert!(
+        contains_bytes(&with_meta, b"ilst"),
+        "edit debe crear el bloque ilst"
+    );
+    assert_eq!(
+        mdat_payload(&with_meta),
+        audio_before,
+        "editar no debe modificar el audio"
+    );
+
+    // `remove --all` elimina el bloque completo.
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "--all"]);
+    assert!(remove.status.success());
+    assert!(
+        String::from_utf8_lossy(&remove.stdout).contains("eliminados"),
+        "debe confirmar el borrado"
+    );
+
+    let after = fs::read(&path).expect("leer tras remove --all");
+    assert!(
+        !contains_bytes(&after, b"ilst"),
+        "el bloque de metadatos ilst debe desaparecer"
+    );
+    assert_eq!(
+        mdat_payload(&after),
+        audio_before,
+        "el audio debe permanecer intacto tras remove --all"
+    );
+    // El archivo sigue siendo MP4 por contenido.
+    assert_eq!(&after[4..8], b"ftyp", "ftyp debe seguir en el offset 4");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_remove_all_without_metadata_warns() {
+    // Copia del fixture recién generado: no tiene metadatos.
+    let path = create_temp_m4a("remove_all_empty");
+
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "--all"]);
+    assert!(remove.status.success(), "sin metadatos debe salir con 0");
+    let stdout = String::from_utf8_lossy(&remove.stdout);
+    assert!(
+        stdout.contains("no tenía metadatos"),
+        "debe avisar de que no había metadatos, fue: {stdout}"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_unsupported_format_message_lists_mp3_and_mp4() {
+    let path = write_temp_bytes("flac_msg", "flac", b"fLaC\x00\x00\x00\x22");
+
+    let output = run_cli(&["edit", path.to_str().unwrap(), "--title", "X"]);
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MP3") && stderr.contains("MP4"),
+        "el mensaje de formato no soportado debe enumerar MP3 y MP4, fue: {stderr}"
+    );
+
+    cleanup_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// MP4 (M4A): carátulas (`covr`) y letras (`©lyr`) — grupo 5
+// ---------------------------------------------------------------------------
+
+/// Bytes de una imagen JPEG reconocible (signatura + inicio de APP0).
+const JPEG_BYTES: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
+/// Bytes de una imagen PNG reconocible (signatura + primer trozo).
+const PNG_BYTES: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+];
+/// Bytes de una imagen WebP reconocible.
+const WEBP_BYTES: &[u8] = b"RIFF\x24\x00\x00\x00WEBPVP8 ";
+
+/// Escribe una imagen temporal con la extensión indicada y la devuelve.
+fn write_temp_image(label: &str, extension: &str, bytes: &[u8]) -> PathBuf {
+    let path = unique_temp_path(label, extension);
+    fs::write(&path, bytes).expect("Failed to write temp image");
+    path
+}
+
+/// Devuelve `(tipo de dato, payload)` del primer `data` box que sigue al átomo
+/// indicado, leyendo directamente los bytes del contenedor ISO-BMFF.
+///
+/// Comprueba el **tipo de dato real** escrito (13 JPEG, 14 PNG, 0 reservado) en
+/// lugar de asumirlo. Layout: `[size][data][version/flags][locale][payload]`,
+/// con el tipo en los 24 bits bajos de `version/flags`.
+fn data_box_after(bytes: &[u8], atom: &[u8]) -> Option<(u32, Vec<u8>)> {
+    let pos = bytes
+        .windows(atom.len())
+        .position(|window| window == atom)?;
+    let box_pos = pos + atom.len();
+    if box_pos + 16 > bytes.len() || &bytes[box_pos + 4..box_pos + 8] != b"data" {
+        return None;
+    }
+    let size = u32::from_be_bytes(bytes[box_pos..box_pos + 4].try_into().ok()?) as usize;
+    if box_pos + size > bytes.len() {
+        return None;
+    }
+    let version_flags = u32::from_be_bytes(bytes[box_pos + 8..box_pos + 12].try_into().ok()?);
+    Some((
+        version_flags & 0x00FF_FFFF,
+        bytes[box_pos + 16..box_pos + size].to_vec(),
+    ))
+}
+
+#[test]
+fn test_cli_m4a_cover_jpeg_uses_wellknown_type_and_keeps_bytes() {
+    let path = create_temp_m4a("cover_jpeg_cli");
+    let image = write_temp_image("cover_jpeg_cli", "jpg", JPEG_BYTES);
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "Con JPG",
+    ]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "una carátula JPEG no debe emitir avisos, fue: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // El tipo de dato real del `data` box del `covr` es JPEG (13) y los bytes
+    // de la imagen quedan intactos.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(data_type, 13, "JPEG debe usar el tipo well-known 13");
+    assert_eq!(payload, JPEG_BYTES);
+
+    // `show` lista la carátula.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains("Carátulas: 1"),
+        "`show` debe listar la carátula"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_cover_png_uses_wellknown_type_and_keeps_bytes() {
+    let path = create_temp_m4a("cover_png_cli");
+    let image = write_temp_image("cover_png_cli", "png", PNG_BYTES);
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "Con PNG",
+    ]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "una carátula PNG no debe emitir avisos"
+    );
+
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(data_type, 14, "PNG debe usar el tipo well-known 14");
+    assert_eq!(payload, PNG_BYTES);
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_cover_webp_reserved_type_warns_and_succeeds() {
+    let path = create_temp_m4a("cover_webp_cli");
+    let image = write_temp_image("cover_webp_cli", "webp", WEBP_BYTES);
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "Con WebP",
+    ]);
+
+    // No falla: termina con código de salida cero.
+    assert!(out.status.success(), "WebP no debe abortar la operación");
+
+    // Avisa por stderr de que no será visible en iTunes/macOS.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("WebP") && stderr.contains("iTunes") && stderr.contains("macOS"),
+        "debe advertir de que la carátula no es visible, fue: {stderr}"
+    );
+
+    // El tipo de dato real es el reservado (0), con los bytes intactos.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"covr").expect("debe existir `covr`");
+    assert_eq!(
+        data_type, 0,
+        "WebP debe quedar con el tipo de dato reservado (0)"
+    );
+    assert_eq!(payload, WEBP_BYTES);
+
+    // El resto de campos indicados se escriben con normalidad.
+    let tag = read_m4a_tag(&path).expect("el tag debe ser legible");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Con WebP"));
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_cover_missing_file_fails_without_writing() {
+    let path = create_temp_m4a("cover_missing_cli");
+    let before = fs::read(&path).unwrap();
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        "/ruta/que/no/existe.jpg",
+        "--title",
+        "X",
+    ]);
+    assert!(
+        !out.status.success(),
+        "una carátula inexistente debe fallar"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no existe"),
+        "debe informar en español de que el archivo no existe, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "no se debe escribir nada en el archivo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_cover_unsupported_format_fails_without_writing() {
+    let path = create_temp_m4a("cover_tiff_cli");
+    let image = write_temp_image("cover_tiff_cli", "tiff", b"II*\x00");
+    let before = fs::read(&path).unwrap();
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--cover",
+        image.to_str().unwrap(),
+        "--title",
+        "X",
+    ]);
+    assert!(
+        !out.status.success(),
+        "una extensión no soportada debe fallar"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Formato de imagen no soportado") && stderr.contains(".tiff"),
+        "debe explicar en español que el formato no está soportado, fue: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "no se debe escribir nada en el archivo"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_remove_cover_removes_covr_and_keeps_rest() {
+    let path = create_temp_m4a("remove_cover_cli");
+    let image = write_temp_image("remove_cover_cli", "png", PNG_BYTES);
+
+    let edit = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "T",
+        "--artist",
+        "A",
+        "--cover",
+        image.to_str().unwrap(),
+    ]);
+    assert!(edit.status.success());
+    assert!(contains_bytes(&fs::read(&path).unwrap(), b"covr"));
+
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "cover"]);
+    assert!(remove.status.success());
+
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), b"covr"),
+        "el átomo `covr` debe desaparecer"
+    );
+    let tag = read_m4a_tag(&path).expect("el resto debe seguir legible");
+    assert!(tag.pictures().is_empty());
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("T"));
+    assert_eq!(tag.get_string(ItemKey::TrackArtist), Some("A"));
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_cli_m4a_lyrics_written_shown_and_without_language() {
+    let path = create_temp_m4a("lyrics_cli");
+    let lyrics = "Primera línea\nSegunda línea\nTercera línea";
+
+    let out = run_cli(&["edit", path.to_str().unwrap(), "--lyrics", lyrics]);
+    assert!(out.status.success());
+
+    // El texto se recupera íntegro por `show`.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(stdout.contains("📝 Letra:"), "show debe mostrar la letra");
+    assert!(stdout.contains("Primera línea"), "stdout: {stdout}");
+    assert!(stdout.contains("Tercera línea"), "stdout: {stdout}");
+
+    // El `©lyr` no lleva prefijo de idioma: su `data` box es exactamente el texto.
+    let bytes = fs::read(&path).unwrap();
+    let (data_type, payload) = data_box_after(&bytes, b"\xA9lyr").expect("debe existir `©lyr`");
+    assert_eq!(data_type, 1, "el texto se guarda como UTF-8 (tipo 1)");
+    assert_eq!(
+        payload,
+        lyrics.as_bytes(),
+        "el `©lyr` no puede llevar prefijo de idioma"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_lyrics_language_spa_in_mp3_still_preserved() {
+    let mp3_path = create_temp_mp3();
+    let lyrics = "Uno\nDos\nTres";
+
+    let out = run_cli(&["edit", mp3_path.to_str().unwrap(), "--lyrics", lyrics]);
+    assert!(out.status.success());
+
+    // En MP3 el frame `USLT` sigue llevando el código de idioma `spa`.
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let mut found = false;
+    for frame in tag.frames() {
+        if let id3::frame::Content::Lyrics(l) = frame.content() {
+            assert_eq!(l.lang, "spa", "el USLT debe conservar el idioma `spa`");
+            assert_eq!(l.text, lyrics, "la letra se conserva íntegra");
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "debe existir el frame USLT de la letra");
+
+    cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// MP4 (M4A): campos sin equivalente (`--url`, `--original-artist`) — grupo 6
+// ---------------------------------------------------------------------------
+
+/// Prefijo de todo átomo *freeform* `ilst`. Se usa para comprobar que el CLI no
+/// suple la omisión de un campo con un átomo propietario.
+const FREEFORM_PREFIX: &[u8] = b"----:com.apple.iTunes";
+
+#[test]
+fn test_cli_m4a_url_is_omitted_with_warning() {
+    let path = create_temp_m4a("url_omitted");
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--title",
+        "Cancion",
+    ]);
+
+    // No aborta: termina con código de salida cero.
+    assert!(out.status.success(), "`--url` en MP4 no debe abortar");
+
+    // Avisa por stderr de que la URL se omite por no tener equivalente.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--url") && stderr.contains("se omite"),
+        "debe avisar de la omisión de --url por stderr, fue: {stderr}"
+    );
+
+    // El resto de campos indicados sí se escriben: `©nam` con "Cancion".
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Cancion"));
+
+    // No se crea ningún átomo freeform de reemplazo para la URL.
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        !contains_bytes(&bytes, FREEFORM_PREFIX),
+        "el CLI no debe crear un átomo freeform para suplir la URL"
+    );
+    assert!(
+        !contains_bytes(&bytes, b"URL"),
+        "no debe existir ningún átomo que represente la URL"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_original_artist_is_omitted_with_warning() {
+    let path = create_temp_m4a("original_artist_omitted");
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--original-artist",
+        "Autor",
+        "--album",
+        "Disco",
+    ]);
+
+    assert!(
+        out.status.success(),
+        "`--original-artist` en MP4 no debe abortar"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--original-artist") && stderr.contains("se omite"),
+        "debe avisar de la omisión de --original-artist por stderr, fue: {stderr}"
+    );
+
+    // El resto de campos indicados sí se escriben: `©alb` con "Disco".
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::AlbumTitle), Some("Disco"));
+
+    // Ningún átomo freeform de reemplazo.
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), FREEFORM_PREFIX),
+        "el CLI no debe crear un átomo freeform para el artista original"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_both_unequivalent_flags_warn_and_leave_file_untouched() {
+    let path = create_temp_m4a("both_omitted");
+    let before = fs::read(&path).unwrap();
+
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--original-artist",
+        "Autor",
+    ]);
+
+    assert!(out.status.success(), "no debe abortar");
+
+    // Sendos avisos por stderr (uno por campo omitido).
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--url") && stderr.contains("--original-artist"),
+        "deben emitirse los dos avisos, fue: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("se omite").count(),
+        2,
+        "deben ser exactamente dos avisos, fue: {stderr}"
+    );
+
+    // Si esos dos son los únicos flags, no hay cambio real que escribir: el
+    // archivo queda byte a byte idéntico.
+    let after = fs::read(&path).unwrap();
+    assert_eq!(
+        before, after,
+        "sin cambios reales, `edit` no debe reescribir el archivo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_omission_warnings_go_only_to_stderr() {
+    let path = create_temp_m4a("warn_streams");
+    let out = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--original-artist",
+        "Autor",
+        "--title",
+        "Cancion",
+    ]);
+    assert!(out.status.success());
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Los avisos van a stderr…
+    assert!(
+        stderr.contains("se omite"),
+        "el aviso de omisión va en stderr, fue: {stderr}"
+    );
+    // …y no contaminan stdout.
+    assert!(
+        !stdout.contains("se omite")
+            && !stdout.contains("--url")
+            && !stdout.contains("--original-artist"),
+        "los avisos no deben aparecer en stdout, fue: {stdout}"
+    );
+    // La confirmación normal del campo que sí se escribe sigue en stdout.
+    assert!(
+        stdout.contains("Cancion"),
+        "la confirmación normal va en stdout, fue: {stdout}"
+    );
+
+    // Y el campo que sí tiene equivalente se escribió.
+    let tag = read_m4a_tag(&path).expect("debe existir tag tras `edit`");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Cancion"));
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_mp3_url_and_original_artist_still_write_without_warning() {
+    let mp3_path = create_temp_mp3();
+
+    let out = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--url",
+        "https://artista.com",
+        "--original-artist",
+        "Autor",
+    ]);
+    assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "en MP3 no debe emitirse ningún aviso, fue: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // En MP3 `--url` escribe `WOAR` y `--original-artist`, `TOPE`.
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+
+    let mut url = None;
+    for frame in tag.frames() {
+        if frame.id() == "WOAR"
+            && let id3::frame::Content::Link(link) = frame.content()
+        {
+            url = Some(link.clone());
+        }
+    }
+    assert_eq!(
+        url.as_deref(),
+        Some("https://artista.com"),
+        "debe escribir WOAR"
+    );
+    assert_eq!(
+        tag.get("TOPE").and_then(|f| f.content().text()),
+        Some("Autor"),
+        "debe escribir TOPE"
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Auditoría de paridad: escenarios de la spec sin test dedicado (S9.2 y S5.1)
+// ---------------------------------------------------------------------------
+
+/// Devuelve los bytes de audio que siguen al bloque ID3v2 antepuesto.
+///
+/// `edit` escribe el tag ID3v2.4 **anteponiéndolo** al audio original, de modo
+/// que el audio debe ser exactamente el sufijo que empieza tras la cabecera de
+/// 10 bytes más el tamaño *synchsafe* declarado (y el posible pie de página de
+/// otros 10). Comparar ese sufijo con el audio de partida prueba a la vez que
+/// el archivo sigue siendo un MP3 válido y que el audio queda intacto.
+fn audio_after_id3v2(bytes: &[u8]) -> &[u8] {
+    assert!(bytes.len() >= 10, "el archivo debe tener cabecera ID3v2");
+    assert_eq!(&bytes[0..3], b"ID3", "debe empezar con la cabecera ID3v2");
+    let size = ((bytes[6] as usize & 0x7F) << 21)
+        | ((bytes[7] as usize & 0x7F) << 14)
+        | ((bytes[8] as usize & 0x7F) << 7)
+        | (bytes[9] as usize & 0x7F);
+    // El flag de pie de página (0x10) añade 10 bytes al final del bloque.
+    let footer = if bytes[5] & 0x10 != 0 { 10 } else { 0 };
+    &bytes[10 + size + footer..]
+}
+
+/// Escenario S9.2 (`edit` de un solo campo preserva el resto).
+///
+/// Con título, artista, álbum y género ya escritos, un `edit --year 2026` debe
+/// tocar SOLO el año y dejar los demás frames exactamente igual: mismos valores
+/// y sin duplicados ni pérdidas.
+#[test]
+fn test_cli_edit_year_preserves_other_fields() {
+    let mp3_path = create_temp_mp3();
+
+    // 1ª invocación: el MP3 ya tiene título, artista, álbum y género.
+    let setup = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--title",
+        "Título Original",
+        "--artist",
+        "Artista Original",
+        "--album",
+        "Álbum Original",
+        "--genre",
+        "Rock",
+    ]);
+    assert!(setup.status.success());
+
+    // 2ª invocación: SOLO --year (y nada más).
+    let output = run_cli(&["edit", mp3_path.to_str().unwrap(), "--year", "2026"]);
+    assert!(
+        output.status.success(),
+        "edit --year debe salir con código cero"
+    );
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+
+    // El año se escribió…
+    assert_eq!(
+        tag.get("TYER").and_then(|f| f.content().text()),
+        Some("2026"),
+        "--year debe escribir el frame TYER"
+    );
+    // …y el resto de campos siguen exactamente igual que antes.
+    assert_eq!(tag.title(), Some("Título Original"));
+    assert_eq!(tag.artist(), Some("Artista Original"));
+    assert_eq!(tag.album(), Some("Álbum Original"));
+    assert_eq!(tag.genre(), Some("Rock"));
+
+    // Sin duplicados: cada frame aparece una única vez.
+    for frame_id in ["TIT2", "TPE1", "TALB", "TCON", "TYER"] {
+        let count = tag.frames().filter(|f| f.id() == frame_id).count();
+        assert_eq!(
+            count, 1,
+            "el frame {frame_id} debe aparecer exactamente una vez"
+        );
+    }
+
+    cleanup_file(&mp3_path);
+}
+
+/// Escenario S5.1 (`edit --cover portada.jpg`) para JPEG.
+///
+/// Debe terminar con código cero, escribir un frame `APIC` con MIME
+/// `image/jpeg` y conservar **byte a byte** los bytes del archivo de imagen de
+/// origen, sin dañar el audio.
+#[test]
+fn test_cli_cover_jpeg_keeps_image_bytes() {
+    let mp3_path = create_temp_mp3();
+    let audio = fs::read(&mp3_path).expect("Failed to read audio");
+    let cover_path = write_temp_image("cover_jpeg_mp3", "jpg", JPEG_BYTES);
+
+    let output = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--cover",
+        cover_path.to_str().unwrap(),
+        "--title",
+        "Con carátula JPEG",
+    ]);
+    assert!(
+        output.status.success(),
+        "edit --cover .jpg debe salir con cero"
+    );
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let pictures: Vec<_> = tag.pictures().collect();
+    assert_eq!(pictures.len(), 1, "debe haber exactamente una carátula");
+    assert_eq!(
+        pictures[0].mime_type, "image/jpeg",
+        "el MIME debe detectarse por la extensión"
+    );
+
+    // Los bytes de la imagen leídos del tag son idénticos a los del origen.
+    let original = fs::read(&cover_path).expect("Failed to read cover file");
+    assert_eq!(
+        pictures[0].data.as_slice(),
+        original.as_slice(),
+        "los bytes de la carátula JPEG deben quedar intactos"
+    );
+
+    // El audio sigue intacto: es exactamente el sufijo tras el tag ID3v2.
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert_eq!(
+        audio_after_id3v2(&result),
+        audio.as_slice(),
+        "el audio debe permanecer intacto y el archivo seguir siendo válido"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
+}
+
+/// Escenario S5.1 (`edit --cover portada.png`) para PNG.
+///
+/// Igual que el caso JPEG pero comprobando también que los bytes del PNG
+/// quedan intactos, algo que ningún test de integración cubría hasta ahora.
+#[test]
+fn test_cli_cover_png_keeps_image_bytes() {
+    let mp3_path = create_temp_mp3();
+    let audio = fs::read(&mp3_path).expect("Failed to read audio");
+    let cover_path = write_temp_image("cover_png_mp3", "png", PNG_BYTES);
+
+    let output = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--cover",
+        cover_path.to_str().unwrap(),
+        "--title",
+        "Con carátula PNG",
+    ]);
+    assert!(
+        output.status.success(),
+        "edit --cover .png debe salir con cero"
+    );
+
+    let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
+    let pictures: Vec<_> = tag.pictures().collect();
+    assert_eq!(pictures.len(), 1, "debe haber exactamente una carátula");
+    assert_eq!(
+        pictures[0].mime_type, "image/png",
+        "el MIME debe detectarse por la extensión"
+    );
+
+    // Los bytes de la imagen leídos del tag son idénticos a los del origen.
+    let original = fs::read(&cover_path).expect("Failed to read cover file");
+    assert_eq!(
+        pictures[0].data.as_slice(),
+        original.as_slice(),
+        "los bytes de la carátula PNG deben quedar intactos"
+    );
+
+    // El audio sigue intacto: es exactamente el sufijo tras el tag ID3v2.
+    let result = fs::read(&mp3_path).expect("Failed to read result");
+    assert_eq!(
+        audio_after_id3v2(&result),
+        audio.as_slice(),
+        "el audio debe permanecer intacto y el archivo seguir siendo válido"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_path);
 }
