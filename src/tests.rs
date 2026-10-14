@@ -2661,3 +2661,106 @@ fn test_manifiesto_categories_validas() {
         "el cambio fija estas categorías exactas en `Cargo.toml`"
     );
 }
+
+#[test]
+fn test_manifiesto_include_definido() {
+    let manifiesto = include_str!("../Cargo.toml");
+
+    // El bloque `[package]` abarca desde su cabecera hasta la siguiente sección
+    // (la primera línea que empiece por `[`). Delimitar el fragmento es lo que
+    // garantiza que una clave `include` declarada en otra sección no cuele.
+    let mut bloque = String::new();
+    let mut dentro = false;
+    for linea in manifiesto.lines() {
+        let recortada = linea.trim();
+        if recortada == "[package]" {
+            dentro = true;
+            continue;
+        }
+        if dentro && recortada.starts_with('[') {
+            break;
+        }
+        if dentro {
+            bloque.push_str(linea);
+            bloque.push('\n');
+        }
+    }
+    assert!(
+        !bloque.is_empty(),
+        "`Cargo.toml` no declara el bloque `[package]`"
+    );
+
+    // Reconstruye el valor de `include`, admitiendo que la lista se reparta en
+    // varias líneas, y extrae los patrones entrecomillados en orden.
+    let mut valor = String::new();
+    let mut encontrado = false;
+    for linea in bloque.lines() {
+        let recortada = linea.trim();
+        if !encontrado {
+            if let Some(resto) = recortada.strip_prefix("include") {
+                let resto = resto.trim_start();
+                if let Some(resto) = resto.strip_prefix('=') {
+                    encontrado = true;
+                    valor.push_str(resto);
+                }
+            }
+        } else {
+            valor.push(' ');
+            valor.push_str(recortada);
+        }
+        if encontrado && valor.contains(']') {
+            break;
+        }
+    }
+    assert!(
+        encontrado,
+        "el bloque `[package]` de `Cargo.toml` no declara la clave `include` \
+         con la lista blanca de ficheros publicables"
+    );
+
+    let interior = valor
+        .split_once(']')
+        .map(|(antes, _)| antes)
+        .unwrap_or(valor.as_str());
+
+    let mut patrones = Vec::new();
+    for trozo in interior.split('"').skip(1).step_by(2) {
+        patrones.push(trozo.to_string());
+    }
+
+    // Los patrones de primer nivel van anclados a la raíz con una barra inicial:
+    // sin ella, la semántica de gitignore los hace casar a cualquier profundidad
+    // y el paquete arrastraba un fichero ajeno del andamiaje del repositorio,
+    // `openspec/changes/archive/2026-10-14-remove-empty-id3-header/README.md`.
+    let esperados = [
+        "/src/**",
+        "/tests/**",
+        "/Cargo.toml",
+        "/Cargo.lock",
+        "/README.md",
+        "/LICENSE",
+        "/CHANGELOG.md",
+    ];
+
+    for (indice, esperado) in esperados.iter().copied().enumerate() {
+        match patrones.get(indice) {
+            None => panic!(
+                "`include` de `[package]` no declara {esperado:?} en la posición \
+                 {indice}: {patrones:?}"
+            ),
+            Some(patron) if patron.as_str() == esperado => {}
+            Some(patron) => panic!(
+                "`include` de `[package]` tiene {patron:?} en la posición {indice}, \
+                 pero se esperaba {esperado:?}: {patrones:?}"
+            ),
+        }
+    }
+
+    assert_eq!(
+        patrones.len(),
+        esperados.len(),
+        "`include` declara {} patrones, pero se esperaban {}: {patrones:?}",
+        patrones.len(),
+        esperados.len()
+    );
+}
