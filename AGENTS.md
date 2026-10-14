@@ -6,7 +6,7 @@ Single-crate Rust CLI (`edition 2024`, `lofty` + `clap` derive) that reads/write
 
 ```sh
 cargo build                      # debug
-cargo test                       # 214 tests (122 unit + 92 integración)
+cargo test                       # 219 tests (124 unit + 95 integración)
 cargo test --lib                 # unit tests only (src/tests.rs)
 cargo test --test '*'            # integration tests only (tests/integration_test.rs)
 cargo fmt
@@ -24,6 +24,7 @@ Nota: `cargo test` se detiene en el primer binario que falla — añade `--no-fa
   - **MP4** (`lofty::tag::Tag` + `ItemKey`): `edit_mp4()`, `apply_metadata_mp4()`, `read_mp4_tag()`, `write_mp4_tag()`, `remove_tags_mp4()`, `remove_all_mp4()`, `display_tags_mp4()`
   - **Común**: `detect_format()`, `detect_format_from_bytes()`, `detect_mime_type()`, `detect_cover_mime_type()`, `MP4_ATOM_MAP`
 - **`src/main.rs`** — thin CLI wrapper with clap subcommands: `show`, `edit`, `remove`
+- **`src/output.rs`** — capa de escritura de la salida estándar: contiene el macro `outln!` (equivalente a `println!`) que trata el cierre del pipe como un final normal de la salida, y es el único sitio por el que se escribe en stdout
 - **`src/tests.rs`** — unit tests (module of lib.rs via `#[cfg(test)]`)
 - **`tests/integration_test.rs`** — integration tests spawning the binary via `Command`
 - **`tests/fixtures/`** — `sample.mp3` y `sample.m4a` reales, más `generate_sample_m4a.sh`
@@ -45,6 +46,8 @@ Nota: `cargo test` se detiene en el primer binario que falla — añade `--no-fa
 - Las escrituras pasan por `tag.save_to_path(file, WriteOptions::default())`
 - `id3` es **solo dev-dependency**: los tests de integración releen con esa librería lo que escribe `lofty`, de modo que la verificación es entre librerías distintas. Producción no la usa
 - Al eliminar el último campo restante, el bloque ID3v2 no se conserva vacío: desaparece del archivo, igual que con `remove --all`
+- La salida normal se escribe con `outln!` y **nunca** con `println!`, porque `println!` entra en pánico si el consumidor cierra el pipe; los avisos y errores van con `eprintln!` y no se tocan
+- La integración continua ejecuta `cargo` con `--locked`, de modo que si `Cargo.toml` y `Cargo.lock` no coinciden la CI falla en lugar de actualizar el lock en silencio; por eso, al añadir o cambiar dependencias, el lock MUST commitearse en el mismo cambio
 
 ## Git workflow
 

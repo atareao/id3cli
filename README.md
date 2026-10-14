@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4) y **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-214%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-219%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -118,6 +118,15 @@ También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`,
 | `--artist-sort <ARTIST_SORT>`         | Orden de clasificación del artista (Apple TSOP)              |
 | `--title-sort <TITLE_SORT>`           | Orden de clasificación del título (Apple TSOT)               |
 | `-h, --help`                          | Mostrar ayuda                                                |
+
+### 🖥️ Salida estándar, avisos y errores
+
+La salida normal del CLI se escribe por **stdout** y los avisos y los errores por **stderr**, y esto es idéntico en MP3 y en MP4. El tratamiento del pipe cerrado también lo es:
+
+- **Pipe cerrado = final normal.** Si el consumidor cierra la salida antes de que el CLI termine de escribir (por ejemplo `id3cli show cancion.m4a | head -1`), el proceso termina **en silencio y con código de salida 0**: cerrar el pipe no es un error y no se imprime ningún pánico ni ningún mensaje.
+- **Fallo real de escritura = error.** Si la escritura falla por otra causa (por ejemplo un destino sin espacio), el CLI avisa **en español por stderr** y termina con un código de salida **distinto de cero**.
+
+> [!note] Un pipe cerrado no es un error, es un final normal de la salida. Solo los fallos reales de escritura se tratan como error, y los avisos y los errores siguen saliendo por stderr en ambos casos.
 
 ## Ejemplos de uso
 
@@ -567,11 +576,12 @@ cargo clippy -- -D warnings
 ```tree
 id3cli/
 ├── src/
-│   ├── lib.rs                     # Librería (1607 líneas) - lógica de negocio
-│   ├── main.rs                    # CLI (668 líneas) - interfaz de comandos show/edit/remove
-│   └── tests.rs                   # Tests unitarios (2561 líneas)
+│   ├── lib.rs                     # Librería (1610 líneas) - lógica de negocio
+│   ├── main.rs                    # CLI (664 líneas) - interfaz de comandos show/edit/remove
+│   ├── output.rs                  # Salida estándar (49 líneas) - macro outln! y cierre del pipe
+│   └── tests.rs                   # Tests unitarios (2663 líneas)
 ├── tests/
-│   ├── integration_test.rs        # Tests de integración (3926 líneas)
+│   ├── integration_test.rs        # Tests de integración (4143 líneas)
 │   └── fixtures/                  # Muestras reales de MP3 y MP4 para los tests
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
@@ -596,6 +606,7 @@ id3cli/
 
 - **src/lib.rs** - Librería reutilizable con todas las funciones de manipulación de tags
 - **src/main.rs** - CLI con clap subcommands (show/edit/remove) para parsing de argumentos y orquestación
+- **src/output.rs** - Capa de escritura de la salida estándar: el macro `outln!` y el tratamiento del pipe cerrado
 - **src/tests.rs** - Tests unitarios para todas las funciones de la librería
 
 **Funciones principales (MP3):**
@@ -634,12 +645,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **214 tests** (122 unitarios + 92 de integración):
+El proyecto tiene **cobertura completa** con **219 tests** (124 unitarios + 95 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (214)
-cargo test --lib        # Solo tests unitarios (122)
-cargo test --test '*'   # Solo tests de integración (92)
+cargo test              # Ejecutar todos los tests (219)
+cargo test --lib        # Solo tests unitarios (124)
+cargo test --test '*'   # Solo tests de integración (95)
 ```
 
 **Ejemplos de tests:**
@@ -654,6 +665,8 @@ cargo test --test '*'   # Solo tests de integración (92)
 - Eliminación de tags en inglés/español
 - Preservación de metadata existente
 - Validación de formatos no soportados
+- Cierre del pipe como final normal de la salida (código 0 y sin mensajes) y fallo real de escritura como error
+- Validación de los metadatos del paquete (`keywords` y `categories`)
 - Tests end-to-end del CLI completo con podcasts
 
 ---
