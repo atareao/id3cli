@@ -73,7 +73,7 @@ id3cli show <FILE>
 # Editar tags del archivo
 id3cli edit <FILE> [OPTIONS]
 
-# Eliminar todos los tags (ID3v1 e ID3v2) del archivo
+# Eliminar todos los tags del archivo (ID3v1 e ID3v2 en MP3, átomos ilst en MP4)
 id3cli remove <FILE> --all
 
 # Eliminar tags específicos del archivo
@@ -85,7 +85,7 @@ id3cli remove <FILE> [TAGS...]
 | Argumento    | Descripción                                         |
 | ------------ | --------------------------------------------------- |
 | `<FILE>`     | Ruta del archivo de audio MP3 o MP4 (requerido)      |
-| `-a, --all`  | Eliminar **físicamente** todos los tags ID3 (ID3v1 e ID3v2). Si el archivo no tenía tags, muestra un aviso |
+| `-a, --all`  | Eliminar **físicamente** todos los metadatos del archivo: en MP3 el bloque ID3 (ID3v1 e ID3v2) y en MP4 el árbol de átomos `ilst`. Si el archivo no tenía tags, muestra un aviso |
 | `[TAGS...]`  | Tags a eliminar (uno o más argumentos posicionales) |
 
 **Tags disponibles:** `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
@@ -422,6 +422,8 @@ Borra **físicamente** el bloque ID3v2 completo y el tag ID3v1 del archivo, dej�
 como si nunca hubiera tenido tags (el audio permanece intacto). Si el archivo no
 tenía tags ID3, se muestra un aviso.
 
+> [!note] Al eliminar el **último** campo que quedaba, el bloque ID3v2 no se conserva vacío: desaparece del archivo, exactamente igual que con `--all`. El audio nunca se toca.
+
 ```bash
 # Eliminar todos los tags de una sola vez
 id3cli remove cancion.mp3 --all
@@ -596,17 +598,31 @@ id3cli/
 - **src/main.rs** - CLI con clap subcommands (show/edit/remove) para parsing de argumentos y orquestación
 - **src/tests.rs** - Tests unitarios para todas las funciones de la librería
 
-**Funciones principales:**
+**Funciones principales (MP3):**
 
-- `apply_metadata()` - Aplica todos los tags de metadata al archivo (14 parámetros)
+- `apply_metadata()` - Aplica todos los tags de metadata al archivo MP3 (14 parámetros)
 - `add_cover_art()` - Embebe imagen con detección automática de MIME type
 - `add_lyrics()` - Añade letras en formato USLT
 - `add_url()` - Añade URL oficial en formato WOAR
 - `add_apple_metadata()` - Añade metadatos específicos de Apple
 - `remove_tags()` - Elimina tags específicos (acepta inglés/español)
-- `detect_mime_type()` - Detecta formato de imagen por extensión
-- `detect_format()` - Detecta el formato de audio por el contenido (magic bytes), no por la extensión
+- `remove_all_id3()` - Borra físicamente el bloque ID3v2 y el tag ID3v1
 - `display_tags()` - Muestra tags formateados con emojis
+
+**Funciones principales (MP4):**
+
+- `edit_mp4()` - Orquesta la edición de un archivo MP4
+- `apply_metadata_mp4()` - Escribe los átomos `ilst` a partir de los flags del CLI
+- `read_mp4_tag()` / `write_mp4_tag()` - Lectura y escritura del tag MP4
+- `remove_tags_mp4()` - Elimina átomos concretos
+- `remove_all_mp4()` - Elimina el árbol de metadatos del MP4
+- `display_tags_mp4()` - Muestra los átomos de un MP4
+- `MP4_ATOM_MAP` - Tabla de mapeo entre cada flag y su átomo
+
+**Comunes a ambos formatos:**
+
+- `detect_format()` / `detect_format_from_bytes()` - Detecta el formato de audio por el contenido (magic bytes), no por la extensión
+- `detect_mime_type()` / `detect_cover_mime_type()` - Detecta el formato de la imagen de carátula
 
 **Patrones de diseño:**
 
