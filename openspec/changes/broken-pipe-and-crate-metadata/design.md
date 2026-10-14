@@ -86,7 +86,7 @@ Cada garantía del contrato se verifica de forma independiente:
 
 El resto de la suite existente hace de red de seguridad de la parte no tocada: ningún test de comportamiento de formato MUST cambiar como consecuencia de este cambio.
 
-### 6. El lock se refresca en el propio commit de release, y se verifica con un test que compara las dos versiones
+### 6. El lock se refresca en el propio commit de release, y se verifica con `--locked` en la integración continua
 
 **Causa.** El pipeline (`release-prepare.yml`) sube la versión con vampus, regenera el changelog y hace `git add -A`, pero nada refresca `Cargo.lock` antes de ese `add`, así que el lock no entra en el commit de release y queda desincronizado del manifiesto.
 
@@ -95,9 +95,13 @@ El resto de la suite existente hace de red de seguridad de la parte no tocada: n
 - Añadir al pipeline, en `release-prepare.yml` y **antes** del commit de release, un paso que refresque el lock ejecutando `cargo metadata --format-version 1 > /dev/null`: el comando realiza la resolución y reescribe `Cargo.lock`, de modo que el `git add -A` posterior ya lo incluye. Así el lock no vuelve a quedarse atrás.
 - Commitear en este change el `Cargo.lock` ya refrescado, que arregla el estado actual de `main` y `development`.
 
-**Verificación.** Un test unitario lee los dos archivos con `include_str!` (sin depender del directorio de trabajo) y compara la versión declarada para el paquete en el lock con el campo `version` del manifiesto, para que la desincronización se detecte en CI en lugar de en el árbol de alguien. A ello se añade la comprobación local del comando: revertir el lock a `0.4.3`, ejecutar `cargo metadata --format-version 1 > /dev/null` y ver que vuelve a `0.5.0`.
+**Verificación.** El guardia es `cargo ... --locked` en la integración continua, no un test. Un test unitario que leyera el lock del árbol de trabajo con `include_str!` es un falso verde: cargo normaliza el lock a la versión del manifiesto **antes** de invocar a `rustc`, de modo que el test embebería ya el valor corregido. Medido: con el lock commiteado en `0.4.3` y el manifiesto en `0.5.0`, `cargo test --lib test_manifiesto_y_lock_coinciden` pasaba, y por eso ese test se ha retirado del código. Con `--locked`, en cambio, ese mismo lock hace **fallar** la orden con `error: cannot update the lock file /data/rust/id3cli/Cargo.lock because --locked was passed to prevent this`, y `--locked` no reescribe el lock. El flag MUST ir en la **primera** orden de cargo que resuelve dependencias: en `ci.yml` esa orden es `cargo clippy`, que va antes que `build` y que `test`, así que `--locked` MUST ir en ella; si solo se aplicara a `build`, clippy habría normalizado el lock antes y la comprobación no serviría de nada. A ello se añade la comprobación local del comando: revertir el lock a `0.4.3`, ejecutar `cargo metadata --format-version 1 > /dev/null` y ver que vuelve a `0.5.0`.
 
 **Alternativa descartada: descartar el lock del control de versiones** añadiéndolo a `.gitignore`, que es lo que hacen algunas bibliotecas. Se descarta porque este proyecto publica un **binario** y quiere compilaciones reproducibles con las versiones de dependencias fijadas; sin el lock versionado, cada build resolvería versiones distintas.
+
+**Alternativa descartada: un test unitario que lea el lock del árbol de trabajo.** Se descarta porque es un falso verde por construcción, medido: cargo reescribe el lock a la versión del manifiesto antes de compilar, así que el test embebe el valor ya corregido y pasa aunque el lock commiteado esté atrasado. El test que se había escrito por este motivo se ha retirado del código.
+
+**Alternativa descartada: leer el lock commiteado con `git show HEAD:Cargo.lock`.** Resolvería el falso verde, porque leería el contenido del commit y no el del árbol ya normalizado, pero ata los tests a git y dejaría el test en rojo hasta que el commit del lock exista, que es justo el caso que el guardia debe cubrir.
 
 ## Risks / Trade-offs
 

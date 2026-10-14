@@ -46,6 +46,8 @@ El manifiesto del paquete no declaraba `keywords` ni `categories`, así que la f
 
 El commit de release MUST dejar la entrada del propio paquete en `Cargo.lock` con la misma versión que `Cargo.toml`, de modo que un `cargo` en limpio MUST NOT modificar el árbol de trabajo. El incumplimiento actual queda como evidencia: el commit `9681456` (release de la 0.5.0) solo tocó `.vampus.yml`, `CHANGELOG.md` y `Cargo.toml`, y hoy `main` y `development` declaran `0.4.3` en el lock frente a `0.5.0` en el manifiesto.
 
+La comprobación de este requisito MUST NOT hacerse con un test de Rust que lea `Cargo.lock` del árbol de trabajo: cualquier orden de cargo normaliza el lock a la versión del manifiesto **antes** de invocar a `rustc`, así que el test embebería ya el valor corregido y daría un falso verde. Es un hecho medido: con el lock commiteado en `0.4.3` y el manifiesto en `0.5.0`, ese test pasaba, y por eso se ha retirado del código.
+
 #### Scenario: La versión del lock coincide con la del manifiesto
 - **WHEN** se comparan la versión declarada para el paquete en `Cargo.lock` y el campo `version` de `Cargo.toml`
 - **THEN** ambas MUST coincidir
@@ -54,6 +56,10 @@ El commit de release MUST dejar la entrada del propio paquete en `Cargo.lock` co
 - **WHEN** se ejecuta cualquier orden de cargo sobre un árbol recién clonado
 - **THEN** `Cargo.lock` MUST NOT reescribirse y `git status` MUST quedar sin cambios
 
+#### Scenario: La integración continua MUST detectar el desajuste
+- **WHEN** el lock commiteado no coincide con el manifiesto
+- **THEN** la integración continua MUST fallar en lugar de actualizar el lock en silencio: las órdenes de cargo de la CI MUST validar el lock (`--locked`) en vez de regenerarlo, y MUST incluir la primera orden que resuelve dependencias, para que el desajuste se detecte antes de que otra orden normalice el lock
+
 #### Scenario: El pipeline MUST refrescar el lock antes de commitear
 - **WHEN** el pipeline de release sube la versión del manifiesto
-- **THEN** MUST refrescar `Cargo.lock` antes de crear el commit de release, de forma que el lock quede incluido en ese mismo commit
+- **THEN** MUST refrescar `Cargo.lock` antes de crear el commit de release, de forma que el lock entre en ese mismo commit y la comprobación de la CI siga pasando

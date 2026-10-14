@@ -22,7 +22,7 @@ El contrato de este cambio tiene cuatro puntos:
 - **Pipe cerrado es un final normal de la salida.** Cuando la escritura en la salida estándar falla con `ErrorKind::BrokenPipe`, el CLI MUST terminar con código de salida **cero** y MUST NOT escribir nada por stderr: ni pánico, ni aviso, ni nota de backtrace. Cerrar el pipe deja de ser un error.
 - **Un fallo real de escritura sigue siendo un error.** Cuando la escritura falla por una causa distinta del pipe cerrado (por ejemplo `ENOSPC` al volcar a `/dev/full`), el CLI MUST informar en español por stderr y MUST terminar con código de salida distinto de cero.
 - **Ficha válida en el manifiesto.** `Cargo.toml` MUST declarar `keywords` y `categories` con valores que crates.io acepte, de modo que `cargo publish` no falle y la ficha deje de estar vacía.
-- **El lock queda con la versión publicada.** El commit de release MUST dejar la entrada del propio paquete en `Cargo.lock` con la misma versión que `Cargo.toml`, y el pipeline de release MUST refrescar el lock **antes** de crear ese commit, de modo que un `cargo` en limpio MUST NOT ensuciar el árbol de trabajo.
+- **El lock queda con la versión publicada.** El commit de release MUST dejar la entrada del propio paquete en `Cargo.lock` con la misma versión que `Cargo.toml`, y el pipeline de release MUST refrescar el lock **antes** de crear ese commit, de modo que un `cargo` en limpio MUST NOT ensuciar el árbol de trabajo. La integración continua MUST validar el lock con `--locked`, de modo que un desajuste entre `Cargo.lock` y el manifiesto falle en la CI en lugar de pasar inadvertido.
 
 **Consecuencia observable:** el **único** cambio de comportamiento del CLI es que cerrar el pipe deja de producir un pánico y un código 101, y pasa a producir un cierre limpio con código 0. **Los flags, los mensajes, los avisos por stderr y el resto de códigos de salida MUST NOT cambiar.** Los `eprintln!` (24 usos: avisos y errores) MUST NOT cambiar de flujo ni de códigos de salida. La adición de metadatos al manifiesto no altera en absoluto el comportamiento del binario.
 
@@ -31,7 +31,7 @@ El contrato de este cambio tiene cuatro puntos:
 ### New Capabilities
 
 - `cli-output`: contrato de escritura de la salida estándar del CLI. Distingue el cierre del pipe (final normal, código cero, sin mensajes) del fallo real de escritura (error en español por stderr, código distinto de cero), y fija que la salida de avisos y errores por stderr permanece en su flujo y códigos actuales. El delta se materializará en `specs/cli-output/spec.md`.
-- `crate-metadata`: contrato de los metadatos del manifiesto destinados a crates.io. Fija que `Cargo.toml` declara un conjunto válido y no vacío de `keywords` (máximo cinco, minúsculas ASCII, hasta 20 caracteres) y de `categories` (slugs existentes en la taxonomía de crates.io). Incluye además la consistencia entre `Cargo.lock` y el manifiesto tras una release: el lock MUST declarar la misma versión que el paquete y el pipeline MUST refrescarlo antes del commit de release, de modo que un `cargo` en limpio MUST NOT ensuciar el árbol. El delta se materializará en `specs/crate-metadata/spec.md`.
+- `crate-metadata`: contrato de los metadatos del manifiesto destinados a crates.io. Fija que `Cargo.toml` declara un conjunto válido y no vacío de `keywords` (máximo cinco, minúsculas ASCII, hasta 20 caracteres) y de `categories` (slugs existentes en la taxonomía de crates.io). Incluye además la consistencia entre `Cargo.lock` y el manifiesto tras una release: el lock MUST declarar la misma versión que el paquete, la integración continua MUST detectar el desajuste validando el lock (`--locked`), y el pipeline MUST refrescarlo antes del commit de release, de modo que un `cargo` en limpio MUST NOT ensuciar el árbol. El delta se materializará en `specs/crate-metadata/spec.md`.
 
 ### Modified Capabilities
 
@@ -42,10 +42,11 @@ Ninguna. Este cambio no toca el comportamiento de ningún formato de audio: no m
 - `src/output.rs`: **archivo nuevo**. Contiene el macro `outln!` y la función que escribe por `io::stdout()` y clasifica el error de escritura (pipe cerrado → cierre limpio; resto → error en español).
 - `src/lib.rs`: se declara el módulo `output` y **los 54 `println!`** de este archivo se renombran a `outln!`. Los 4 `eprintln!` quedan intactos.
 - `src/main.rs`: se importa el macro `outln!` y **los 54 `println!`** de este archivo se renombran a `outln!`. Los 20 `eprintln!` quedan intactos.
-- `src/tests.rs`: se añaden tests unitarios del manifiesto y del lock (lectura de `Cargo.toml` y de `Cargo.lock` mediante `include_str!`): uno comprueba la forma y los valores de `keywords`, otro los slugs de `categories` y otro que la versión del lock coincide con la del manifiesto.
+- `src/tests.rs`: se añaden **dos** tests unitarios del manifiesto (lectura de `Cargo.toml` mediante `include_str!`): uno comprueba la forma y los valores de `keywords` y otro los slugs de `categories`.
 - `tests/integration_test.rs`: se añaden tres tests de integración: el del pipe cerrado sobre MP3, el del pipe cerrado sobre M4A y el del fallo real de escritura (`/dev/full`).
 - `Cargo.toml`: se añaden `keywords` y `categories` al bloque `[package]`.
 - `Cargo.lock`: se commitea la versión refrescada, de modo que la entrada `id3cli` pase de `0.4.3` a `0.5.0` y coincida con el manifiesto.
+- `.github/workflows/ci.yml`: las órdenes de cargo pasan a validar el lock con `--locked`, para que un desajuste entre `Cargo.lock` y el manifiesto haga fallar la CI en lugar de reescribirse en silencio.
 - `.github/workflows/release-prepare.yml`: paso nuevo que refresca el lock antes del commit de release, para que el lock entre en ese mismo commit.
 - `README.md` y `AGENTS.md`: se documentan el nuevo módulo de salida y los metadatos del paquete.
 - **Sin dependencias nuevas.** Ni de producción ni de desarrollo: ni `libc` ni ninguna otra entra en el árbol. La solución se apoya solo en `std`.

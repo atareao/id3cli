@@ -2,7 +2,7 @@
 
 ## 1. RED: fijar el contrato nuevo en los tests
 
-El cambio tiene tres contratos independientes. El primero invierte el comportamiento de la salida estándar: cerrar el pipe deja de ser un pánico con código 101 y pasa a ser un final normal con código 0 y stderr vacío, mientras que un fallo real de escritura sigue siendo un error en español con código distinto de cero. El segundo fija los metadatos del manifiesto que crates.io debe aceptar. El tercero exige que `Cargo.lock` quede con la misma versión que el manifiesto tras la release. Este grupo fija los seis tests que describen los tres contratos antes de tocar el código de producción.
+El cambio tiene tres contratos independientes. El primero invierte el comportamiento de la salida estándar: cerrar el pipe deja de ser un pánico con código 101 y pasa a ser un final normal con código 0 y stderr vacío, mientras que un fallo real de escritura sigue siendo un error en español con código distinto de cero. El segundo fija los metadatos del manifiesto que crates.io debe aceptar. El tercero exige que `Cargo.lock` quede con la misma versión que el manifiesto tras la release. Este grupo fija los cinco tests que describen los tres contratos antes de tocar el código de producción.
 
 - [ ] 1.1 Añadir a `tests/integration_test.rs` el test de integración `test_cli_pipe_cerrado_no_es_error` (MP3): lanzar `show` con la salida estándar conectada a un pipe, cerrar el extremo de lectura antes de leer nada y esperar a que el proceso termine. El cierre antes de leer es deliberado: con pocos metadatos el proceso podría terminar antes de que el pipe se cierre y la prueba no distinguiría nada; cerrándolo antes de leer, el fallo es determinista.
       Verificación: `cargo test test_cli_pipe_cerrado_no_es_error` MUST fallar (hoy el proceso termina con 101 y escribe el pánico por stderr), fijando el contrato nuevo: código de salida 0 y stderr vacío (sin `panicked`, sin `failed printing to stdout` y sin la nota de `RUST_BACKTRACE`).
@@ -15,9 +15,9 @@ El cambio tiene tres contratos independientes. El primero invierte el comportami
 - [ ] 1.5 Añadir a `src/tests.rs` el test unitario `test_manifiesto_categories_validas`, que lee `Cargo.toml` con `include_str!("../Cargo.toml")` y comprueba que las categorías declaradas están entre los tres slugs verificados: `command-line-utilities`, `multimedia::audio` y `filesystem`.
       Verificación: `cargo test test_manifiesto_categories_validas` MUST fallar hoy (el manifiesto no declara `categories`) y al pasar MUST verificar que cada slug pertenece a la lista de slugs verificados.
 - [ ] 1.6 Ejecutar la suite completa para fijar el contrato rojo.
-      Verificación: `cargo test --no-fail-fast` MUST fallar exactamente en esos 6 tests nuevos y MUST NOT fallar ninguno de los 214 tests existentes; el recuento total pasa a ser 220 (214 + 6).
-- [ ] 1.7 Restaurar primero `Cargo.lock` a su estado commiteado con `git checkout -- Cargo.lock` (en el árbol de trabajo actual el lock ya aparece refrescado porque lo reescribió un `cargo` al ejecutar el binario; sin restaurarlo, el test no podría fallar y el rojo no sería real), y añadir en `src/tests.rs` el test unitario `test_manifiesto_y_lock_coinciden`, que lee `Cargo.toml` y `Cargo.lock` con `include_str!` y comprueba que la versión declarada para el paquete en el lock coincide con el campo `version` del manifiesto.
-      Verificación: `cargo test test_manifiesto_y_lock_coinciden` MUST fallar con las dos versiones en el mensaje (0.4.3 frente a 0.5.0) mientras el lock siga en su estado commiteado.
+      Verificación: `cargo test --no-fail-fast` MUST fallar exactamente en esos 5 tests nuevos y MUST NOT fallar ninguno de los 214 tests existentes; el recuento total pasa a ser 219 (214 + 5).
+- [ ] 1.7 (RED) Tras restaurar `Cargo.lock` a su estado commiteado con `git checkout -- Cargo.lock`, añadir `--locked` a las órdenes de cargo de `.github/workflows/ci.yml`: a `cargo clippy --all-targets --all-features` (la primera que resuelve dependencias) y también a `cargo build` y `cargo test`. Deja escrito que MUST NOT añadirse un test de Rust que lea `Cargo.lock` del árbol de trabajo: es un falso verde por construcción, porque cargo normaliza el lock antes de compilar (medido), y por eso se retiró el que había.
+      Verificación: con el lock en su estado commiteado, `cargo build --locked` MUST fallar con «cannot update the lock file … because --locked was passed» y MUST NOT reescribir el lock.
 
 ## 2. GREEN: implementar
 
@@ -32,9 +32,9 @@ Se implementa lo mínimo para satisfacer los tests: una capa de salida propia qu
 - [ ] 2.4 Confirmar que el árbol de dependencias no crece: la solución se apoya solo en `std` y MUST NOT añadirse ninguna dependencia nueva, ni de producción ni de desarrollo.
       Verificación: el diff de `Cargo.toml` y `Cargo.lock` MUST NOT añadir ninguna línea de dependencia; el único cambio de `Cargo.toml` MUST ser `keywords` y `categories`.
 - [ ] 2.5 Ejecutar la suite completa tras la implementación.
-      Verificación: `cargo test --no-fail-fast` en verde con 220 tests y 0 fallos.
+      Verificación: `cargo test --no-fail-fast` en verde con 219 tests y 0 fallos.
 - [ ] 2.6 Refrescar `Cargo.lock` con `cargo metadata --format-version 1 > /dev/null` (que realiza la resolución y reescribe el lock) y dejarlo listo para commitear en este mismo change.
-      Verificación: `cargo test test_manifiesto_y_lock_coinciden` MUST pasar, `git diff Cargo.lock` MUST mostrar solo la línea de la versión del paquete, y tras ejecutar `cargo test` MUST NOT quedar ninguna modificación pendiente en el lock.
+      Verificación: `git diff Cargo.lock` MUST mostrar solo la línea de la versión del paquete, `cargo build --locked` MUST pasar, y tras ejecutar `cargo test` MUST NOT quedar ninguna modificación pendiente en el lock.
 - [ ] 2.7 Añadir a `.github/workflows/release-prepare.yml` un paso que refresque `Cargo.lock` **antes** del paso que hace `git add -A` y crea el commit de release, con el mismo comando (`cargo metadata --format-version 1 > /dev/null`): el pipeline MUST incluir el lock en el propio commit de release, de modo que no vuelva a quedarse atrás.
       Verificación: el YAML MUST seguir siendo válido tras el cambio; y la comprobación local del comando MUST ser reproducible: dejar el lock en `0.4.3`, ejecutar el comando y comprobar que el lock vuelve a `0.5.0`.
 
@@ -52,7 +52,7 @@ Se implementa lo mínimo para satisfacer los tests: una capa de salida propia qu
 ## 4. Cierre
 
 - [ ] 4.1 Ejecutar la suite completa.
-      Verificación: 220 tests, 0 fallos y sin warnings del compilador.
+      Verificación: 219 tests, 0 fallos y sin warnings del compilador.
 - [ ] 4.2 Validar el cambio contra OpenSpec.
       Verificación: `openspec validate broken-pipe-and-crate-metadata --strict` sin errores.
 - [ ] 4.3 Verificación manual de extremo a extremo del pipe cerrado sobre un MP3 real con el binario: canalizar la salida a un consumidor que lee solo la primera línea.
@@ -69,3 +69,5 @@ Se implementa lo mínimo para satisfacer los tests: una capa de salida propia qu
       Verificación: `openspec archive broken-pipe-and-crate-metadata` listo para ejecutar; requiere la aprobación previa del usuario.
 - [ ] 4.9 Comprobar, tras la próxima publicación, que el lock de `main` declara la misma versión que `Cargo.toml` y que un `cargo` en limpio no ensucia el árbol. Esta comprobación sustituye a la comprobación manual de la ficha de crates.io solo en la parte del lock; la comprobación de la ficha de crates.io (tarea 4.7) se mantiene.
       Verificación: en `main`, la entrada `id3cli` de `Cargo.lock` MUST declarar la misma versión que `Cargo.toml`, y ejecutar cualquier orden de `cargo` sobre un árbol recién clonado MUST NOT dejar `Cargo.lock` modificado.
+- [ ] 4.10 Comprobar que la CI del PR pasa con la guardia `--locked` activa.
+      Verificación: la ejecución del workflow del PR MUST mostrar las órdenes de cargo con `--locked` terminando en verde.
