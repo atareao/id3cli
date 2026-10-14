@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Que el pipeline de release no deje releases a medias y que el paquete
+  publicado no lleve el andamiaje del repositorio
