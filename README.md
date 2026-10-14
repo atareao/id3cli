@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4) y **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-211%20passing-brightgreen.svg)](https://github.com/TU_USUARIO/id3cli)
+[![Tests](https://img.shields.io/badge/tests-214%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -48,7 +48,7 @@ En todos los casos de error el archivo queda **intacto**: la detección ocurre a
 Descarga la última release:
 
 ```bash
-wget https://github.com/TU_USUARIO/id3cli/releases/latest/download/id3cli-linux-x86_64
+wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-linux-x86_64
 chmod +x id3cli-linux-x86_64
 sudo mv id3cli-linux-x86_64 /usr/local/bin/id3cli
 ```
@@ -56,7 +56,7 @@ sudo mv id3cli-linux-x86_64 /usr/local/bin/id3cli
 ### Compilar desde código fuente
 
 ```bash
-git clone https://github.com/TU_USUARIO/id3cli.git
+git clone https://github.com/atareao/id3cli.git
 cd id3cli
 cargo build --release
 sudo cp target/release/id3cli /usr/local/bin/
@@ -527,7 +527,7 @@ Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan docume
 
 ### Requisitos
 
-- Rust 1.70+ (edition 2024)
+- Rust 1.85+ (edition 2024)
 - Cargo
 
 ### Compilar
@@ -565,15 +565,18 @@ cargo clippy -- -D warnings
 ```tree
 id3cli/
 ├── src/
-│   ├── lib.rs                     # Librería (511 líneas) - lógica de negocio
-│   ├── main.rs                    # CLI (291 líneas) - interfaz de comandos show/edit/remove
-│   └── tests.rs                   # Tests unitarios (730 líneas)
+│   ├── lib.rs                     # Librería (1607 líneas) - lógica de negocio
+│   ├── main.rs                    # CLI (668 líneas) - interfaz de comandos show/edit/remove
+│   └── tests.rs                   # Tests unitarios (2561 líneas)
 ├── tests/
-│   └── integration_test.rs        # Tests de integración (1628 líneas)
+│   ├── integration_test.rs        # Tests de integración (3926 líneas)
+│   └── fixtures/                  # Muestras reales de MP3 y MP4 para los tests
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
-│       └── release.yml            # CI/CD para releases automáticas
+│       ├── ci.yml                 # CI: tests, formato y linter en cada push a development y pull request
+│       ├── release-prepare.yml    # Prepare Release: prepara la release al fusionar en main
+│       └── release.yml            # release: publica la release y los binarios al crear un tag v*
 ├── Cargo.toml                     # Dependencias y metadata
 ├── README.md                      # Esta documentación
 └── RELEASE.md                     # Proceso de release
@@ -615,12 +618,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **211 tests** (122 unitarios + 89 de integración):
+El proyecto tiene **cobertura completa** con **214 tests** (122 unitarios + 92 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (211)
+cargo test              # Ejecutar todos los tests (214)
 cargo test --lib        # Solo tests unitarios (122)
-cargo test --test '*'   # Solo tests de integración (89)
+cargo test --test '*'   # Solo tests de integración (92)
 ```
 
 **Ejemplos de tests:**
