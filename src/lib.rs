@@ -26,6 +26,9 @@
 //! `----:com.apple.iTunes:SUBTITLE`, que `lofty` mapea a
 //! [`ItemKey::TrackSubtitle`].
 
+#[macro_use]
+pub mod output;
+
 use lofty::TextEncoding;
 use lofty::config::WriteOptions;
 use lofty::file::TaggedFileExt;
@@ -552,7 +555,7 @@ pub fn remove_tags(tag: &mut Id3v2Tag, tags_to_remove: &[String]) -> bool {
         };
 
         if removed {
-            println!("✓ Eliminado: {}", tag_name);
+            outln!("✓ Eliminado: {}", tag_name);
             changed = true;
         }
     }
@@ -628,64 +631,64 @@ pub fn remove_all_id3(file: &Path) -> Result<RemovedId3, Box<dyn std::error::Err
 /// copyright, compositor, subtítulo, artista original, artista del álbum,
 /// carátulas, letras, URL y metadatos de Apple.
 pub fn display_tags(tag: &Id3v2Tag) {
-    println!("\n📋 Tags ID3 encontrados:\n");
-    println!("═══════════════════════════════════════");
+    outln!("\n📋 Tags ID3 encontrados:\n");
+    outln!("═══════════════════════════════════════");
 
     if let Some(title) = tag.title() {
-        println!("🎵 Título:    {}", title);
+        outln!("🎵 Título:    {}", title);
     }
 
     if let Some(artist) = tag.artist() {
-        println!("🎤 Artista:   {}", artist);
+        outln!("🎤 Artista:   {}", artist);
     }
 
     if let Some(album) = tag.album() {
-        println!("💿 Álbum:     {}", album);
+        outln!("💿 Álbum:     {}", album);
     }
 
     if let Some(year) = year_frame(tag) {
-        println!("📅 Año:       {}", year);
+        outln!("📅 Año:       {}", year);
     }
 
     if let Some(date) = tag.date() {
-        println!("📆 Fecha:     {}", date);
+        outln!("📆 Fecha:     {}", date);
     }
 
     if let Some(genre) = tag.genre() {
-        println!("🎸 Género:    {}", genre);
+        outln!("🎸 Género:    {}", genre);
     }
 
     if let Some(track) = tag.track() {
-        println!("#️⃣  Pista:     {}", track);
+        outln!("#️⃣  Pista:     {}", track);
     }
 
     if let Some(season) = tag.disk() {
-        println!("📺 Temporada: {}", season);
+        outln!("📺 Temporada: {}", season);
     }
 
     if let Some(copyright) = tag.get_text(&frame_id("TCOP")) {
-        println!("©️  Copyright: {}", copyright);
+        outln!("©️  Copyright: {}", copyright);
     }
 
     if let Some(composer) = tag.get_text(&frame_id("TCOM")) {
-        println!("🎼 Compositor: {}", composer);
+        outln!("🎼 Compositor: {}", composer);
     }
 
     if let Some(subtitle) = tag.get_text(&frame_id("TIT3")) {
-        println!("📄 Subtítulo: {}", subtitle);
+        outln!("📄 Subtítulo: {}", subtitle);
     }
 
     if let Some(original_artist) = tag.get_text(&frame_id("TOPE")) {
-        println!("🎙️  Artista original: {}", original_artist);
+        outln!("🎙️  Artista original: {}", original_artist);
     }
 
     if let Some(album_artist) = tag.get_text(&frame_id("TPE2")) {
-        println!("👥 Artista del álbum: {}", album_artist);
+        outln!("👥 Artista del álbum: {}", album_artist);
     }
 
     // Mostrar URL si existe
     if let Some(Frame::Url(url_frame)) = tag.get(&frame_id("WOAR")) {
-        println!("🌐 URL: {}", url_frame.url());
+        outln!("🌐 URL: {}", url_frame.url());
     }
 
     let pictures: Vec<&Picture> = tag
@@ -696,9 +699,9 @@ pub fn display_tags(tag: &Id3v2Tag) {
         })
         .collect();
     if !pictures.is_empty() {
-        println!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+        outln!("🖼️  Carátulas: {} imagen(es)", pictures.len());
         for (i, pic) in pictures.iter().enumerate() {
-            println!(
+            outln!(
                 "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
                 i + 1,
                 pic.pic_type(),
@@ -713,41 +716,41 @@ pub fn display_tags(tag: &Id3v2Tag) {
         .iter()
         .find(|frame| matches!(frame, Frame::UnsynchronizedText(_)))
     {
-        println!("📝 Letra ({}):", String::from_utf8_lossy(&lyrics.language));
+        outln!("📝 Letra ({}):", String::from_utf8_lossy(&lyrics.language));
         // Mostrar solo las primeras 3 líneas como preview
         let lines: Vec<&str> = lyrics.content.lines().collect();
         for line in lines.iter().take(3) {
-            println!("   {}", line);
+            outln!("   {}", line);
         }
         if lines.len() > 3 {
-            println!("   ... ({} líneas más)", lines.len() - 3);
+            outln!("   ... ({} líneas más)", lines.len() - 3);
         }
     }
 
     // Mostrar metadatos de Apple si existen
     if tag.get_text(&frame_id("TCMP")) == Some("1") {
-        println!(" Compilación: Sí");
+        outln!(" Compilación: Sí");
     }
 
     if let Some(album_sort) = tag.get_text(&frame_id("TSOA")) {
-        println!("🔤 Orden álbum: {}", album_sort);
+        outln!("🔤 Orden álbum: {}", album_sort);
     }
 
     if let Some(artist_sort) = tag.get_text(&frame_id("TSOP")) {
-        println!("🔤 Orden artista: {}", artist_sort);
+        outln!("🔤 Orden artista: {}", artist_sort);
     }
 
     if let Some(title_sort) = tag.get_text(&frame_id("TSOT")) {
-        println!("🔤 Orden título: {}", title_sort);
+        outln!("🔤 Orden título: {}", title_sort);
     }
 
     // Mostrar otros frames si existen
     let frame_count = tag.iter().count();
     if frame_count > 0 {
-        println!("\n📦 Total de frames: {}", frame_count);
+        outln!("\n📦 Total de frames: {}", frame_count);
     }
 
-    println!("═══════════════════════════════════════\n");
+    outln!("═══════════════════════════════════════\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1447,7 +1450,7 @@ pub fn remove_tags_mp4(tag: &mut Tag, tags_to_remove: &[String]) -> bool {
         };
 
         if removed {
-            println!("✓ Eliminado: {}", tag_name);
+            outln!("✓ Eliminado: {}", tag_name);
             changed = true;
         }
     }
@@ -1496,63 +1499,63 @@ fn is_year_only(value: &str) -> bool {
 /// «Fecha» en caso contrario, de modo que el conjunto de campos coincide con el
 /// que produce `show` sobre MP3 para los mismos flags.
 pub fn display_tags_mp4(tag: &Tag) {
-    println!("\n📋 Metadatos encontrados:\n");
-    println!("═══════════════════════════════════════");
+    outln!("\n📋 Metadatos encontrados:\n");
+    outln!("═══════════════════════════════════════");
 
     if let Some(title) = tag.get_string(ItemKey::TrackTitle) {
-        println!("🎵 Título:    {}", title);
+        outln!("🎵 Título:    {}", title);
     }
 
     if let Some(artist) = tag.get_string(ItemKey::TrackArtist) {
-        println!("🎤 Artista:   {}", artist);
+        outln!("🎤 Artista:   {}", artist);
     }
 
     if let Some(album) = tag.get_string(ItemKey::AlbumTitle) {
-        println!("💿 Álbum:     {}", album);
+        outln!("💿 Álbum:     {}", album);
     }
 
     if let Some(day) = tag.get_string(ItemKey::RecordingDate) {
         if is_year_only(day) {
-            println!("📅 Año:       {}", day);
+            outln!("📅 Año:       {}", day);
         } else {
-            println!("📆 Fecha:     {}", day);
+            outln!("📆 Fecha:     {}", day);
         }
     }
 
     if let Some(genre) = tag.get_string(ItemKey::Genre) {
-        println!("🎸 Género:    {}", genre);
+        outln!("🎸 Género:    {}", genre);
     }
 
     if let Some(track) = tag.track() {
-        println!("#️⃣  Pista:     {}", track);
+        outln!("#️⃣  Pista:     {}", track);
     }
 
     if let Some(season) = tag.disk() {
-        println!("📺 Temporada: {}", season);
+        outln!("📺 Temporada: {}", season);
     }
 
     if let Some(copyright) = tag.get_string(ItemKey::CopyrightMessage) {
-        println!("©️  Copyright: {}", copyright);
+        outln!("©️  Copyright: {}", copyright);
     }
 
     if let Some(composer) = tag.get_string(ItemKey::Composer) {
-        println!("🎼 Compositor: {}", composer);
+        outln!("🎼 Compositor: {}", composer);
     }
 
     if let Some(subtitle) = tag.get_string(ItemKey::TrackSubtitle) {
-        println!("📄 Subtítulo: {}", subtitle);
+        outln!("📄 Subtítulo: {}", subtitle);
     }
 
     if let Some(album_artist) = tag.get_string(ItemKey::AlbumArtist) {
-        println!("👥 Artista del álbum: {}", album_artist);
+        outln!("👥 Artista del álbum: {}", album_artist);
     }
 
     // Mostrar carátulas si existen
     let pictures = tag.pictures();
     if !pictures.is_empty() {
-        println!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+        outln!("🖼️  Carátulas: {} imagen(es)", pictures.len());
         for (i, pic) in pictures.iter().enumerate() {
-            println!(
+            outln!(
                 "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
                 i + 1,
                 pic.pic_type(),
@@ -1567,40 +1570,40 @@ pub fn display_tags_mp4(tag: &Tag) {
         .get_string(ItemKey::UnsyncLyrics)
         .or_else(|| tag.get_string(ItemKey::Lyrics))
     {
-        println!("📝 Letra:");
+        outln!("📝 Letra:");
         // Mostrar solo las primeras 3 líneas como preview
         let lines: Vec<&str> = lyrics.lines().collect();
         for line in lines.iter().take(3) {
-            println!("   {}", line);
+            outln!("   {}", line);
         }
         if lines.len() > 3 {
-            println!("   ... ({} líneas más)", lines.len() - 3);
+            outln!("   ... ({} líneas más)", lines.len() - 3);
         }
     }
 
     // Mostrar metadatos de Apple si existen
     if tag.get_string(ItemKey::FlagCompilation) == Some("1") {
-        println!(" Compilación: Sí");
+        outln!(" Compilación: Sí");
     }
 
     if let Some(album_sort) = tag.get_string(ItemKey::AlbumTitleSortOrder) {
-        println!("🔤 Orden álbum: {}", album_sort);
+        outln!("🔤 Orden álbum: {}", album_sort);
     }
 
     if let Some(artist_sort) = tag.get_string(ItemKey::TrackArtistSortOrder) {
-        println!("🔤 Orden artista: {}", artist_sort);
+        outln!("🔤 Orden artista: {}", artist_sort);
     }
 
     if let Some(title_sort) = tag.get_string(ItemKey::TrackTitleSortOrder) {
-        println!("🔤 Orden título: {}", title_sort);
+        outln!("🔤 Orden título: {}", title_sort);
     }
 
     let item_count = tag.items().len();
     if item_count > 0 {
-        println!("\n📦 Total de metadatos: {}", item_count);
+        outln!("\n📦 Total de metadatos: {}", item_count);
     }
 
-    println!("═══════════════════════════════════════\n");
+    outln!("═══════════════════════════════════════\n");
 }
 
 #[cfg(test)]
