@@ -146,17 +146,17 @@ Los campos de la tabla de mapeo, sobre el árbol `moov.udta.meta.ilst`.
 
 ## 8. Verificación de integración final
 
-- [ ] 8.1 Ejecutar la suite completa.
+- [x] 8.1 Ejecutar la suite completa.
       Verificación: `cargo test` en verde, 0 fallos, con el recuento de tests anotado y comparado contra los 106 del baseline.
-- [ ] 8.2 Comprobar el formato.
+- [x] 8.2 Comprobar el formato.
       Verificación: `cargo fmt --check` sin diferencias.
-- [ ] 8.3 Comprobar el linter en todos los targets y features.
+- [x] 8.3 Comprobar el linter en todos los targets y features.
       Verificación: `cargo clippy --all-targets --all-features -- -D warnings` sin warnings.
-- [ ] 8.4 Validar el cambio contra OpenSpec.
+- [x] 8.4 Validar el cambio contra OpenSpec.
       Verificación: `openspec validate m4a-support` sin errores; `openspec show m4a-support` MUST listar las tres capacidades nuevas.
-- [ ] 8.5 Comprobar la paridad de MP3 contra el baseline del grupo 1.
+- [x] 8.5 Comprobar la paridad de MP3 contra el baseline del grupo 1.
       Verificación: revisar que ningún test del grupo 1 ha sido relajado o eliminado; `--year` MUST seguir escribiendo el frame `TYER` después de la migración, comparándolo contra la caracterización del grupo 1 (tarea 1.6); el diff de `src/tests.rs` y `tests/integration_test.rs` MUST mostrar solo adaptaciones de firma, no cambios de expectativa.
-- [ ] 8.6 Comprobar el flujo de extremo a extremo sobre los dos formatos con un archivo real de cada tipo.
+- [x] 8.6 Comprobar el flujo de extremo a extremo sobre los dos formatos con un archivo real de cada tipo.
       Verificación: ejecutar `edit`, `show` y `remove` sobre un `.mp3` y un `.m4a` reales y comprobar que la salida es coherente entre formatos y que los archivos siguen siendo reproducibles.
-- [ ] 8.7 Cerrar el cambio y marcar las tareas completadas.
+- [x] 8.7 Cerrar el cambio y marcar las tareas completadas.
       Verificación: todas las casillas de este fichero marcadas y `openspec archive m4a-support` listo para ejecutar tras la aprobación del usuario.

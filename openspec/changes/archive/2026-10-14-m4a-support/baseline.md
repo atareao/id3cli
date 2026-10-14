@@ -123,10 +123,13 @@ Al compilar la suite contra el nuevo backend `lofty`, fallaron **8 tests**, y no
 - Implementación: `detect_format` y `detect_format_from_bytes` en `src/lib.rs`; la guarda `require_mp3_format` en `src/main.rs` se invoca al inicio de `show`, `edit` y `remove` y **antes** de cualquier apertura en escritura, de modo que ningún formato no soportado llega a tocarse.
 - Verificación manual del caso crítico (destrucción silenciosa del baseline): copia de un `.m4a` real de `ffmpeg` (9.435 bytes) y `edit --title "X"` → salida con código 1, mensaje en español y hash SHA-256 idéntico antes y después (`b54527ed…`); `ffprobe` sigue reconociéndolo como contenedor MP4 válido.
 
-## Recuento tras cerrar el grupo 5 (carátulas y letras en MP4)
+## Recuento tras cerrar el grupo 4 (backend de metadatos MP4)
 
-> [!note] Grupo 4 no dejó entrada propia en este documento
-> El recuento salta del grupo 3 (142) al grupo 5. El grupo 4 (metadatos `ilst`, tareas 4.1–4.11) sí añadió tests, pero no registró aquí su cifra; al abrir el grupo 5 la suite ya partía de **189 tests (113 unitarios + 76 de integración), 0 fallos**.
+- La suite pasa a **189 tests (113 unitarios + 76 de integración), 0 fallos**.
+- El grupo 4 (metadatos `ilst`, tareas 4.1–4.11) es el que construye la escritura y la lectura de los átomos de metadatos MP4 sobre el backend `lofty`, y es el grupo que hace pasar la suite de 142 a 189 tests.
+- **Ningún test de los grupos 1–3 ha visto relajada su expectativa.** Los tests de integración de MP3 preexistentes siguen releyendo con `id3` (dependencia de desarrollo), de modo que la comparación sigue siendo entre librerías distintas y no una relectura con la librería nueva.
+
+## Recuento tras cerrar el grupo 5 (carátulas y letras en MP4)
 
 - La suite pasa a **203 tests (119 unitarios + 84 de integración), 0 fallos**.
 - El grupo 5 añadió **6 tests unitarios** en `src/tests.rs` (carátula JPEG tipo 13, carátula PNG tipo 14, WebP tipo reservado 0 con aviso y resto de campos, extensión no soportada sin escribir, borrado de `covr` conservando el resto y ausencia de idioma en `©lyr`) y **8 tests de integración** en `tests/integration_test.rs` (JPEG, PNG, WebP, ruta inexistente, `.tiff`, `remove cover`, letra visible con `show` y conservación del idioma `spa` en el `USLT` de MP3).
@@ -141,3 +144,52 @@ Al compilar la suite contra el nuevo backend `lofty`, fallaron **8 tests**, y no
 - **Ningún test de los grupos 1–5 ha visto relajada su expectativa.**
 - `--url` y `--original-artist` no tienen átomo en `ilst`: se omiten con un warning por stderr (`⚠️  El campo '<flag>' no tiene átomo equivalente en MP4; se omite.`), sin crear ningún átomo *freeform* de reemplazo. Los avisos se acumulan en `Mp4EditReport::warnings` (probado en unitarios) y `edit_mp4` los emite por stderr, de modo que no contaminan stdout.
 - **«Ningún cambio real que escribir»:** como los dos campos omitidos no marcan `report.changed`, `edit_mp4` **no llama** a `write_mp4_tag`; si son los únicos flags el archivo queda byte a byte idéntico (verificado por hash SHA-256 en la prueba manual y por igualdad de bytes en los tests).
+
+## Auditoría de paridad de MP3 (tarea 8.5)
+
+**Veredicto: la paridad de comportamiento en MP3 se preservó.** La auditoría la realizó un revisor independiente en modo solo lectura, comparando el estado auditado del repositorio contra los commits anteriores a la migración del backend de metadatos.
+
+### Tests de integración preexistentes
+
+- **Ninguna aserción modificada.** El diff de `tests/integration_test.rs` entre el commit anterior a la migración y el estado auditado es de **1121 inserciones y 1 sola eliminación**.
+- Esa única línea eliminada es un `use` (una importación). Una aserción modificada aparecería en el diff como un borrado **más** una inserción; no hay ningún borrado más, así que ninguna aserción fue reescrita.
+- El recuento de tests del fichero es **idéntico** antes y después de la migración.
+- Esto es posible porque esos tests releen los tags con la librería anterior (`id3`, dependencia de desarrollo) y **no** con la nueva: la verificación es entre librerías distintas, no una relectura con el mismo código que escribió.
+
+### Tests unitarios adaptados
+
+- De los **63 tests unitarios** se adaptaron **59**.
+- Los **4 no tocados** son los de `detect_mime_type`, que no usan la API de tags y por tanto no necesitaban adaptación.
+- La auditoría comprobó **uno por uno** que la adaptación preservó **la expectativa**, no solo la firma: mismo frame y mismo valor.
+
+### `--year` sigue escribiendo `TYER`, no `TDRC`
+
+Confirmado a **tres niveles**:
+
+- En producción: `set_year_frame` inserta el frame `TYER`.
+- En un test de integración preexistente, que afirma que `TYER` vale el año y que además `TDRC` está **ausente**.
+- En los tests unitarios del año.
+
+Ningún test se ha conformado con `TDRC` para el año.
+
+### Debilitamiento de la red de seguridad: ninguno encontrado
+
+- Sin tests marcados para omitirse.
+- Sin aserciones trivializadas.
+- Sin comprobaciones que hayan pasado de verificar un valor a verificar solo su existencia.
+- Los tipos MIME de las carátulas se comparan **por valor exacto**.
+- Las comprobaciones que usan «existe / no existe» **ya eran así antes** de la migración; no son una relajación introducida por este cambio.
+
+### Huecos de cobertura encontrados y cerrados
+
+La auditoría encontró **dos escenarios de la spec de paridad sin cobertura**, y ya están cerrados con **tres tests nuevos**:
+
+- El cambio de un solo campo con `edit` preservando el resto.
+- La carátula JPEG y PNG comprobando que **los bytes de la imagen quedan intactos** en el archivo (antes, la comprobación de integridad de bytes solo existía a nivel unitario y solo para JPEG).
+
+### Falsa alarma documentada
+
+> [!warning] No volver a señalar «Tags guardados» → «Metadatos guardados» como hallazgo
+> El diff de `src/main.rs` muestra que las confirmaciones de éxito pasan de «Tags guardados» a «Metadatos guardados». Se verificó que ese cambio afecta **únicamente al camino MP4** (código nuevo de este mismo cambio, donde «Tags» era terminología incorrecta) y que **el texto del camino MP3 permanece byte a byte idéntico**.
+
+No hay divergencia con la caracterización del baseline ni violación de paridad. Queda constancia explícita para que una auditoría futura no lo vuelva a marcar como hallazgo.
