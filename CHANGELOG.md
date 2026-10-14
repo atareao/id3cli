@@ -1,4 +1,25 @@
 # Changelog
+## [0.5.1] - 2026-10-14
+
+### Bug Fixes
+
+- Deja de tratar el cierre del pipe como un error
+
+### Documentation
+
+- *(openspec)* Propone el cambio broken-pipe-and-crate-metadata
+- Documenta la salida, el modulo outln! y los recuentos
+- *(openspec)* Corrige el guardia del lock tras medir un falso verde
+- *(openspec)* Archiva el cambio broken-pipe-and-crate-metadata
+
+### Miscellaneous Tasks
+
+- Declara keywords y categories para crates.io
+- Valida el lock con --locked y lo refresca antes del commit de release
+
+### Testing
+
+- Cubre el cierre del pipe y los metadatos del paquete
 ## [0.5.0] - 2026-10-14
 
 ### Bug Fixes
@@ -35,6 +56,7 @@
 ### Miscellaneous Tasks
 
 - Sincroniza Cargo.lock con Cargo.toml
+- Release v0.5.0
 
 ### Refactor
 
