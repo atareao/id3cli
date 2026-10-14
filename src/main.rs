@@ -291,11 +291,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Leer o crear tag
                 let mut tag = match read_id3v2_tag(file) {
                     Some(tag) => {
-                        println!("Tags existentes encontrados en '{}'", file.display());
+                        outln!("Tags existentes encontrados en '{}'", file.display());
                         tag
                     }
                     None => {
-                        println!("Creando nuevos tags para '{}'", file.display());
+                        outln!("Creando nuevos tags para '{}'", file.display());
                         Id3v2Tag::new()
                     }
                 };
@@ -320,43 +320,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Imprimir cambios aplicados
                 if let Some(title) = title {
-                    println!("✓ Título: {}", title);
+                    outln!("✓ Título: {}", title);
                 }
                 if !artist.is_empty() {
-                    println!("✓ Artista(s): {}", artist.join("; "));
+                    outln!("✓ Artista(s): {}", artist.join("; "));
                 }
                 if let Some(album) = album {
-                    println!("✓ Álbum: {}", album);
+                    outln!("✓ Álbum: {}", album);
                 }
                 if let Some(year) = year {
-                    println!("✓ Año: {}", year);
+                    outln!("✓ Año: {}", year);
                 }
                 if let Some(genre) = genre {
-                    println!("✓ Género: {}", genre);
+                    outln!("✓ Género: {}", genre);
                 }
                 if let Some(track) = track {
-                    println!("✓ Pista: {}", track);
+                    outln!("✓ Pista: {}", track);
                 }
                 if let Some(season) = season {
-                    println!("✓ Temporada: {}", season);
+                    outln!("✓ Temporada: {}", season);
                 }
                 if let Some(date) = date {
-                    println!("✓ Fecha: {}", date);
+                    outln!("✓ Fecha: {}", date);
                 }
                 if let Some(copyright) = copyright {
-                    println!("✓ Copyright: {}", copyright);
+                    outln!("✓ Copyright: {}", copyright);
                 }
                 if let Some(composer) = composer {
-                    println!("✓ Compositor: {}", composer);
+                    outln!("✓ Compositor: {}", composer);
                 }
                 if let Some(subtitle) = subtitle {
-                    println!("✓ Subtítulo: {}", subtitle);
+                    outln!("✓ Subtítulo: {}", subtitle);
                 }
                 if let Some(original_artist) = original_artist {
-                    println!("✓ Artista original: {}", original_artist);
+                    outln!("✓ Artista original: {}", original_artist);
                 }
                 if let Some(album_artist) = album_artist {
-                    println!("✓ Artista del álbum: {}", album_artist);
+                    outln!("✓ Artista del álbum: {}", album_artist);
                 }
 
                 // Añadir lyrics
@@ -364,7 +364,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(lyrics_text) = lyrics {
                     add_lyrics(&mut tag, lyrics_text);
                     let line_count = lyrics_text.lines().count();
-                    println!("✓ Letra: {} línea(s)", line_count);
+                    outln!("✓ Letra: {} línea(s)", line_count);
                     lyrics_added = true;
                 }
 
@@ -372,7 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut url_added = false;
                 if let Some(url) = url {
                     add_url(&mut tag, url);
-                    println!("✓ URL: {}", url);
+                    outln!("✓ URL: {}", url);
                     url_added = true;
                 }
 
@@ -386,16 +386,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
 
                 if *compilation {
-                    println!("✓ Compilación: Sí");
+                    outln!("✓ Compilación: Sí");
                 }
                 if let Some(sort) = album_sort {
-                    println!("✓ Orden álbum: {}", sort);
+                    outln!("✓ Orden álbum: {}", sort);
                 }
                 if let Some(sort) = artist_sort {
-                    println!("✓ Orden artista: {}", sort);
+                    outln!("✓ Orden artista: {}", sort);
                 }
                 if let Some(sort) = title_sort {
-                    println!("✓ Orden título: {}", sort);
+                    outln!("✓ Orden título: {}", sort);
                 }
 
                 // Añadir carátula
@@ -412,7 +412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let cover_data = fs::read(cover_path)?;
                     match add_cover_art(&mut tag, cover_path, cover_data) {
                         Ok(_) => {
-                            println!("✓ Carátula añadida desde: {}", cover_path.display());
+                            outln!("✓ Carátula añadida desde: {}", cover_path.display());
                             cover_added = true;
                         }
                         Err(e) => {
@@ -427,11 +427,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = tag.save_to_path(file, WriteOptions::default()) {
                         report_error(Box::new(e));
                     }
-                    println!("\n✅ Tags guardados correctamente en '{}'", file.display());
+                    outln!("\n✅ Tags guardados correctamente en '{}'", file.display());
                 } else {
-                    println!(
-                        "\n⚠️  No se especificaron cambios. Usa --help para ver las opciones."
-                    );
+                    outln!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
                 }
             }
             Backend::Mp4 => {
@@ -496,71 +494,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // átomo en MP4: `edit_mp4` ya avisa por stderr de su omisión,
                 // así que aquí no se confirman.
                 if let Some(title) = title {
-                    println!("✓ Título: {}", title);
+                    outln!("✓ Título: {}", title);
                 }
                 if !artist.is_empty() {
-                    println!("✓ Artista(s): {}", artist.join("; "));
+                    outln!("✓ Artista(s): {}", artist.join("; "));
                 }
                 if let Some(album) = album {
-                    println!("✓ Álbum: {}", album);
+                    outln!("✓ Álbum: {}", album);
                 }
                 if let Some(album_artist) = album_artist {
-                    println!("✓ Artista del álbum: {}", album_artist);
+                    outln!("✓ Artista del álbum: {}", album_artist);
                 }
                 if let Some(year) = year
                     && date.is_none()
                 {
-                    println!("✓ Año: {}", year);
+                    outln!("✓ Año: {}", year);
                 }
                 if let Some(genre) = genre {
-                    println!("✓ Género: {}", genre);
+                    outln!("✓ Género: {}", genre);
                 }
                 if let Some(track) = track {
-                    println!("✓ Pista: {}", track);
+                    outln!("✓ Pista: {}", track);
                 }
                 if let Some(season) = season {
-                    println!("✓ Temporada: {}", season);
+                    outln!("✓ Temporada: {}", season);
                 }
                 if let Some(date) = date {
-                    println!("✓ Fecha: {}", date);
+                    outln!("✓ Fecha: {}", date);
                 }
                 if let Some(copyright) = copyright {
-                    println!("✓ Copyright: {}", copyright);
+                    outln!("✓ Copyright: {}", copyright);
                 }
                 if let Some(composer) = composer {
-                    println!("✓ Compositor: {}", composer);
+                    outln!("✓ Compositor: {}", composer);
                 }
                 if let Some(subtitle) = subtitle {
-                    println!("✓ Subtítulo: {}", subtitle);
+                    outln!("✓ Subtítulo: {}", subtitle);
                 }
                 if let Some(lyrics_text) = lyrics {
-                    println!("✓ Letra: {} línea(s)", lyrics_text.lines().count());
+                    outln!("✓ Letra: {} línea(s)", lyrics_text.lines().count());
                 }
                 if let Some(cover_path) = cover {
-                    println!("✓ Carátula añadida desde: {}", cover_path.display());
+                    outln!("✓ Carátula añadida desde: {}", cover_path.display());
                 }
                 if *compilation {
-                    println!("✓ Compilación: Sí");
+                    outln!("✓ Compilación: Sí");
                 }
                 if let Some(sort) = album_sort {
-                    println!("✓ Orden álbum: {}", sort);
+                    outln!("✓ Orden álbum: {}", sort);
                 }
                 if let Some(sort) = artist_sort {
-                    println!("✓ Orden artista: {}", sort);
+                    outln!("✓ Orden artista: {}", sort);
                 }
                 if let Some(sort) = title_sort {
-                    println!("✓ Orden título: {}", sort);
+                    outln!("✓ Orden título: {}", sort);
                 }
 
                 if report.changed {
-                    println!(
+                    outln!(
                         "\n✅ Metadatos guardados correctamente en '{}'",
                         file.display()
                     );
                 } else {
-                    println!(
-                        "\n⚠️  No se especificaron cambios. Usa --help para ver las opciones."
-                    );
+                    outln!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
                 }
             }
         },
@@ -571,16 +567,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let format = remove_all_id3(file)?;
                     match format {
                         RemovedId3::None => {
-                            println!("⚠️  El archivo '{}' no tenía tags ID3", file.display());
+                            outln!("⚠️  El archivo '{}' no tenía tags ID3", file.display());
                         }
                         RemovedId3::Id3v1 => {
-                            println!("✅ Tag ID3v1 eliminado de '{}'", file.display());
+                            outln!("✅ Tag ID3v1 eliminado de '{}'", file.display());
                         }
                         RemovedId3::Id3v2 => {
-                            println!("✅ Tag ID3v2 eliminado de '{}'", file.display());
+                            outln!("✅ Tag ID3v2 eliminado de '{}'", file.display());
                         }
                         RemovedId3::Both => {
-                            println!("✅ Tags ID3v1 e ID3v2 eliminados de '{}'", file.display());
+                            outln!("✅ Tags ID3v1 e ID3v2 eliminados de '{}'", file.display());
                         }
                     }
                     return Ok(());
@@ -609,9 +605,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = tag.save_to_path(file, WriteOptions::default()) {
                         report_error(Box::new(e));
                     }
-                    println!("\n✅ Tags eliminados correctamente de '{}'", file.display());
+                    outln!("\n✅ Tags eliminados correctamente de '{}'", file.display());
                 } else {
-                    println!("\n⚠️  No se encontraron tags válidos para eliminar.");
+                    outln!("\n⚠️  No se encontraron tags válidos para eliminar.");
                 }
             }
             Backend::Mp4 => {
@@ -619,10 +615,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if *all {
                     match remove_all_mp4(file) {
                         Ok(true) => {
-                            println!("✅ Metadatos eliminados de '{}'", file.display());
+                            outln!("✅ Metadatos eliminados de '{}'", file.display());
                         }
                         Ok(false) => {
-                            println!("⚠️  El archivo '{}' no tenía metadatos", file.display());
+                            outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
                         }
                         Err(error) => report_mp4_error(file, error),
                     }
@@ -653,12 +649,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = write_mp4_tag(file, &tag) {
                         report_mp4_error(file, e);
                     }
-                    println!(
+                    outln!(
                         "\n✅ Metadatos eliminados correctamente de '{}'",
                         file.display()
                     );
                 } else {
-                    println!("\n⚠️  No se encontraron tags válidos para eliminar.");
+                    outln!("\n⚠️  No se encontraron tags válidos para eliminar.");
                 }
             }
         },

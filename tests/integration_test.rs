@@ -3,7 +3,7 @@ use lofty::file::TaggedFileExt;
 use lofty::tag::{ItemKey, TagType};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -3923,4 +3923,221 @@ fn test_cli_cover_png_keeps_image_bytes() {
 
     cleanup_file(&mp3_path);
     cleanup_file(&cover_path);
+}
+
+// ---------------------------------------------------------------------------
+// Robustez de la salida estándar: pipe cerrado y error de escritura (fase RED)
+// ---------------------------------------------------------------------------
+
+/// `show` con el extremo de lectura del pipe ya cerrado no debe ser un error.
+///
+/// El archivo temporal se crea **con metadatos reales** (helper + `edit`) y no
+/// vacío: `show` solo escribe en stdout cuando hay algo que mostrar, y sobre un
+/// archivo sin etiquetas el CLI avisa por stderr. Como el contrato exige que
+/// stderr quede vacío, el archivo debe tener metadatos para que el único motivo
+/// posible de fallo sea el contrato nuevo y no un aviso ajeno al test.
+#[test]
+fn test_cli_pipe_cerrado_no_es_error() {
+    let mp3_path = create_temp_mp3();
+
+    let edit = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--title",
+        "Título para pipe",
+        "--artist",
+        "Artista para pipe",
+        "--album",
+        "Álbum para pipe",
+        "--year",
+        "2026",
+        "--genre",
+        "Rock",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el MP3 con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Se canaliza stdout y se **cierra el extremo de lectura antes de leer
+    // nada**: se toma el `ChildStdout` y se suelta de inmediato. Si se leyera
+    // primero, con pocos metadatos el proceso podría terminar antes de que se
+    // cierre el pipe y la prueba no distinguiría nada; cerrándolo antes, la
+    // primera escritura en stdout devuelve EPIPE y el fallo es determinista.
+    let mut child = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+
+    drop(child.stdout.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`show` con stdout cerrado debe salir con 0, no {:?}. stderr: {}",
+        output.status.code(),
+        stderr
+    );
+    assert!(
+        stderr.is_empty(),
+        "stderr debe quedar vacío cuando el pipe está cerrado, fue: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("panicked")
+            && !stderr.contains("failed printing to stdout")
+            && !stderr.contains("RUST_BACKTRACE"),
+        "no debe aparecer un pánico al escribir en stdout: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+/// Mismo contrato que `test_cli_pipe_cerrado_no_es_error` sobre un M4A.
+///
+/// El archivo se prepara con metadatos reales por la misma razón que en la
+/// versión MP3: garantizar que stderr estaría vacío de no ser por el fallo que
+/// describe el contrato.
+#[test]
+fn test_cli_pipe_cerrado_no_es_error_m4a() {
+    let m4a_path = create_temp_m4a("pipe_cerrado");
+
+    let edit = run_cli(&[
+        "edit",
+        m4a_path.to_str().unwrap(),
+        "--title",
+        "Título para pipe",
+        "--artist",
+        "Artista para pipe",
+        "--album",
+        "Álbum para pipe",
+        "--date",
+        "2026-10-14",
+        "--genre",
+        "Rock",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el M4A con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Igual que en el caso MP3: se cierra el extremo de lectura antes de leer
+    // para que el EPIPE sea determinista y no dependa de una carrera.
+    let mut child = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", m4a_path.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+
+    drop(child.stdout.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`show` sobre M4A con stdout cerrado debe salir con 0, no {:?}. stderr: {}",
+        output.status.code(),
+        stderr
+    );
+    assert!(
+        stderr.is_empty(),
+        "stderr debe quedar vacío cuando el pipe está cerrado, fue: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("panicked")
+            && !stderr.contains("failed printing to stdout")
+            && !stderr.contains("RUST_BACKTRACE"),
+        "no debe aparecer un pánico al escribir en stdout: {}",
+        stderr
+    );
+
+    cleanup_file(&m4a_path);
+}
+
+/// Un error de escritura real en stdout debe fallar como error, no con pánico.
+///
+/// Solo se ejecuta en Linux porque usa `/dev/full`: abrirlo funciona pero toda
+/// escritura devuelve `ENOSPC`. A diferencia del pipe cerrado (que puede ser
+/// ignorable), un dispositivo de salida lleno es un fallo duro: el proceso debe
+/// terminar con un código distinto de cero y un mensaje en español por stderr,
+/// nunca con un `panicked`.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_cli_error_de_escritura_falla() {
+    let mp3_path = create_temp_mp3();
+
+    let edit = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--title",
+        "Título para /dev/full",
+        "--artist",
+        "Artista para /dev/full",
+        "--album",
+        "Álbum para /dev/full",
+        "--year",
+        "2026",
+        "--genre",
+        "Rock",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el MP3 con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Toda escritura en `/dev/full` falla con ENOSPC. Se usa `spawn` +
+    // `wait_with_output` en lugar de `output()` para no perder la redirección
+    // de stdout que `output()` reemplazaría por un pipe.
+    let full = fs::File::create("/dev/full").expect("se debe poder abrir /dev/full");
+    let child = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", mp3_path.to_str().unwrap()])
+        .stdout(Stdio::from(full))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "un error de escritura en stdout debe hacer fallar el proceso. stderr: {}",
+        stderr
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "el código de salida debe ser distinto de cero. stderr: {}",
+        stderr
+    );
+    assert!(
+        !stderr.is_empty(),
+        "debe aparecer un mensaje de error en español por stderr"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "el fallo debe reportarse como error, no como pánico: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
 }
