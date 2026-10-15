@@ -81,13 +81,13 @@ enum Command {
         #[arg(short, long)]
         genre: Option<String>,
 
-        /// Número de pista
-        #[arg(short = 'T', long)]
-        track: Option<u32>,
+        /// Número de pista (N o N/TOTAL)
+        #[arg(short = 'T', long, value_name = "N|N/TOTAL")]
+        track: Option<NumberWithTotal>,
 
-        /// Temporada (TPOS - útil para podcasts)
-        #[arg(short = 'S', long)]
-        season: Option<u32>,
+        /// Temporada (TPOS - útil para podcasts; N o N/TOTAL)
+        #[arg(short = 'S', long, value_name = "N|N/TOTAL")]
+        season: Option<NumberWithTotal>,
 
         /// Fecha de grabación (YYYY-MM-DD o YYYY)
         #[arg(short = 'd', long)]

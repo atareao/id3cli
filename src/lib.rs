@@ -80,6 +80,128 @@ fn year_frame(tag: &Id3v2Tag) -> Option<i32> {
         .and_then(|value| value.parse::<i32>().ok())
 }
 
+/// Número de pista o de temporada, con su total opcional.
+///
+/// Lo usan tanto `--track` como `--season`, que aceptan un número suelto o un
+/// par de número y total separados por una barra. El parseo ([`FromStr`]) valida
+/// la forma dentro de `clap`, de modo que una forma inválida falla **antes de
+/// abrir el archivo**. La sintaxis admitida es **uno o dos grupos de dígitos
+/// decimales ASCII separados por una barra**:
+///
+/// ```text
+/// 7       -> número 7, sin total
+/// 7/12    -> número 7, total 12
+/// ```
+///
+/// Cualquier otra forma (`7/`, `/12`, `7/12/3`, `7/x`, `+7`, la cadena vacía, un
+/// número negativo o con espacios, `7\n` o cualquier dígito no ASCII) se rechaza
+/// con un mensaje en español. Los ceros a la izquierda se aceptan y se
+/// normalizan (`007` → `7`), y el cero se admite (`0` y `0/0`).
+///
+/// # Asimetría del cero entre contenedores
+///
+/// El tipo **no prohíbe** el cero, pero los contenedores no lo representan
+/// igual: MP3 (frame de texto) y OGG (comentario Vorbis) escriben `0` tal cual y
+/// lo muestran al releer, mientras que el átomo numérico de MP4 (`trkn`/`disk`)
+/// lo descarta y el backend avisa de la degradación (ver [`Mp4EditOptions`]).
+///
+/// [`FromStr`]: std::str::FromStr
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NumberWithTotal {
+    /// Número (campo izquierdo del par).
+    number: u32,
+    /// Total (campo derecho del par), si se indicó.
+    total: Option<u32>,
+}
+
+impl NumberWithTotal {
+    /// Crea un [`NumberWithTotal`] a partir de su número y su total opcional.
+    pub fn new(number: u32, total: Option<u32>) -> Self {
+        Self { number, total }
+    }
+
+    /// Devuelve el número (campo izquierdo del par).
+    pub fn number(&self) -> u32 {
+        self.number
+    }
+
+    /// Devuelve el total (campo derecho del par), si se indicó.
+    pub fn total(&self) -> Option<u32> {
+        self.total
+    }
+}
+
+impl std::str::FromStr for NumberWithTotal {
+    type Err = String;
+
+    /// Acepta `7`, `7/12` o un número con ceros a la izquierda (`007`);
+    /// cualquier otra forma devuelve un error en español que nombra la sintaxis
+    /// admitida.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let invalid = || {
+            format!(
+                "forma inválida «{value}»: se admite un número (7) o un número con total (7/12)"
+            )
+        };
+
+        // Una sola barra como máximo: `7`, `7/12`. Con dos barras (`7/12/3`) o
+        // con una barra de más (`7//12`) el tercer trozo existe y se rechaza.
+        let mut parts = value.split('/');
+        let number = parts.next().unwrap_or_default();
+        let total = parts.next();
+        if parts.next().is_some() {
+            return Err(invalid());
+        }
+
+        // `parse::<u32>` **no** basta para exigir «enteros sin signo»: acepta el
+        // signo `+` (`"+7".parse::<u32>()` es `Ok(7)`), los ceros a la izquierda
+        // (que aquí sí se admiten y normalizan: `007` → `7`) y, por supuesto,
+        // cualquier dígito ASCII. Para que `+7`, `-7`, ` 7`, `7\n` y los dígitos
+        // no ASCII caigan, cada parte debe ser **no vacía y de solo dígitos
+        // ASCII** antes de parsearse.
+        let parse_part = |part: &str| -> Result<u32, String> {
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(invalid());
+            }
+            part.parse::<u32>().map_err(|_| invalid())
+        };
+
+        let number = parse_part(number)?;
+        let total = match total {
+            Some(total) => Some(parse_part(total)?),
+            None => None,
+        };
+
+        Ok(Self { number, total })
+    }
+}
+
+impl std::fmt::Display for NumberWithTotal {
+    /// Escribe `7` cuando no hay total y `7/12` cuando lo hay.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.total {
+            Some(total) => write!(f, "{}/{}", self.number, total),
+            None => write!(f, "{}", self.number),
+        }
+    }
+}
+
+/// Compone el texto de un número con su total para los tres visualizadores.
+///
+/// Devuelve `7` cuando no hay total y `7/12` cuando lo hay, de modo que MP3,
+/// MP4 y OGG muestren el par igual sin repetir la lógica. El número se acepta
+/// como texto para que la visualización de OGG, que lee una clave de comentario,
+/// no tenga que convertirla.
+fn format_number_with_total(
+    number: impl std::fmt::Display,
+    total: Option<impl std::fmt::Display>,
+) -> String {
+    match total {
+        Some(total) => format!("{number}/{total}"),
+        None => number.to_string(),
+    }
+}
+
 /// Aplica los metadatos especificados al tag ID3
 ///
 /// # Argumentos
@@ -90,8 +212,8 @@ fn year_frame(tag: &Id3v2Tag) -> Option<i32> {
 /// * `album` - Nombre del álbum
 /// * `year` - Año de publicación (frame `TYER`)
 /// * `genre` - Género musical
-/// * `track` - Número de pista
-/// * `season` - Temporada (TPOS - útil para podcasts)
+/// * `track` - Número de pista, con su total opcional (`TRCK`)
+/// * `season` - Temporada, con su total opcional (`TPOS` - útil para podcasts)
 /// * `date` - Fecha de grabación (formato YYYY-MM-DD o YYYY; frame `TDRC`)
 /// * `copyright` - Información de copyright
 /// * `composer` - Compositor (TCOM)
@@ -110,8 +232,8 @@ pub fn apply_metadata(
     album: Option<&str>,
     year: Option<i32>,
     genre: Option<&str>,
-    track: Option<u32>,
-    season: Option<u32>,
+    track: Option<NumberWithTotal>,
+    season: Option<NumberWithTotal>,
     date: Option<&str>,
     copyright: Option<&str>,
     composer: Option<&str>,
@@ -147,12 +269,21 @@ pub fn apply_metadata(
     }
 
     if let Some(track) = track {
-        tag.set_track(track);
+        // `set_track` conserva el total del frame `TRCK`; el total solo se
+        // sobrescribe si `--track` lo indica explícitamente.
+        tag.set_track(track.number());
+        if let Some(total) = track.total() {
+            tag.set_track_total(total);
+        }
         changed = true;
     }
 
-    if let Some(season_num) = season {
-        tag.set_disk(season_num);
+    if let Some(season) = season {
+        // Igual que la pista: `set_disk` conserva el total de `TPOS`.
+        tag.set_disk(season.number());
+        if let Some(total) = season.total() {
+            tag.set_disk_total(total);
+        }
         changed = true;
     }
 
@@ -662,11 +793,17 @@ pub fn display_tags(tag: &Id3v2Tag) {
     }
 
     if let Some(track) = tag.track() {
-        outln!("#️⃣  Pista:     {}", track);
+        outln!(
+            "#️⃣  Pista:     {}",
+            format_number_with_total(track, tag.track_total())
+        );
     }
 
     if let Some(season) = tag.disk() {
-        outln!("📺 Temporada: {}", season);
+        outln!(
+            "📺 Temporada: {}",
+            format_number_with_total(season, tag.disk_total())
+        );
     }
 
     if let Some(copyright) = tag.get_text(&frame_id("TCOP")) {
@@ -1118,10 +1255,15 @@ pub struct Mp4EditOptions<'a> {
     pub year: Option<i32>,
     /// Género (`©gen`).
     pub genre: Option<&'a str>,
-    /// Número de pista (`trkn`).
-    pub track: Option<u32>,
-    /// Temporada / número de disco (`disk`).
-    pub season: Option<u32>,
+    /// Número de pista y su total (`trkn`).
+    ///
+    /// El átomo guarda el par en 16 bits: un número o un total fuera de
+    /// `1..=65535` no es representable y el backend avisa (ver [`edit_mp4`]).
+    pub track: Option<NumberWithTotal>,
+    /// Temporada / número de disco y su total (`disk`).
+    ///
+    /// Misma limitación de 16 bits que [`Self::track`].
+    pub season: Option<NumberWithTotal>,
     /// Fecha de grabación (`©day`, compartido con `year`).
     pub date: Option<&'a str>,
     /// Copyright (`cprt`).
@@ -1191,6 +1333,64 @@ pub fn mp4_year_absorbed_warning(date: &str, year: i32) -> String {
 /// de flags. No se crea ningún átomo *freeform* que supla la omisión.
 pub fn mp4_field_omitted_warning(flag: &str) -> String {
     format!("⚠️  El campo '{flag}' no tiene átomo equivalente en MP4; se omite.")
+}
+
+/// Máximo que cabe en el átomo numérico de MP4 (`trkn`/`disk`), que guarda el
+/// número y el total en 16 bits sin signo. `lofty` 0.25.4 descarta en silencio
+/// todo valor fuera de `1..=65535` (y el cero).
+const MP4_NUMBER_MAX: u32 = u16::MAX as u32;
+
+/// Construye el warning (en español) de un **número** de `--track`/`--season`
+/// que no cabe en el átomo numérico de MP4.
+///
+/// El átomo `trkn` (pista) y `disk` (temporada) guardan el par en 16 bits y, al
+/// no ser representable el número, `lofty` lo descartaría en silencio. Para no
+/// reportar un éxito falso se omite el **par completo** (número y total), de
+/// modo que no quede un total huérfano, y se emite este aviso.
+pub fn mp4_number_unrepresentable_warning(field: &str, value: u32) -> String {
+    format!(
+        "⚠️  Aviso: el número de {field} ({value}) no cabe en el átomo numérico de MP4 \
+         (admite 1..=65535); se omiten el número y su total."
+    )
+}
+
+/// Construye el warning (en español) de un **total** de `--track`/`--season` que
+/// no cabe en el átomo numérico de MP4.
+///
+/// A diferencia del número, aquí sí se escribe el número: solo se omite el
+/// total, que `lofty` descartaría en silencio.
+pub fn mp4_total_unrepresentable_warning(field: &str, value: u32) -> String {
+    format!(
+        "⚠️  Aviso: el total de {field} ({value}) no cabe en el átomo numérico de MP4 \
+         (admite 1..=65535); se escribe el número y se omite el total."
+    )
+}
+
+/// Resuelve el par número/total de MP4 a lo que el átomo admite, avisando (una
+/// sola vez por campo) de lo que no se puede representar.
+///
+/// Devuelve `None` cuando el número no es representable: se omite el par
+/// completo para no dejar un total huérfano. Cuando solo falla el total,
+/// devuelve el número con total `None`. El cero cae en ambos casos, porque el
+/// átomo no lo distingue de «sin valor».
+fn resolve_mp4_number_pair(
+    field: &str,
+    value: NumberWithTotal,
+    warnings: &mut Vec<String>,
+) -> Option<(u32, Option<u32>)> {
+    let number = value.number();
+    if !(1..=MP4_NUMBER_MAX).contains(&number) {
+        warnings.push(mp4_number_unrepresentable_warning(field, number));
+        return None;
+    }
+
+    match value.total() {
+        Some(total) if !(1..=MP4_NUMBER_MAX).contains(&total) => {
+            warnings.push(mp4_total_unrepresentable_warning(field, total));
+            Some((number, None))
+        }
+        total => Some((number, total)),
+    }
 }
 
 /// Construye el warning (en español) que acompaña a una carátula WebP escrita en
@@ -1297,13 +1497,30 @@ pub fn apply_metadata_mp4(tag: &mut Tag, options: &Mp4EditOptions<'_>) -> Mp4Edi
         report.changed = true;
     }
 
-    if let Some(track) = options.track {
-        set_mp4_text(tag, "--track", &track.to_string());
+    if let Some(track) = options.track
+        && let Some((number, total)) =
+            resolve_mp4_number_pair("--track", track, &mut report.warnings)
+    {
+        set_mp4_text(tag, "--track", &number.to_string());
+        if let Some(total) = total {
+            // El total vive en el mismo átomo `trkn` que el número, como
+            // `TrackTotal`; se inserta por la misma vía de bajo nivel que usa
+            // `set_mp4_text`. Si no se indica total, la clave que ya estuviera
+            // en el archivo se conserva.
+            tag.insert_text(ItemKey::TrackTotal, total.to_string());
+        }
         report.changed = true;
     }
 
-    if let Some(season) = options.season {
-        set_mp4_text(tag, "--season", &season.to_string());
+    if let Some(season) = options.season
+        && let Some((number, total)) =
+            resolve_mp4_number_pair("--season", season, &mut report.warnings)
+    {
+        set_mp4_text(tag, "--season", &number.to_string());
+        if let Some(total) = total {
+            // Igual que la pista, con el átomo `disk` y `DiscTotal`.
+            tag.insert_text(ItemKey::DiscTotal, total.to_string());
+        }
         report.changed = true;
     }
 
@@ -1432,6 +1649,18 @@ pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::E
 /// imagen no está soportada, la función devuelve error sin modificar un solo
 /// byte.
 ///
+/// # Limitación de los átomos numéricos
+///
+/// Los átomos `trkn` (pista) y `disk` (temporada) guardan el número y el total
+/// en **16 bits**: `lofty` 0.25.4 descarta en silencio un valor fuera de
+/// `1..=65535` (y el cero) al serializar, y al leer trata el `0` como ausente.
+/// Para no reportar un éxito falso, el backend avisa por stderr **y** en el
+/// informe cuando el número o el total no son representables: si falla el
+/// número se omite el **par completo** (no se deja un total huérfano) y, si solo
+/// falla el total, se escribe el número y se omite el total. MP3 y OGG guardan
+/// el par como texto, sin ese límite, y por eso **no** avisan: es una asimetría
+/// legítima entre contenedores.
+///
 /// # Errores
 ///
 /// Retorna un error si el archivo no se puede leer, interpretar o escribir, o si
@@ -1477,8 +1706,21 @@ fn remove_mp4_kind(tag: &mut Tag, kind: TagKind) -> bool {
         TagKind::Album => ItemKey::AlbumTitle,
         TagKind::Year | TagKind::Date => ItemKey::RecordingDate,
         TagKind::Genre => ItemKey::Genre,
-        TagKind::Track => ItemKey::TrackNumber,
-        TagKind::Season => ItemKey::DiscNumber,
+        TagKind::Track => {
+            // El número de pista y su total se guardan juntos en el átomo
+            // `trkn` (`TrackNumber` + `TrackTotal`): borrar solo el número
+            // dejaría un total huérfano, que el contrato de `track-numbering`
+            // prohíbe, así que se borran los dos como una unidad.
+            tag.remove_key(ItemKey::TrackTotal);
+            tag.remove_key(ItemKey::TrackNumber);
+            return true;
+        }
+        TagKind::Season => {
+            // Igual con `disk`: `DiscNumber` y `DiscTotal` van juntos.
+            tag.remove_key(ItemKey::DiscTotal);
+            tag.remove_key(ItemKey::DiscNumber);
+            return true;
+        }
         TagKind::Copyright => ItemKey::CopyrightMessage,
         TagKind::Composer => ItemKey::Composer,
         TagKind::Subtitle => ItemKey::TrackSubtitle,
@@ -1623,11 +1865,17 @@ pub fn display_tags_mp4(tag: &Tag) {
     }
 
     if let Some(track) = tag.track() {
-        outln!("#️⃣  Pista:     {}", track);
+        outln!(
+            "#️⃣  Pista:     {}",
+            format_number_with_total(track, tag.track_total())
+        );
     }
 
     if let Some(season) = tag.disk() {
-        outln!("📺 Temporada: {}", season);
+        outln!(
+            "📺 Temporada: {}",
+            format_number_with_total(season, tag.disk_total())
+        );
     }
 
     if let Some(copyright) = tag.get_string(ItemKey::CopyrightMessage) {
@@ -1853,10 +2101,10 @@ pub struct OggEditOptions<'a> {
     pub year: Option<i32>,
     /// Género (`GENRE`).
     pub genre: Option<&'a str>,
-    /// Número de pista (`TRACKNUMBER`).
-    pub track: Option<u32>,
-    /// Temporada / número de disco (`DISCNUMBER`).
-    pub season: Option<u32>,
+    /// Número de pista y su total (`TRACKNUMBER` y `TRACKTOTAL`).
+    pub track: Option<NumberWithTotal>,
+    /// Temporada / número de disco y su total (`DISCNUMBER` y `DISCTOTAL`).
+    pub season: Option<NumberWithTotal>,
     /// Fecha de grabación (`DATE`).
     pub date: Option<&'a str>,
     /// Copyright (`COPYRIGHT`).
@@ -1972,12 +2220,24 @@ pub fn apply_metadata_ogg(tag: &mut VorbisComments, options: &OggEditOptions<'_>
     }
 
     if let Some(track) = options.track {
-        set_vorbis_text(tag, "--track", &track.to_string());
+        set_vorbis_text(tag, "--track", &track.number().to_string());
+        if let Some(total) = track.total() {
+            // `TRACKTOTAL` no corresponde a ningún flag del CLI (no está en
+            // `VORBIS_COMMENT_MAP`): es el total del número de pista, que Vorbis
+            // guarda como clave independiente de `TRACKNUMBER`. Si no se indica
+            // total, la clave que ya estuviera en el archivo se conserva.
+            tag.insert("TRACKTOTAL".to_string(), total.to_string());
+        }
         report.changed = true;
     }
 
     if let Some(season) = options.season {
-        set_vorbis_text(tag, "--season", &season.to_string());
+        set_vorbis_text(tag, "--season", &season.number().to_string());
+        if let Some(total) = season.total() {
+            // Igual que `TRACKTOTAL`: `DISCTOTAL` es el total de la
+            // temporada/disco, no un flag del CLI.
+            tag.insert("DISCTOTAL".to_string(), total.to_string());
+        }
         report.changed = true;
     }
 
@@ -2316,13 +2576,18 @@ pub fn display_tags_ogg(tag: &VorbisComments) {
         found += 1;
     }
 
+    // El total de pista (`TRACKTOTAL`) y el de temporada (`DISCTOTAL`) no son
+    // flags del CLI, sino el total de sendos números: se pegan al número con una
+    // barra cuando existen.
     if let Some(track) = tag.get(vorbis_key("--track")) {
-        outln!("#️⃣  Pista:     {}", track);
+        let total = tag.get("TRACKTOTAL");
+        outln!("#️⃣  Pista:     {}", format_number_with_total(track, total));
         found += 1;
     }
 
     if let Some(season) = tag.get(vorbis_key("--season")) {
-        outln!("📺 Temporada: {}", season);
+        let total = tag.get("DISCTOTAL");
+        outln!("📺 Temporada: {}", format_number_with_total(season, total));
         found += 1;
     }
 

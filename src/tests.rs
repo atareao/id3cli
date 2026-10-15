@@ -62,7 +62,7 @@ fn test_apply_metadata_all_fields() {
         Some("Album"),
         Some(2026),
         Some("Rock"),
-        Some(5),
+        Some(NumberWithTotal::new(5, None)),
         None,
         Some("2026-01-22"),
         Some("© 2026 Test Records"),
@@ -399,7 +399,7 @@ fn test_track_number() {
         None,
         None,
         None,
-        Some(7),
+        Some(NumberWithTotal::new(7, None)),
         None,
         None,
         None,
@@ -423,7 +423,7 @@ fn test_track_number_zero() {
         None,
         None,
         None,
-        Some(0),
+        Some(NumberWithTotal::new(0, None)),
         None,
         None,
         None,
@@ -447,7 +447,7 @@ fn test_track_with_other_metadata() {
         None,
         None,
         None,
-        Some(3),
+        Some(NumberWithTotal::new(3, None)),
         None,
         None,
         None,
@@ -1037,7 +1037,7 @@ fn test_add_season() {
         None,
         None,
         None,
-        Some(2),
+        Some(NumberWithTotal::new(2, None)),
         None,
         None,
         None,
@@ -1060,8 +1060,8 @@ fn test_add_season_with_track() {
         None,
         None,
         None,
-        Some(5),
-        Some(2),
+        Some(NumberWithTotal::new(5, None)),
+        Some(NumberWithTotal::new(2, None)),
         None,
         None,
         None,
@@ -1832,7 +1832,7 @@ fn test_m4a_writes_genre_atom() {
 fn test_m4a_writes_track_atom() {
     let path = create_temp_m4a("track");
     let options = Mp4EditOptions {
-        track: Some(7),
+        track: Some(NumberWithTotal::new(7, None)),
         ..Default::default()
     };
     edit_mp4(&path, &options).unwrap();
@@ -1872,7 +1872,7 @@ fn test_m4a_writes_track_atom() {
 fn test_m4a_writes_disk_atom_for_season() {
     let path = create_temp_m4a("season");
     let options = Mp4EditOptions {
-        season: Some(2),
+        season: Some(NumberWithTotal::new(2, None)),
         ..Default::default()
     };
     edit_mp4(&path, &options).unwrap();
@@ -3197,8 +3197,8 @@ fn test_apply_metadata_ogg_escribe_las_claves_del_mapeo() {
         album_artist: Some("Artista del álbum"),
         year: Some(2026),
         genre: Some("Rock"),
-        track: Some(7),
-        season: Some(2),
+        track: Some(NumberWithTotal::new(7, None)),
+        season: Some(NumberWithTotal::new(2, None)),
         date: Some("2026-10-13"),
         copyright: Some("© 2026 Test Records"),
         composer: Some("Compositor"),
@@ -3733,7 +3733,7 @@ fn test_ogg_claves_serializadas_en_el_comentario_crudo() {
         title: Some("Titulo Crudo"),
         artists: &artists,
         album: Some("Album Crudo"),
-        track: Some(7),
+        track: Some(NumberWithTotal::new(7, None)),
         compilation: true,
         // Campos sin clave equivalente en Vorbis: se indican a propósito para
         // comprobar que su omisión con aviso no inventa ninguna clave en crudo.
@@ -3792,4 +3792,670 @@ fn test_ogg_claves_serializadas_en_el_comentario_crudo() {
     );
 
     cleanup_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// Totales de pista y temporada en los tres formatos (grupo 5)
+//
+// Fase RED del grupo 5 del cambio `ogg-support-and-track-totals`: estos tests
+// exigen la forma `N/T` de `--track` y `--season` y todavía no compilan, porque
+// el tipo `NumberWithTotal` y los campos `Option<NumberWithTotal>` de
+// `apply_metadata`, `Mp4EditOptions` y `OggEditOptions` aún no existen. Nada de
+// esto se implementa aquí: la implementación mínima llega en el GREEN del
+// grupo 5.
+
+use lofty::config::WriteOptions;
+
+/// Devuelve el `payload` del `data` box del átomo MP4 indicado, exigiendo que exista.
+///
+/// Reutiliza [`data_box_after`] (que ya mide el tipo de dato real) y descarta el
+/// tipo, porque aquí solo interesan los bytes del par número/total.
+fn mp4_data_payload(bytes: &[u8], atom: &[u8]) -> Vec<u8> {
+    let (_, payload) = data_box_after(bytes, atom)
+        .unwrap_or_else(|| panic!("debe existir el átomo `{}`", String::from_utf8_lossy(atom)));
+    payload
+}
+
+/// Extrae el par `(número, total)` del `payload` de 8 bytes de `trkn`/`disk`.
+///
+/// Disposición **medida** (volcado real del `data` de un `.m4a` escrito por
+/// `lofty`): `[00 00][número u16 BE][total u16 BE][00 00]`.
+fn mp4_number_pair(payload: &[u8]) -> (u16, u16) {
+    assert_eq!(
+        payload.len(),
+        8,
+        "el `data` de un par numérico MP4 debe tener 8 bytes"
+    );
+    assert_eq!(payload[0], 0, "byte 0 del par reservado a cero");
+    assert_eq!(payload[1], 0, "byte 1 del par reservado a cero");
+    assert_eq!(payload[6], 0, "byte 6 del par de relleno a cero");
+    assert_eq!(payload[7], 0, "byte 7 del par de relleno a cero");
+    (
+        u16::from_be_bytes([payload[2], payload[3]]),
+        u16::from_be_bytes([payload[4], payload[5]]),
+    )
+}
+
+/// Construye un `Id3v2Tag` en memoria con el frame de texto indicado.
+///
+/// Sirve para fijar una precondición (un `TRCK`/`TPOS` con total) sin depender
+/// de la escritura que se está probando.
+fn id3v2_tag_with_text_frame(id: &'static str, value: &str) -> Id3v2Tag {
+    let mut tag = Id3v2Tag::new();
+    insert_text_frame(&mut tag, id, value);
+    tag
+}
+
+#[test]
+fn test_number_with_total_acepta_numero_solo() {
+    let valor: NumberWithTotal = "7".parse().expect("`7` debe parsear como NumberWithTotal");
+    assert_eq!(valor.number(), 7, "el número debe ser 7");
+    assert_eq!(valor.total(), None, "sin barra no hay total");
+    assert_eq!(
+        valor.to_string(),
+        "7",
+        "la forma sin total se conserva sin barra"
+    );
+
+    // El constructor público y los accesores deben coincidir con el parseo.
+    let construido = NumberWithTotal::new(7, None);
+    assert_eq!(construido.number(), 7);
+    assert_eq!(construido.total(), None);
+    assert_eq!(construido.to_string(), "7");
+}
+
+#[test]
+fn test_number_with_total_acepta_numero_y_total() {
+    let valor: NumberWithTotal = "7/12".parse().expect("`7/12` debe parsear");
+    assert_eq!(valor.number(), 7);
+    assert_eq!(valor.total(), Some(12));
+    assert_eq!(valor.to_string(), "7/12");
+
+    // La temporada usa la misma forma `N/T`.
+    let temporada: NumberWithTotal = "1/2".parse().expect("`1/2` debe parsear");
+    assert_eq!(temporada.number(), 1);
+    assert_eq!(temporada.total(), Some(2));
+    assert_eq!(temporada.to_string(), "1/2");
+
+    let construido = NumberWithTotal::new(7, Some(12));
+    assert_eq!(construido.number(), 7);
+    assert_eq!(construido.total(), Some(12));
+    assert_eq!(construido.to_string(), "7/12");
+}
+
+#[test]
+fn test_number_with_total_rechaza_formas_invalidas() {
+    let invalidas = [
+        "7/", "/12", "7/12/3", "7/x", "", "-1", " 7", "7 ", "7//12", "+7", "+7/+12",
+    ];
+    for entrada in invalidas {
+        let resultado = entrada.parse::<NumberWithTotal>();
+        let error = match resultado {
+            Ok(valor) => panic!(
+                "{entrada:?} debe rechazarse; se obtuvo número {} y total {:?}",
+                valor.number(),
+                valor.total()
+            ),
+            Err(error) => error,
+        };
+        // El mensaje, en español, nombra la forma admitida («7/12») y la
+        // palabra «número» (cierre del grupo 5, tarea 5.2).
+        assert!(
+            error.contains("7/12"),
+            "el mensaje de error para {entrada:?} debe nombrar la forma «7/12»: {error}"
+        );
+        assert!(
+            error.contains("número"),
+            "el mensaje de error para {entrada:?} debe contener la palabra `número`: {error}"
+        );
+    }
+
+    // Nota de asimetría entre contenedores (constancia para el grupo 6, que la
+    // documenta en el README): el cero es aceptable por contrato en los tres
+    // formatos, pero solo se representa igual en MP3 y OGG. En MP3 (`TRCK`) y en
+    // OGG (`TRACKNUMBER`) el `0` se escribe tal cual y se muestra al releer; en
+    // MP4 el átomo `trkn`/`disk` lo descarta (y `show` no lo muestra) y el
+    // backend avisa de la degradación. Es una asimetría legítima de contenedor,
+    // no un fallo de este parser.
+    // El contrato NO prohíbe el cero.
+    let cero: NumberWithTotal = "0".parse().expect("`0` debe aceptarse");
+    assert_eq!(cero.number(), 0);
+    assert_eq!(cero.total(), None);
+
+    let cero_con_total: NumberWithTotal = "0/0".parse().expect("`0/0` debe aceptarse");
+    assert_eq!(cero_con_total.number(), 0);
+    assert_eq!(cero_con_total.total(), Some(0));
+
+    // Los ceros a la izquierda se aceptan y se normalizan (`007` → `7`): la
+    // forma es «dígitos decimales», no una representación canónica.
+    let con_ceros: NumberWithTotal = "007".parse().expect("`007` debe aceptarse");
+    assert_eq!(
+        con_ceros.number(),
+        7,
+        "los ceros a la izquierda se normalizan"
+    );
+    assert_eq!(con_ceros.total(), None);
+    assert_eq!(
+        con_ceros.to_string(),
+        "7",
+        "el Display muestra la forma normalizada"
+    );
+}
+
+#[test]
+fn test_mp3_escribe_total_de_pista() {
+    let path = create_temp_mp3();
+
+    let mut tag = Id3v2Tag::new();
+    let changed = apply_metadata(
+        &mut tag,
+        None,
+        &[],
+        None,
+        None,
+        None,
+        Some(NumberWithTotal::new(7, Some(12))),
+        Some(NumberWithTotal::new(1, Some(2))),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    assert!(changed, "escribir pista y temporada debe marcar cambio");
+    tag.save_to_path(&path, WriteOptions::default())
+        .expect("lofty debe guardar el tag ID3v2 en el MP3");
+
+    // Relectura con `id3` (librería distinta de `lofty`, que es quien escribe).
+    let releido = Tag::read_from_path(&path).expect("`id3` debe releer el MP3");
+    let trck = releido
+        .get("TRCK")
+        .and_then(|frame| frame.content().text())
+        .expect("`id3` debe encontrar el frame TRCK");
+    assert_eq!(trck, "7/12", "TRCK debe llevar el par número/total");
+    assert_eq!(
+        releido.total_tracks(),
+        Some(12),
+        "el total de pista debe releerse con `id3`"
+    );
+
+    let tpos = releido
+        .get("TPOS")
+        .and_then(|frame| frame.content().text())
+        .expect("`id3` debe encontrar el frame TPOS");
+    assert_eq!(tpos, "1/2", "TPOS debe llevar el par número/total");
+    assert_eq!(
+        releido.total_discs(),
+        Some(2),
+        "el total de temporada debe releerse con `id3`"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp3_conserva_total_preexistente() {
+    let mut tag = id3v2_tag_with_text_frame("TRCK", "3/12");
+
+    apply_metadata(
+        &mut tag,
+        None,
+        &[],
+        None,
+        None,
+        None,
+        Some(NumberWithTotal::new(5, None)),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(
+        tag.get_text(&frame_id("TRCK")),
+        Some("5/12"),
+        "el total preexistente 12 debe sobrevivir al escribir la pista sin total"
+    );
+}
+
+#[test]
+fn test_mp3_sin_total_no_inventa_total() {
+    let mut tag = Id3v2Tag::new();
+
+    apply_metadata(
+        &mut tag,
+        None,
+        &[],
+        None,
+        None,
+        None,
+        Some(NumberWithTotal::new(7, None)),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+
+    let trck = tag
+        .get_text(&frame_id("TRCK"))
+        .expect("debe existir el frame TRCK");
+    assert_eq!(trck, "7", "TRCK debe ser exactamente `7`");
+    assert!(
+        !trck.contains('/'),
+        "no debe aparecer barra ni total: {trck}"
+    );
+}
+
+#[test]
+fn test_mp4_escribe_total_de_pista() {
+    let path = create_temp_m4a("track_total_write");
+    let options = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(7, Some(12))),
+        season: Some(NumberWithTotal::new(1, Some(2))),
+        ..Default::default()
+    };
+    edit_mp4(&path, &options).expect("edit_mp4 debe escribir pista y temporada");
+
+    let bytes = fs::read(&path).unwrap();
+
+    // Disposición REAL medida del `data` de `trkn` (volcado del fichero):
+    //   [00 00][número u16 BE][total u16 BE][00 00]  → 8 bytes.
+    // Para `--track 7/12`: 00 00 00 07 00 0C 00 00.
+    let trkn = mp4_data_payload(&bytes, b"trkn");
+    assert_eq!(
+        trkn,
+        vec![0x00, 0x00, 0x00, 0x07, 0x00, 0x0C, 0x00, 0x00],
+        "el `data` de `trkn` debe ser 00 00 00 07 00 0C 00 00 (número 7, total 12)"
+    );
+    assert_eq!(mp4_number_pair(&trkn), (7, 12));
+
+    // Disposición REAL del `disk` para `--season 1/2`: 00 00 00 01 00 02 00 00.
+    let disk = mp4_data_payload(&bytes, b"disk");
+    assert_eq!(
+        disk,
+        vec![0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00],
+        "el `data` de `disk` debe ser 00 00 00 01 00 02 00 00 (temporada 1, total 2)"
+    );
+    assert_eq!(mp4_number_pair(&disk), (1, 2));
+
+    // Relectura con `lofty`.
+    let tag = read_mp4_tag(&path).unwrap().expect("debe existir tag");
+    assert_eq!(tag.track(), Some(7));
+    assert_eq!(tag.track_total(), Some(12));
+    assert_eq!(tag.disk(), Some(1));
+    assert_eq!(tag.disk_total(), Some(2));
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_conserva_total_preexistente() {
+    let path = create_temp_m4a("track_total_keep");
+
+    // Precondición: el átomo `trkn` ya está en 3/12.
+    let primera = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(3, Some(12))),
+        ..Default::default()
+    };
+    edit_mp4(&path, &primera).unwrap();
+
+    // Editar solo el número, sin total.
+    let segunda = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(5, None)),
+        ..Default::default()
+    };
+    edit_mp4(&path, &segunda).unwrap();
+
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(tag.track(), Some(5), "el número debe actualizarse a 5");
+    assert_eq!(
+        tag.track_total(),
+        Some(12),
+        "el total preexistente 12 debe sobrevivir"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_sin_total_no_inventa_total() {
+    let path = create_temp_m4a("track_total_absent");
+    let options = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(7, None)),
+        ..Default::default()
+    };
+    edit_mp4(&path, &options).unwrap();
+
+    let bytes = fs::read(&path).unwrap();
+    let trkn = mp4_data_payload(&bytes, b"trkn");
+    let (number, total) = mp4_number_pair(&trkn);
+    assert_eq!(number, 7, "el número debe ser 7");
+    assert_eq!(total, 0, "no debe inventarse un total");
+    assert_ne!(total, 12, "no debe colarse un 12 inventado");
+
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(tag.track(), Some(7));
+    assert_eq!(tag.track_total(), None, "sin total no debe leerse ninguno");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_numero_no_representable_avisa_y_omite_el_par() {
+    let path = create_temp_m4a("track_number_overflow");
+
+    // `--track 70000/12`: el número 70000 no cabe en el átomo `trkn` (16 bits).
+    // El backend debe avisar y NO escribir nada del par, para no dejar un total
+    // huérfano.
+    let options = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(70000, Some(12))),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).expect("edit_mp4 no debe fallar");
+
+    assert!(
+        !report.warnings.is_empty(),
+        "el número no representable debe producir un aviso en el informe"
+    );
+    let aviso = report.warnings.join("\n");
+    assert!(
+        aviso.contains("70000"),
+        "el aviso debe nombrar el valor que no cabe: {aviso}"
+    );
+    assert!(
+        aviso.contains("MP4"),
+        "el aviso debe explicar que MP4 no puede representarlo: {aviso}"
+    );
+
+    // Medido antes de escribir los asserts: no debe quedar átomo `trkn` (ni
+    // número ni un total huérfano).
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        data_box_after(&bytes, b"trkn").is_none(),
+        "el número rechazado no debe dejar un átomo `trkn` (ni un total huérfano)"
+    );
+
+    // Relectura: no debe aparecer ni número ni total.
+    if let Some(tag) = read_mp4_tag(&path).unwrap() {
+        assert_eq!(tag.track(), None, "no debe releerse un número");
+        assert_eq!(tag.track_total(), None, "no debe releerse un total");
+    }
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_total_no_representable_avisa_y_no_inventa_total() {
+    let path = create_temp_m4a("track_total_overflow");
+
+    // `--track 7/70000`: el número cabe, el total no. Debe escribirse el número
+    // y omitirse el total, con aviso: nada de degradación silenciosa.
+    let options = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(7, Some(70000))),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).expect("edit_mp4 no debe fallar");
+
+    assert!(
+        !report.warnings.is_empty(),
+        "el total no representable debe producir un aviso en el informe"
+    );
+    let aviso = report.warnings.join("\n");
+    assert!(
+        aviso.contains("70000"),
+        "el aviso debe nombrar el total que no cabe: {aviso}"
+    );
+    assert!(
+        aviso.contains("MP4"),
+        "el aviso debe explicar la limitación de MP4: {aviso}"
+    );
+
+    let bytes = fs::read(&path).unwrap();
+    let trkn = mp4_data_payload(&bytes, b"trkn");
+    assert_eq!(
+        mp4_number_pair(&trkn),
+        (7, 0),
+        "el átomo debe llevar el número 7 y NO un total inventado"
+    );
+
+    let tag = read_mp4_tag(&path).unwrap().expect("debe existir tag");
+    assert_eq!(tag.track(), Some(7));
+    assert_eq!(
+        tag.track_total(),
+        None,
+        "el total no representable no debe guardarse"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_total_cero_avisa() {
+    let path = create_temp_m4a("track_total_zero");
+
+    // `--track 7/0`: el cero es aceptable por contrato, pero el átomo `trkn` no
+    // lo distingue de «sin total»; se avisa y se omite en vez de degradarlo en
+    // silencio.
+    let options = Mp4EditOptions {
+        track: Some(NumberWithTotal::new(7, Some(0))),
+        ..Default::default()
+    };
+    let report = edit_mp4(&path, &options).expect("edit_mp4 no debe fallar");
+
+    assert!(
+        !report.warnings.is_empty(),
+        "el total `0` en MP4 debe producir un aviso en el informe"
+    );
+    let aviso = report.warnings.join("\n");
+    assert!(
+        aviso.contains("(0)"),
+        "el aviso debe nombrar el valor `0` que no cabe: {aviso}"
+    );
+    assert!(
+        aviso.contains("MP4"),
+        "el aviso debe explicar la limitación de MP4: {aviso}"
+    );
+
+    let bytes = fs::read(&path).unwrap();
+    let trkn = mp4_data_payload(&bytes, b"trkn");
+    assert_eq!(
+        mp4_number_pair(&trkn),
+        (7, 0),
+        "el número 7 se escribe; el total `0` se omite"
+    );
+
+    let tag = read_mp4_tag(&path).unwrap().expect("debe existir tag");
+    assert_eq!(tag.track(), Some(7));
+    assert_eq!(tag.track_total(), None);
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_ogg_escribe_total_de_pista() {
+    let path = create_temp_file(
+        "ogg_track_total",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+
+    let options = OggEditOptions {
+        track: Some(NumberWithTotal::new(7, Some(12))),
+        season: Some(NumberWithTotal::new(1, Some(2))),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    // Relectura con el lector del propio CLI.
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(tag.get("TRACKNUMBER"), Some("7"));
+    assert_eq!(tag.get("TRACKTOTAL"), Some("12"));
+    assert_eq!(tag.get("DISCNUMBER"), Some("1"));
+    assert_eq!(tag.get("DISCTOTAL"), Some("2"));
+
+    // Serialización cruda: cada par es `[longitud u32][CLAVE=valor]`.
+    let bytes = fs::read(&path).unwrap();
+    for par in [
+        &b"TRACKNUMBER=7"[..],
+        b"TRACKTOTAL=12",
+        b"DISCNUMBER=1",
+        b"DISCTOTAL=2",
+    ] {
+        assert!(
+            contains_bytes(&bytes, par),
+            "el comentario crudo debe contener {:?}",
+            String::from_utf8_lossy(par)
+        );
+    }
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_ogg_conserva_total_preexistente() {
+    let path = create_temp_file(
+        "ogg_track_total_keep",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+
+    // Precondición a mano: `TRACKTOTAL` ya a 12 (su escritura es lo que se
+    // prueba en este grupo).
+    let mut tag = read_vorbis_tag(&path).unwrap();
+    tag.insert("TRACKNUMBER".to_string(), "3".to_string());
+    tag.insert("TRACKTOTAL".to_string(), "12".to_string());
+    write_vorbis_tag(&path, &tag).unwrap();
+
+    let options = OggEditOptions {
+        track: Some(NumberWithTotal::new(5, None)),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(tag.get("TRACKNUMBER"), Some("5"), "el número debe ser 5");
+    assert_eq!(
+        tag.get("TRACKTOTAL"),
+        Some("12"),
+        "el total preexistente debe sobrevivir"
+    );
+
+    let bytes = fs::read(&path).unwrap();
+    assert!(contains_bytes(&bytes, b"TRACKNUMBER=5"));
+    assert!(contains_bytes(&bytes, b"TRACKTOTAL=12"));
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_ogg_sin_total_no_inventa_total() {
+    let path = create_temp_file(
+        "ogg_track_total_absent",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+
+    let options = OggEditOptions {
+        track: Some(NumberWithTotal::new(7, None)),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(tag.get("TRACKNUMBER"), Some("7"));
+    assert_eq!(
+        tag.get("TRACKTOTAL"),
+        None,
+        "sin total no debe crearse TRACKTOTAL"
+    );
+
+    let bytes = fs::read(&path).unwrap();
+    assert!(contains_bytes(&bytes, b"TRACKNUMBER=7"));
+    assert!(
+        !contains_bytes(&bytes, b"TRACKTOTAL"),
+        "no debe aparecer TRACKTOTAL en el comentario crudo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_remove_track_elimina_el_atomo_completo() {
+    let path = create_temp_m4a("remove_track_total");
+
+    // Precondición: `trkn` 7/12 y `disk` 1/2, más un título que mantiene vivo el
+    // bloque `ilst` al borrar los dos pares: sin ningún átomo, `lofty` elimina el
+    // `ilst` entero (igual que el bloque ID3v2 vacío en MP3) y no habría tag que
+    // releer.
+    let options = Mp4EditOptions {
+        title: Some("Pista"),
+        track: Some(NumberWithTotal::new(7, Some(12))),
+        season: Some(NumberWithTotal::new(1, Some(2))),
+        ..Default::default()
+    };
+    edit_mp4(&path, &options).unwrap();
+
+    // Borrar la pista: número y total como una unidad.
+    let mut tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert!(remove_tags_mp4(&mut tag, &["track".to_string()]));
+    write_mp4_tag(&path, &tag).unwrap();
+
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(tag.track(), None, "el número de pista debe desaparecer");
+    assert_eq!(
+        tag.track_total(),
+        None,
+        "el total de pista no debe quedar huérfano"
+    );
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        !contains_bytes(&bytes, b"trkn"),
+        "el átomo `trkn` completo debe desaparecer"
+    );
+
+    // Repetir con la temporada (`disk`).
+    let mut tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert!(remove_tags_mp4(&mut tag, &["season".to_string()]));
+    write_mp4_tag(&path, &tag).unwrap();
+
+    let tag = read_mp4_tag(&path).unwrap().unwrap();
+    assert_eq!(tag.disk(), None, "el número de temporada debe desaparecer");
+    assert_eq!(
+        tag.disk_total(),
+        None,
+        "el total de temporada no debe quedar"
+    );
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        !contains_bytes(&bytes, b"disk"),
+        "el átomo `disk` completo debe desaparecer"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp3_remove_track_elimina_el_total() {
+    // `remove track` debe eliminar TRCK por completo (sin total huérfano).
+    let mut tag = id3v2_tag_with_text_frame("TRCK", "7/12");
+    assert!(remove_tags(&mut tag, &["track".to_string()]));
+    assert!(
+        tag.get(&frame_id("TRCK")).is_none(),
+        "TRCK debe desaparecer por completo, sin total huérfano"
+    );
+
+    // `remove season` debe eliminar TPOS por completo.
+    let mut tag = id3v2_tag_with_text_frame("TPOS", "1/2");
+    assert!(remove_tags(&mut tag, &["season".to_string()]));
+    assert!(
+        tag.get(&frame_id("TPOS")).is_none(),
+        "TPOS debe desaparecer por completo, sin total huérfano"
+    );
 }

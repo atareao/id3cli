@@ -4624,3 +4624,414 @@ fn test_cli_error_de_escritura_falla() {
 
     cleanup_file(&mp3_path);
 }
+
+// ---------------------------------------------------------------------------
+// Totales de pista y temporada en los tres formatos (grupo 5, tarea 5.1 — RED)
+// ---------------------------------------------------------------------------
+//
+// Estos tests exigen el comportamiento que el grupo 5 del change
+// `ogg-support-and-track-totals` debe producir: `--track` y `--season` aceptan
+// la forma `N/T` en los tres formatos, rechazan las formas inválidas con un
+// mensaje en español que indica la forma admitida, conservan el total
+// preexistente y lo borran junto al número. Están escritos en fase RED: hoy
+// `--track` y `--season` son `Option<u32>` en `src/main.rs`, así que `clap`
+// rechaza `7/12` con un mensaje en inglés y la mayoría de estos tests fallan.
+// La mayoría debe ponerse en verde en las tareas 5.2 a 5.5, sin tocar estas
+// expectativas.
+
+/// Rótulo del campo de la pista en la salida de `show`, idéntico en los tres
+/// formatos (`#️⃣  Pista:     ` en `src/lib.rs`).
+const ROTULO_PISTA: &str = "Pista:";
+/// Rótulo del campo de la temporada en la salida de `show`, idéntico en los
+/// tres formatos (`📺 Temporada: ` en `src/lib.rs`).
+const ROTULO_TEMPORADA: &str = "Temporada:";
+/// Forma admitida que el mensaje de error debe nombrar. El GREEN (tarea 5.2)
+/// tiene que emitir un mensaje en español que contenga `7/12` junto a la
+/// palabra «número»; hoy `clap` responde en inglés («invalid digit found in
+/// string»), que es el rojo que estos tests capturan.
+const FORMA_ADMITIDA: &str = "7/12";
+
+/// Ejecuta `edit <archivo> <flags>` y, si termina con éxito, `show <archivo>`,
+/// devolviendo la salida del `show`.
+///
+/// Evita repetir el par `edit` + `show` en cada test. NO se usa en los tests de
+/// formas inválidas: allí el `edit` debe fallar.
+fn edit_then_show(file: &Path, edit_flags: &[&str]) -> std::process::Output {
+    let mut args = vec!["edit", file.to_str().unwrap()];
+    args.extend_from_slice(edit_flags);
+    let edit = run_cli(&args);
+    assert!(
+        edit.status.success(),
+        "`edit {edit_flags:?}` sobre {} debe salir con 0, stderr: {}",
+        file.display(),
+        String::from_utf8_lossy(&edit.stderr)
+    );
+    run_cli(&["show", file.to_str().unwrap()])
+}
+
+/// Devuelve la línea de la salida de `show` que contiene `rotulo`, o `None` si
+/// ese campo no aparece.
+fn show_line<'a>(stdout: &'a str, rotulo: &str) -> Option<&'a str> {
+    stdout.lines().find(|line| line.contains(rotulo))
+}
+
+/// Formas inválidas para `--track` y `--season` que el CLI debe rechazar sin
+/// tocar el archivo: barra sin total, barra sin número, más de una barra, valor
+/// no numérico y cadena vacía.
+const FORMAS_INVALIDAS: [&str; 5] = ["7/", "/12", "7/12/3", "7/x", ""];
+
+#[test]
+fn test_cli_track_rechaza_formas_invalidas_sin_tocar_el_archivo() {
+    for forma in FORMAS_INVALIDAS {
+        let mp3_path = create_temp_mp3();
+        let before = fs::read(&mp3_path).expect("leer el archivo antes del rechazo");
+
+        let output = run_cli(&["edit", mp3_path.to_str().unwrap(), "--track", forma]);
+
+        assert!(
+            !output.status.success(),
+            "`--track {forma:?}` debe terminar con código distinto de cero"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // El mensaje de error (GREEN, tarea 5.2) debe estar en español e indicar
+        // la forma admitida: contiene `7/12` y la palabra «número».
+        assert!(
+            stderr.contains(FORMA_ADMITIDA),
+            "stderr debe indicar la forma admitida {FORMA_ADMITIDA:?}, fue: {stderr}"
+        );
+        assert!(
+            stderr.contains("número"),
+            "stderr debe nombrar la palabra «número», fue: {stderr}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("✓ Pista"),
+            "un rechazo no debe anunciar éxito en stdout, fue: {stdout}"
+        );
+
+        assert_eq!(
+            fs::read(&mp3_path).expect("leer el archivo tras el rechazo"),
+            before,
+            "`--track {forma:?}` debe dejar el archivo idéntico byte a byte"
+        );
+
+        cleanup_file(&mp3_path);
+    }
+}
+
+#[test]
+fn test_cli_season_rechaza_formas_invalidas_sin_tocar_el_archivo() {
+    for forma in FORMAS_INVALIDAS {
+        let mp3_path = create_temp_mp3();
+        let before = fs::read(&mp3_path).expect("leer el archivo antes del rechazo");
+
+        let output = run_cli(&["edit", mp3_path.to_str().unwrap(), "--season", forma]);
+
+        assert!(
+            !output.status.success(),
+            "`--season {forma:?}` debe terminar con código distinto de cero"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(FORMA_ADMITIDA),
+            "stderr debe indicar la forma admitida {FORMA_ADMITIDA:?}, fue: {stderr}"
+        );
+        assert!(
+            stderr.contains("número"),
+            "stderr debe nombrar la palabra «número», fue: {stderr}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("✓ Temporada"),
+            "un rechazo no debe anunciar éxito en stdout, fue: {stdout}"
+        );
+
+        assert_eq!(
+            fs::read(&mp3_path).expect("leer el archivo tras el rechazo"),
+            before,
+            "`--season {forma:?}` debe dejar el archivo idéntico byte a byte"
+        );
+
+        cleanup_file(&mp3_path);
+    }
+}
+
+#[test]
+fn test_cli_track_con_total_en_los_tres_formatos() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("total_track");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let show = edit_then_show(path, &["--track", "7/12"]);
+        assert!(
+            show.status.success(),
+            "`show` debe salir con 0 en {}",
+            path.display()
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let linea = show_line(&stdout, ROTULO_PISTA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la pista en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            linea.trim_end().ends_with("7/12"),
+            "la pista debe mostrarse como 7/12 en {}, línea: {linea:?}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_temporada_con_total_en_los_tres_formatos() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("total_season");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let show = edit_then_show(path, &["--season", "1/2"]);
+        assert!(
+            show.status.success(),
+            "`show` debe salir con 0 en {}",
+            path.display()
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let linea = show_line(&stdout, ROTULO_TEMPORADA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la temporada en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            linea.trim_end().ends_with("1/2"),
+            "la temporada debe mostrarse como 1/2 en {}, línea: {linea:?}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_numero_sin_total_sigue_funcionando() {
+    // Caracterización: `--track 7` y `--season 2` (enteros sin total) deben
+    // seguir escribiéndose y mostrándose igual que antes de este cambio. Este
+    // caso pasa hoy; se conserva como red de seguridad de que la forma sin
+    // total no se degrada al introducir la forma `N/T`.
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("sin_total");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let show = edit_then_show(path, &["--track", "7", "--season", "2"]);
+        assert!(
+            show.status.success(),
+            "`show` debe salir con 0 en {}",
+            path.display()
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+
+        let pista = show_line(&stdout, ROTULO_PISTA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la pista en {}: {stdout}",
+                path.display()
+            )
+        });
+        let temporada = show_line(&stdout, ROTULO_TEMPORADA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la temporada en {}: {stdout}",
+                path.display()
+            )
+        });
+
+        assert!(
+            pista.trim_end().ends_with(" 7"),
+            "la pista sin total debe mostrarse como 7 en {}, línea: {pista:?}",
+            path.display()
+        );
+        assert!(
+            !pista.contains('/'),
+            "la pista sin total no debe llevar barra en {}, línea: {pista:?}",
+            path.display()
+        );
+        assert!(
+            temporada.trim_end().ends_with(" 2"),
+            "la temporada sin total debe mostrarse como 2 en {}, línea: {temporada:?}",
+            path.display()
+        );
+        assert!(
+            !temporada.contains('/'),
+            "la temporada sin total no debe llevar barra en {}, línea: {temporada:?}",
+            path.display()
+        );
+        // No se busca la palabra «Total» a secas: la propia salida de `show`
+        // incluye el pie «📦 Total de frames: N», que no es un campo de total.
+        // El contrato NO añade ningún campo nuevo: el par número/total vive en
+        // el mismo campo `Pista`/`Temporada`, de modo que la ausencia de barra
+        // en esas líneas es la comprobación exacta de «sin total».
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_show_no_muestra_total_cuando_no_existe() {
+    // Sin total: el campo de la pista ni lleva barra ni hay campo de total. El
+    // contrato no añade ningún campo nuevo —el par n/total vive en el mismo
+    // campo `Pista`—, así que la ausencia de barra en esa línea es la
+    // comprobación exacta. No se busca la palabra «Total» a secas porque el pie
+    // «📦 Total de frames: N» de `show` la contiene sin ser un campo de total.
+    let sin_total = create_temp_mp3();
+    let show_sin = edit_then_show(&sin_total, &["--track", "7"]);
+    assert!(show_sin.status.success());
+    let stdout_sin = String::from_utf8_lossy(&show_sin.stdout);
+    let pista_sin = show_line(&stdout_sin, ROTULO_PISTA)
+        .unwrap_or_else(|| panic!("`show` debe mostrar la pista: {stdout_sin}"));
+    assert!(
+        !pista_sin.contains('/'),
+        "sin total no debe haber barra en la pista, línea: {pista_sin:?}"
+    );
+
+    // Contraste en el mismo test: con total SÍ aparece la barra, de modo que el
+    // test no puede pasar por vacío (una salida en blanco también cumpliría la
+    // primera mitad).
+    let con_total = create_temp_mp3();
+    let show_con = edit_then_show(&con_total, &["--track", "7/12"]);
+    assert!(show_con.status.success());
+    let stdout_con = String::from_utf8_lossy(&show_con.stdout);
+    let pista_con = show_line(&stdout_con, ROTULO_PISTA)
+        .unwrap_or_else(|| panic!("`show` debe mostrar la pista: {stdout_con}"));
+    assert!(
+        pista_con.contains('/'),
+        "con total debe aparecer la barra en la pista, línea: {pista_con:?}"
+    );
+
+    cleanup_file(&sin_total);
+    cleanup_file(&con_total);
+}
+
+#[test]
+fn test_cli_conserva_el_total_preexistente_en_los_tres_formatos() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("conserva_total");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let file = path.to_str().unwrap();
+
+        // Pista: primero 3/12 y después 5 (sin total) → el total preexistente 12
+        // debe conservarse y mostrarse 5/12.
+        let first = run_cli(&["edit", file, "--track", "3/12"]);
+        assert!(
+            first.status.success(),
+            "edit --track 3/12 en {} debe salir con 0: {}",
+            path.display(),
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let show = edit_then_show(path, &["--track", "5"]);
+        assert!(show.status.success());
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let pista = show_line(&stdout, ROTULO_PISTA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la pista en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            pista.trim_end().ends_with("5/12"),
+            "el total de pista preexistente debe conservarse en {}, línea: {pista:?}",
+            path.display()
+        );
+
+        // Temporada: primero 1/2 y después 4 → debe conservarse y mostrarse 4/2.
+        let first = run_cli(&["edit", file, "--season", "1/2"]);
+        assert!(
+            first.status.success(),
+            "edit --season 1/2 en {} debe salir con 0: {}",
+            path.display(),
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let show = edit_then_show(path, &["--season", "4"]);
+        assert!(show.status.success());
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let temporada = show_line(&stdout, ROTULO_TEMPORADA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la temporada en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            temporada.trim_end().ends_with("4/2"),
+            "el total de temporada preexistente debe conservarse en {}, línea: {temporada:?}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_remove_track_elimina_numero_y_total() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("remove_total");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let file = path.to_str().unwrap();
+
+        // Número y total escritos en los dos pares: 7/12 (pista) y 1/2 (temporada).
+        let edit = run_cli(&["edit", file, "--track", "7/12", "--season", "1/2"]);
+        assert!(
+            edit.status.success(),
+            "edit con totales en {} debe salir con 0: {}",
+            path.display(),
+            String::from_utf8_lossy(&edit.stderr)
+        );
+
+        for campo in ["track", "season"] {
+            let remove = run_cli(&["remove", file, campo]);
+            assert!(
+                remove.status.success(),
+                "`remove {campo}` en {} debe salir con 0: {}",
+                path.display(),
+                String::from_utf8_lossy(&remove.stderr)
+            );
+        }
+
+        let show = run_cli(&["show", file]);
+        assert!(show.status.success());
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        assert!(
+            show_line(&stdout, ROTULO_PISTA).is_none(),
+            "tras `remove track` no debe quedar ni número ni total en {}: {stdout}",
+            path.display()
+        );
+        assert!(
+            show_line(&stdout, ROTULO_TEMPORADA).is_none(),
+            "tras `remove season` no debe quedar ni número ni total en {}: {stdout}",
+            path.display()
+        );
+        // El par se elimina como unidad: los valores concretos no deben aparecer.
+        assert!(
+            !stdout.contains('7') && !stdout.contains("12"),
+            "no deben sobrevivir el número ni el total en {}: {stdout}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
