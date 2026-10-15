@@ -48,10 +48,12 @@ Nota: `cargo test` se detiene en el primer binario que falla — añade `--no-fa
 - Al eliminar el último campo restante, el bloque ID3v2 no se conserva vacío: desaparece del archivo, igual que con `remove --all`
 - La salida normal se escribe con `outln!` y **nunca** con `println!`, porque `println!` entra en pánico si el consumidor cierra el pipe; los avisos y errores van con `eprintln!` y no se tocan
 - La integración continua ejecuta `cargo` con `--locked`, de modo que si `Cargo.toml` y `Cargo.lock` no coinciden la CI falla en lugar de actualizar el lock en silencio; por eso, al añadir o cambiar dependencias, el lock MUST commitearse en el mismo cambio
+- El pipeline de release empuja la rama y el tag en un **único** `git push --atomic` con reintentos: si no lo consigue, falla de forma explícita antes de publicar, de modo que un fallo deja `main` sin commit de release y sin tag en lugar de a medias (con dos push separados, el servidor llegó a rechazar el tag con `missing necessary objects` mientras la rama ya se había actualizado)
+- El paquete publicado se limita a la lista blanca `include` de `Cargo.toml`, y los patrones de primer nivel van anclados con `/` porque `include` usa la semántica de gitignore: sin la barra inicial, `"README.md"` habría arrastrado al paquete un README del andamiaje de `openspec/`
 
 ## Git workflow
 
-Git Flow — see [GIT_FLOW.md](GIT_FLOW.md) for full branching model, auto-release pipeline, and conventional commit conventions.
+Git Flow — see [GIT_FLOW.md](GIT_FLOW.md) for full branching model, auto-release pipeline, and conventional commit conventions. La recuperación de un release a medias está en [RELEASE.md](RELEASE.md).
 
 - `main` — production (merge aquí = release automático)
 - `development` — feature integration

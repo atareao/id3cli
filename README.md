@@ -62,6 +62,14 @@ cargo build --release
 sudo cp target/release/id3cli /usr/local/bin/
 ```
 
+### Desde crates.io
+
+```bash
+cargo install id3cli
+```
+
+> [!note] Si instalas desde crates.io, el paquete contiene el código fuente, los tests con sus ficheros de ejemplo, el README, la licencia y el changelog. La infraestructura interna del repositorio no se distribuye en el paquete.
+
 ## Uso
 
 ### Comandos disponibles

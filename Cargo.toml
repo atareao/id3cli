@@ -8,6 +8,15 @@ repository = "https://github.com/atareao/id3cli"
 homepage = "https://github.com/atareao/id3cli"
 keywords = ["id3", "mp3", "mp4", "metadata", "cli"]
 categories = ["command-line-utilities", "multimedia::audio", "filesystem"]
+include = [
+    "/src/**",
+    "/tests/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+]
 
 [dependencies]
 lofty = "0.25"

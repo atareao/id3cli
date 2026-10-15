@@ -67,8 +67,28 @@ jobs:
           git add -A
           git commit -m "chore: release v${V}"
           git tag "v${V}"
-          git push "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}" main
-          git push "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}" "v${V}"
+          REMOTE="https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
+          # La rama y el tag viajan en un UNICO push atomico: asi el objeto del
+          # commit de release y la referencia del tag van en el mismo pack, y no
+          # existe ventana entre ambos. Con dos push seguidos el servidor puede
+          # rechazar el tag con «missing necessary objects», porque la replica que
+          # valida la referencia todavia no ha ingerido el pack del primero:
+          # medido el 2026-10-14, 0,49 s entre push y push dieron rechazo, frente
+          # a 1,1 s y 1,3 s de los dos runs que si funcionaron. Con --atomic, si
+          # una de las dos referencias se rechaza se rechazan las dos.
+          empujado=0
+          for intento in 1 2 3; do
+            if git push --atomic "$REMOTE" main "v${V}"; then
+              empujado=1
+              break
+            fi
+            echo "::warning::el push atomico fallo (intento ${intento} de 3); reintento en 5 s"
+            sleep 5
+          done
+          if [ "$empujado" != 1 ]; then
+            echo "::error::no se pudo empujar main y el tag v${V}: la release no se publica"
+            exit 1
+          fi
           gh workflow run release.yml --ref "v${V}"
 
       - name: Sync development with main
