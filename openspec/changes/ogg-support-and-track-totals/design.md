@@ -41,13 +41,23 @@ Alternativas descartadas:
 - **Decidir por extensión**: deja el comportamiento roto ante renombrados, y el proyecto ya decidió por contenido en `format-detection`.
 - **Aceptar cualquier `OggS`**: arrastraría códecs fuera del alcance declarado en Goals / Non-Goals.
 
-### 2. Backend con el tipo concreto `VorbisComments`, no con el `Tag` genérico más `ItemKey`
+### 2. Backend con el tipo concreto `VorbisComments` de `VorbisFile`, no con el `Tag` genérico más `ItemKey`
 
-El backend de OGG SHALL usar el tipo concreto `VorbisComments`. El tipo genérico **descarta** los items sin mapeo — lo documenta la propia librería —, de modo que al reescribir se perderían `ENCODER`, `MUSICBRAINZ_*` y cualquier clave puesta por otra herramienta.
+El backend de OGG SHALL trabajar con el tipo concreto `VorbisComments` y **no** con el `Tag` genérico más `ItemKey`.
 
-El tipo concreto conserva **todas** las claves y el vendor, y además deja los nombres de clave explícitos en la tabla de mapeo, lo que permite documentarlos en el README como contrato.
+La razón está **medida** con código, no deducida, y sustituye a la que daba antes este documento: la vía genérica **descarta en silencio toda clave que no mapee** a una `ItemKey`. Se comprobó con una clave propia, `MY_CUSTOM_FIELD`, escrita en el archivo: al reescribir por esa vía la clave desaparece del archivo. Además, la vía genérica **normaliza la caja** de las claves que sí mapean (`encoder` se reescribe como `ENCODER`). Por eso la vía genérica no sirve: el CLI no puede perder los campos que hayan escrito otras herramientas.
 
-Alternativa descartada: reutilizar el patrón del backend MP4 (genérico + `ItemKey`) por simetría, con el coste de pérdida de datos descrito.
+Matiz corregido: `ENCODER` **sí** está mapeado en `lofty` (`ENCODER` → `ItemKey::EncoderSoftware`, con búsqueda que no distingue mayúsculas de minúsculas), así que la vía genérica **no** pierde esa clave concreta. La afirmación anterior de este documento, que daba `ENCODER` por perdido, era imprecisa y queda corregida aquí.
+
+Camino de código exacto, medido con código que compila:
+
+- **Leer**: `VorbisFile::read_from(&mut file, ParseOptions::default())` —el rasgo `AudioFile`, de `lofty::prelude`— y acceder al tag con `vorbis_comments()` / `vorbis_comments_mut() -> &mut VorbisComments`. `VorbisFile` **no** expone `tag()` ni `tag_mut()`: el acceso lo genera la macro `#[derive(LoftyFile)]` a partir del campo `vorbis_comments_tag`.
+- **Guardar**: `VorbisComments::save_to_path(path, WriteOptions::default())`, que es el mismo idioma que ya usan MP3 y MP4 en `src/lib.rs` y que además abre el archivo él mismo en lectura y escritura. Se descarta la alternativa `VorbisFile::save_to(&mut file, ...)`, que exige que el handle se haya abierto con permiso de escritura y falla con `InvalidInput` si es de solo lectura.
+- **Descartado explícitamente `TaggedFile`**: no expone el `VorbisComments` concreto. Sus únicos métodos públicos son `change_file_type`, `into_inner`, `read_from` y `save`, y su `tag(TagType::VorbisComments)` devuelve el `Tag` genérico, que es justo la vía que pierde campos.
+
+El vendor **no** es un argumento para elegir el tipo concreto: el escritor de bajo nivel de `lofty` relee el vendor del archivo y sobrescribe el que reciba, así que el vendor sobrevive con las tres vías. Conviene decirlo explícitamente para no atribuir al tipo concreto un mérito que no le corresponde.
+
+En las cuatro pruebas del spike el archivo siguió siendo un Ogg Vorbis válido y reproducible según `ffprobe`, con la duración intacta.
 
 ### 3. `YEAR` y `DATE` como claves separadas
 

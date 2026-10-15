@@ -31,11 +31,14 @@ pub mod output;
 
 use lofty::TextEncoding;
 use lofty::config::{ParseOptions, WriteOptions};
-use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::file::TaggedFileExt;
 use lofty::id3::v2::{
     Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
-use lofty::picture::{MimeType, Picture, PictureType};
+use lofty::ogg::tag::VorbisComments;
+use lofty::ogg::{OggPictureStorage, VorbisFile};
+use lofty::picture::{MimeType, Picture, PictureInformation, PictureType};
+use lofty::prelude::AudioFile;
 use lofty::tag::items::Timestamp;
 use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use std::fs::{File, OpenOptions};
@@ -760,13 +763,20 @@ pub fn display_tags(tag: &Id3v2Tag) {
 /// Número máximo de bytes iniciales que se inspeccionan para decidir el formato.
 ///
 /// Bastan para leer la cabecera ID3v2 (`ID3`), el átomo `ftyp` del offset 4 y una
-/// cabecera de frame MPEG completa (4 bytes).
-const FORMAT_PROBE_LEN: usize = 16;
+/// cabecera de frame MPEG completa (4 bytes). Ogg exige llegar más lejos: la
+/// cabecera de página ocupa 27 bytes, su tabla de segmentos hasta 255 más, y el
+/// primer paquete puede empezar en el offset 282, así que hacen falta hasta 289
+/// bytes para poder leer su identificador de códec (`\x01vorbis`). Se toma un
+/// valor redondeado por encima de ese máximo.
+const FORMAT_PROBE_LEN: usize = 512;
 
 /// Magic bytes de formatos de audio reconocibles pero **fuera de alcance**.
+///
+/// Ogg **no** figura aquí: el contenedor Ogg se decide por el códec de su primer
+/// paquete en [`detect_format_from_bytes`], no por la cabecera de página, porque
+/// Vorbis está soportado mientras que Opus, Speex, FLAC y Theora no.
 const UNSUPPORTED_MAGIC: &[&[u8]] = &[
-    b"fLaC", // FLAC
-    b"OggS", // Ogg (Vorbis, Opus, …)
+    b"fLaC", // FLAC nativo (fuera de Ogg)
     b"RIFF", // Contenedores RIFF (WAV, AVI, …)
     b"FORM", // AIFF / AIFC
     b"MAC ", // Monkey's Audio (APE)
@@ -783,8 +793,13 @@ pub enum AudioFormat {
     Mp3,
     /// Contenedor ISO-BMFF/MP4 (`.m4a`, `.mp4`, `.m4b`), reconocido por `ftyp`.
     Mp4,
-    /// Formato de audio reconocible pero fuera de alcance (FLAC, OGG, WAV,
-    /// AIFF, APE…).
+    /// Contenedor Ogg con el códec Vorbis, reconocido por la cabecera de página
+    /// (`OggS`, versión `0`) y por el identificador `\x01vorbis` del primer
+    /// paquete. Soportado.
+    OggVorbis,
+    /// Formato de audio reconocible pero fuera de alcance (FLAC, WAV, AIFF, APE…,
+    /// o un contenedor Ogg con un códec distinto de Vorbis: Opus, Speex, FLAC,
+    /// Theora…).
     Unsupported,
     /// Contenido no reconocible o archivo demasiado corto para decidirlo.
     Unknown,
@@ -792,9 +807,10 @@ pub enum AudioFormat {
 
 /// Detecta el formato de audio de un archivo a partir de su contenido.
 ///
-/// Recibe la ruta únicamente para **leer** sus primeros bytes: la extensión del
-/// nombre no interviene en la decisión. El archivo se abre solo en modo lectura,
-/// de modo que esta función nunca lo modifica.
+/// Reconoce MP3, MP4 y Ogg Vorbis (véase [`detect_format_from_bytes`]). Recibe la
+/// ruta únicamente para **leer** sus primeros bytes: la extensión del nombre no
+/// interviene en la decisión. El archivo se abre solo en modo lectura, de modo
+/// que esta función nunca lo modifica.
 ///
 /// # Errores
 ///
@@ -816,9 +832,14 @@ pub fn detect_format(path: &Path) -> io::Result<AudioFormat> {
 ///
 /// * MP3: cabecera ID3v2 (`ID3`) o cabecera de frame MPEG válida.
 /// * MP4: átomo `ftyp` en el offset 4, con independencia del brand declarado.
+/// * Ogg Vorbis: cabecera de página `OggS` completa, de versión `0`, cuyo primer
+///   paquete empieza por el identificador de códec `\x01vorbis`. La decisión es
+///   por **códec**, no por contenedor: un Ogg es un sobre, y Opus, Speex, FLAC o
+///   Theora siguen fuera de alcance.
 /// * [`AudioFormat::Unsupported`]: magic bytes de un formato conocido pero fuera
-///   de alcance.
-/// * [`AudioFormat::Unknown`]: contenido no reconocible o demasiado corto.
+///   de alcance, o un contenedor Ogg con un códec no soportado.
+/// * [`AudioFormat::Unknown`]: contenido no reconocible o demasiado corto para
+///   decidirlo (incluida una página Ogg incompleta).
 pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
     if header.starts_with(b"ID3") {
         return AudioFormat::Mp3;
@@ -830,6 +851,67 @@ pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
 
     if is_valid_mpeg_frame_header(header) {
         return AudioFormat::Mp3;
+    }
+
+    // Ogg: se decide por el códec del primer paquete, no por la cabecera de
+    // página. La cabecera de página son 27 bytes y el primer paquete empieza en
+    // `27 + n`, donde `n` es el número de segmentos declarado en el byte 26 (la
+    // tabla de segmentos ocupa tantos bytes como segmentos hay). Un Ogg es solo
+    // un sobre: Opus, Speex, FLAC y Theora siguen fuera de alcance.
+    if header.starts_with(b"OggS") {
+        // Sin la cabecera de página completa no se puede siquiera situar el
+        // primer paquete: el formato queda sin determinar.
+        if header.len() < 27 {
+            return AudioFormat::Unknown;
+        }
+        // Versión del flujo (byte 4): solo la `0` es válida.
+        if header[4] != 0 {
+            return AudioFormat::Unknown;
+        }
+
+        let segments = header[26] as usize;
+        // La tabla de segmentos va de `27` a `27 + segments`.
+        if header.len() < 27 + segments {
+            return AudioFormat::Unknown;
+        }
+
+        // Longitud declarada del primer paquete: se suman los valores de *lacing*
+        // (`255` = el paquete continúa) hasta el primero que lo cierra (`< 255`).
+        // Así un identificador corto (p. ej. `\x7fFLAC`, de 5 bytes) se reconoce
+        // como paquete completo sin exigir 7 bytes fijos.
+        let mut packet_len = 0usize;
+        let mut closed = false;
+        for &lace in &header[27..27 + segments] {
+            packet_len += lace as usize;
+            if lace < 255 {
+                closed = true;
+                break;
+            }
+        }
+        // El primer paquete no termina en esta página: no se puede leer entero.
+        if !closed {
+            return AudioFormat::Unknown;
+        }
+        // Un primer paquete de longitud cero (el primer valor de *lacing* es `0`)
+        // es «sin primer paquete»: la página no entrega ningún byte, así que no
+        // hay identificador de códec que leer y el formato queda sin determinar.
+        // No es un formato reconocible pero fuera de alcance (`Unsupported`).
+        if packet_len == 0 {
+            return AudioFormat::Unknown;
+        }
+
+        let payload = 27 + segments;
+        // El primer paquete debe estar entero dentro del bloque inspeccionado.
+        if header.len() < payload + packet_len {
+            return AudioFormat::Unknown;
+        }
+
+        let identifier = &header[payload..payload + packet_len];
+        return if identifier.starts_with(b"\x01vorbis") {
+            AudioFormat::OggVorbis
+        } else {
+            AudioFormat::Unsupported
+        };
     }
 
     if UNSUPPORTED_MAGIC
@@ -1615,6 +1697,713 @@ pub fn display_tags_mp4(tag: &Tag) {
     let item_count = tag.items().len();
     if item_count > 0 {
         outln!("\n📦 Total de metadatos: {}", item_count);
+    }
+
+    outln!("═══════════════════════════════════════\n");
+}
+
+// ---------------------------------------------------------------------------
+// Backend OGG Vorbis (comentarios de Vorbis: pares `CLAVE=valor`)
+// ---------------------------------------------------------------------------
+
+/// Asignación de un flag del subcomando `edit` a la clave del comentario de
+/// Vorbis (`VorbisComments`) que le corresponde en un archivo Ogg Vorbis.
+///
+/// Esta estructura y la tabla [`VORBIS_COMMENT_MAP`] son la **única fuente** del
+/// mapeo flag → clave del backend OGG: tanto la escritura
+/// ([`apply_metadata_ogg`]) como la visualización ([`display_tags_ogg`]) y los
+/// tests la consultan, de modo que el mapeo no queda repartido en ramas dispersas
+/// por función.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VorbisCommentMapping {
+    /// Nombre del flag del CLI, tal y como lo acepta `edit` (p. ej. `--title`).
+    pub flag: &'static str,
+    /// Clave del comentario de Vorbis, siempre en mayúsculas (p. ej. `TITLE`).
+    pub key: &'static str,
+}
+
+impl VorbisCommentMapping {
+    /// Devuelve el mapeo del flag indicado, o `None` si no tiene clave
+    /// equivalente en Vorbis.
+    pub fn for_flag(flag: &str) -> Option<&'static VorbisCommentMapping> {
+        VORBIS_COMMENT_MAP
+            .iter()
+            .find(|mapping| mapping.flag == flag)
+    }
+
+    /// Devuelve el mapeo de la clave indicada, o `None` si no está en la tabla.
+    ///
+    /// La comparación es exacta y distingue mayúsculas, porque las claves de la
+    /// tabla se declaran siempre en mayúsculas.
+    pub fn for_key(key: &str) -> Option<&'static VorbisCommentMapping> {
+        VORBIS_COMMENT_MAP.iter().find(|mapping| mapping.key == key)
+    }
+}
+
+/// Mapeo único de los 18 flags del CLI a las claves del comentario de Vorbis.
+///
+/// A diferencia de MP4, aquí `--year` y `--date` tienen claves **distintas**
+/// (`YEAR` y `DATE`), por lo que cada flag se escribe en su propia clave sin
+/// absorberse. `--url` y `--original-artist` no están en la tabla porque no
+/// tienen clave equivalente en Vorbis: se omiten con aviso.
+pub const VORBIS_COMMENT_MAP: &[VorbisCommentMapping] = &[
+    VorbisCommentMapping {
+        flag: "--title",
+        key: "TITLE",
+    },
+    VorbisCommentMapping {
+        flag: "--artist",
+        key: "ARTIST",
+    },
+    VorbisCommentMapping {
+        flag: "--album",
+        key: "ALBUM",
+    },
+    VorbisCommentMapping {
+        flag: "--album-artist",
+        key: "ALBUMARTIST",
+    },
+    VorbisCommentMapping {
+        flag: "--year",
+        key: "YEAR",
+    },
+    VorbisCommentMapping {
+        flag: "--date",
+        key: "DATE",
+    },
+    VorbisCommentMapping {
+        flag: "--genre",
+        key: "GENRE",
+    },
+    VorbisCommentMapping {
+        flag: "--track",
+        key: "TRACKNUMBER",
+    },
+    VorbisCommentMapping {
+        flag: "--season",
+        key: "DISCNUMBER",
+    },
+    VorbisCommentMapping {
+        flag: "--composer",
+        key: "COMPOSER",
+    },
+    VorbisCommentMapping {
+        flag: "--copyright",
+        key: "COPYRIGHT",
+    },
+    VorbisCommentMapping {
+        flag: "--lyrics",
+        key: "LYRICS",
+    },
+    VorbisCommentMapping {
+        flag: "--cover",
+        key: "METADATA_BLOCK_PICTURE",
+    },
+    VorbisCommentMapping {
+        flag: "--compilation",
+        key: "COMPILATION",
+    },
+    VorbisCommentMapping {
+        flag: "--title-sort",
+        key: "TITLESORT",
+    },
+    VorbisCommentMapping {
+        flag: "--artist-sort",
+        key: "ARTISTSORT",
+    },
+    VorbisCommentMapping {
+        flag: "--album-sort",
+        key: "ALBUMSORT",
+    },
+    VorbisCommentMapping {
+        flag: "--subtitle",
+        key: "SUBTITLE",
+    },
+];
+
+/// Carátula indicada a `edit --cover` sobre un archivo Ogg Vorbis.
+///
+/// Se entrega ya leída de disco para que la escritura del comentario y la de la
+/// carátula sean una sola operación: de `path` se deriva el tipo MIME (por la
+/// extensión) y `data` son los bytes de la imagen que se copian intactos al
+/// bloque de carátula.
+#[derive(Debug, Clone, Copy)]
+pub struct OggCover<'a> {
+    /// Ruta al archivo de imagen; de su extensión se deriva el tipo MIME.
+    pub path: &'a Path,
+    /// Bytes de la imagen, ya leídos de disco.
+    pub data: &'a [u8],
+}
+
+/// Opciones de edición de metadatos sobre un comentario de Vorbis.
+///
+/// Refleja uno a uno los flags del subcomando `edit`. Los campos que no se
+/// indican quedan a `None` (o a `false`/vacío) y no se escriben.
+#[derive(Debug, Clone, Default)]
+pub struct OggEditOptions<'a> {
+    /// Título de la canción (`TITLE`).
+    pub title: Option<&'a str>,
+    /// Artistas; se unen con `"; "` en una única clave `ARTIST`.
+    pub artists: &'a [String],
+    /// Álbum (`ALBUM`).
+    pub album: Option<&'a str>,
+    /// Artista del álbum (`ALBUMARTIST`).
+    pub album_artist: Option<&'a str>,
+    /// Año (`YEAR`).
+    pub year: Option<i32>,
+    /// Género (`GENRE`).
+    pub genre: Option<&'a str>,
+    /// Número de pista (`TRACKNUMBER`).
+    pub track: Option<u32>,
+    /// Temporada / número de disco (`DISCNUMBER`).
+    pub season: Option<u32>,
+    /// Fecha de grabación (`DATE`).
+    pub date: Option<&'a str>,
+    /// Copyright (`COPYRIGHT`).
+    pub copyright: Option<&'a str>,
+    /// Compositor (`COMPOSER`).
+    pub composer: Option<&'a str>,
+    /// Subtítulo (`SUBTITLE`).
+    pub subtitle: Option<&'a str>,
+    /// Letra (`LYRICS`).
+    pub lyrics: Option<&'a str>,
+    /// Marca de compilación (`COMPILATION`).
+    pub compilation: bool,
+    /// Orden de clasificación del título (`TITLESORT`).
+    pub title_sort: Option<&'a str>,
+    /// Orden de clasificación del artista (`ARTISTSORT`).
+    pub artist_sort: Option<&'a str>,
+    /// Orden de clasificación del álbum (`ALBUMSORT`).
+    pub album_sort: Option<&'a str>,
+    /// Carátula (`METADATA_BLOCK_PICTURE`); `None` si no se indicó `--cover`.
+    pub cover: Option<OggCover<'a>>,
+    /// URL asociada (`--url`). No tiene clave equivalente en Vorbis: se omite
+    /// con aviso, sin escribir nada.
+    pub url: Option<&'a str>,
+    /// Artista original (`--original-artist`). No tiene clave equivalente en
+    /// Vorbis: se omite con aviso, sin escribir nada.
+    pub original_artist: Option<&'a str>,
+}
+
+/// Resultado de aplicar metadatos a un comentario de Vorbis.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OggEditReport {
+    /// `true` si se aplicó al menos un cambio.
+    pub changed: bool,
+    /// Avisos en español que el CLI debe emitir por stderr (por ejemplo, la
+    /// omisión de `--url` o `--original-artist`). [`edit_ogg`] ya los emite y,
+    /// además, los devuelve para que sean verificables por los tests.
+    pub warnings: Vec<String>,
+}
+
+/// Construye el aviso (en español) de un campo de `edit` que no tiene clave
+/// equivalente en Vorbis (`--url` y `--original-artist`).
+///
+/// Se emite por stderr, el campo se omite y la operación continúa con el resto
+/// de flags. No se crea ninguna clave inventada que supla la omisión.
+pub fn ogg_field_omitted_warning(flag: &str) -> String {
+    format!("⚠️  El campo '{flag}' no tiene clave equivalente en OGG; se omite.")
+}
+
+/// Devuelve la clave de Vorbis asociada a un flag del CLI según
+/// [`VORBIS_COMMENT_MAP`].
+///
+/// Solo se invoca con los flags constantes que tienen clave, por lo que la
+/// ausencia de mapeo es inalcanzable.
+fn vorbis_key(flag: &str) -> &'static str {
+    VorbisCommentMapping::for_flag(flag)
+        .expect("todo flag de texto tiene una clave asociada en VORBIS_COMMENT_MAP")
+        .key
+}
+
+/// Escribe un valor de texto en la clave de Vorbis que corresponde al flag,
+/// tomando la clave de la tabla [`VORBIS_COMMENT_MAP`] como única fuente del
+/// mapeo.
+fn set_vorbis_text(tag: &mut VorbisComments, flag: &str, value: &str) {
+    tag.insert(vorbis_key(flag).to_string(), value.to_string());
+}
+
+/// Aplica los metadatos indicados a un [`VorbisComments`].
+///
+/// El mapeo de cada flag a su clave se resuelve siempre a través de
+/// [`VORBIS_COMMENT_MAP`]. La carátula (`--cover`) no se escribe aquí: se
+/// gestiona como [`Picture`] y es responsabilidad de [`edit_ogg`].
+///
+/// `--year` y `--date` acaban en claves **distintas** (`YEAR` y `DATE`), así
+/// que no colisionan ni se absorben entre sí. `--url` y `--original-artist` no
+/// tienen clave equivalente: se omiten con aviso, sin abortar.
+#[must_use]
+pub fn apply_metadata_ogg(tag: &mut VorbisComments, options: &OggEditOptions<'_>) -> OggEditReport {
+    let mut report = OggEditReport::default();
+
+    if let Some(title) = options.title {
+        set_vorbis_text(tag, "--title", title);
+        report.changed = true;
+    }
+
+    if !options.artists.is_empty() {
+        set_vorbis_text(tag, "--artist", &options.artists.join("; "));
+        report.changed = true;
+    }
+
+    if let Some(album) = options.album {
+        set_vorbis_text(tag, "--album", album);
+        report.changed = true;
+    }
+
+    if let Some(album_artist) = options.album_artist {
+        set_vorbis_text(tag, "--album-artist", album_artist);
+        report.changed = true;
+    }
+
+    if let Some(year) = options.year {
+        set_vorbis_text(tag, "--year", &year.to_string());
+        report.changed = true;
+    }
+
+    if let Some(date) = options.date {
+        set_vorbis_text(tag, "--date", date);
+        report.changed = true;
+    }
+
+    if let Some(genre) = options.genre {
+        set_vorbis_text(tag, "--genre", genre);
+        report.changed = true;
+    }
+
+    if let Some(track) = options.track {
+        set_vorbis_text(tag, "--track", &track.to_string());
+        report.changed = true;
+    }
+
+    if let Some(season) = options.season {
+        set_vorbis_text(tag, "--season", &season.to_string());
+        report.changed = true;
+    }
+
+    if let Some(copyright) = options.copyright {
+        set_vorbis_text(tag, "--copyright", copyright);
+        report.changed = true;
+    }
+
+    if let Some(composer) = options.composer {
+        set_vorbis_text(tag, "--composer", composer);
+        report.changed = true;
+    }
+
+    if let Some(subtitle) = options.subtitle {
+        set_vorbis_text(tag, "--subtitle", subtitle);
+        report.changed = true;
+    }
+
+    if let Some(lyrics) = options.lyrics {
+        set_vorbis_text(tag, "--lyrics", lyrics);
+        report.changed = true;
+    }
+
+    if options.compilation {
+        set_vorbis_text(tag, "--compilation", "1");
+        report.changed = true;
+    }
+
+    if let Some(title_sort) = options.title_sort {
+        set_vorbis_text(tag, "--title-sort", title_sort);
+        report.changed = true;
+    }
+
+    if let Some(artist_sort) = options.artist_sort {
+        set_vorbis_text(tag, "--artist-sort", artist_sort);
+        report.changed = true;
+    }
+
+    if let Some(album_sort) = options.album_sort {
+        set_vorbis_text(tag, "--album-sort", album_sort);
+        report.changed = true;
+    }
+
+    // `--url` y `--original-artist` no tienen clave equivalente en Vorbis: se
+    // omiten con aviso, sin escribir ninguna clave y sin marcar el informe como
+    // cambiado (para que, si son los únicos flags, el archivo no se reescriba).
+    if options.url.is_some() {
+        report.warnings.push(ogg_field_omitted_warning("--url"));
+    }
+    if options.original_artist.is_some() {
+        report
+            .warnings
+            .push(ogg_field_omitted_warning("--original-artist"));
+    }
+
+    report
+}
+
+/// Escribe una carátula como imagen en un comentario de Vorbis.
+///
+/// El [`Picture`] se construye igual que en MP3 (portada frontal, descripción
+/// "Cover" y el MIME que llega como argumento). La información de la imagen se
+/// calcula con [`PictureInformation::from_picture`] y, si no se puede inferir
+/// (por ejemplo, una imagen de menos de 8 bytes), se usa la información por
+/// defecto en lugar de abortar: la carátula se escribe igualmente con sus
+/// dimensiones a cero. El MIME **no** se degrada: una carátula WebP se guarda
+/// con `image/webp`.
+fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
+    let picture = create_picture_frame(data.to_vec(), mime);
+    let information = PictureInformation::from_picture(&picture).unwrap_or_default();
+    let _ = tag.insert_picture(picture, Some(information));
+}
+
+/// Lee el comentario de Vorbis de un archivo Ogg Vorbis.
+///
+/// El formato se decide por el **contenido**, no por la extensión del nombre: se
+/// usa el lector concreto [`VorbisFile`], que sondea los *magic bytes*. El
+/// comentario es obligatorio en el contenedor, por lo que siempre existe: no se
+/// envuelve en `Option`.
+///
+/// Se devuelve el tipo concreto [`VorbisComments`] (no el `Tag` genérico)
+/// porque conserva las claves ajenas al mapeo con su **caja original** y el
+/// vendor del comentario, que es justo lo que el `Tag` genérico descarta.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer o no se puede interpretar
+/// como Ogg Vorbis.
+pub fn read_vorbis_tag(path: &Path) -> Result<VorbisComments, Box<dyn std::error::Error>> {
+    let mut file = File::open(path)?;
+    let vorbis_file = VorbisFile::read_from(&mut file, ParseOptions::default())?;
+    Ok(vorbis_file.vorbis_comments().clone())
+}
+
+/// Escribe el comentario de Vorbis en un archivo Ogg Vorbis.
+///
+/// `lofty` reemplaza solo el paquete de comentario y reescribe el resto del
+/// contenedor, de modo que las páginas de audio quedan intactas. El vendor del
+/// archivo se conserva: el escritor lo relee del propio archivo y sobrescribe el
+/// que llevara el tag en memoria.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no existe, no es escribible o no se puede
+/// interpretar como Ogg Vorbis.
+pub fn write_vorbis_tag(
+    path: &Path,
+    tag: &VorbisComments,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tag.save_to_path(path, WriteOptions::default())?;
+    Ok(())
+}
+
+/// Lee, aplica y guarda los metadatos OGG indicados sobre un archivo.
+///
+/// Es la operación completa del subcomando `edit` sobre un Ogg Vorbis: lee el
+/// comentario existente, aplica los cambios y, solo si hay alguno, reescribe el
+/// archivo. Los avisos de la operación se emiten por stderr y además se devuelven
+/// en el informe.
+///
+/// La carátula se valida **antes** de escribir el archivo: si la extensión de la
+/// imagen no está soportada, la función devuelve error sin modificar un solo
+/// byte. En OGG no hay degradación de WebP: se escribe el MIME real de la
+/// extensión y no se emite ningún aviso de degradación.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar o escribir, o si
+/// la extensión de la carátula no está soportada.
+pub fn edit_ogg(
+    path: &Path,
+    options: &OggEditOptions<'_>,
+) -> Result<OggEditReport, Box<dyn std::error::Error>> {
+    let mut tag = read_vorbis_tag(path)?;
+
+    let mut report = apply_metadata_ogg(&mut tag, options);
+
+    // Carátula. La validación del MIME ocurre antes de tocar el disco, de modo
+    // que una imagen inválida devuelve error sin dejar el archivo a medias.
+    if let Some(cover) = options.cover {
+        let mime = detect_cover_mime_type(cover.path)?;
+        push_ogg_cover(&mut tag, cover.data, mime);
+        report.changed = true;
+    }
+
+    if report.changed {
+        write_vorbis_tag(path, &tag)?;
+    }
+
+    for warning in &report.warnings {
+        eprintln!("{warning}");
+    }
+
+    Ok(report)
+}
+
+/// Elimina de un comentario de Vorbis todos los campos que corresponden a un
+/// [`TagKind`].
+///
+/// La carátula se elimina vaciando la lista de imágenes; la letra borra tanto
+/// `LYRICS` como `UNSYNCEDLYRICS`; el resto de campos se borra con
+/// [`VorbisComments::remove`]. Los dos tags sin clave equivalente en Vorbis
+/// ([`TagKind::Url`] y [`TagKind::OriginalArtist`]) no tienen nada que eliminar.
+fn remove_ogg_kind(tag: &mut VorbisComments, kind: TagKind) -> bool {
+    let key = match kind {
+        TagKind::Title => "TITLE",
+        TagKind::Artist => "ARTIST",
+        TagKind::Album => "ALBUM",
+        TagKind::Year => "YEAR",
+        TagKind::Date => "DATE",
+        TagKind::Genre => "GENRE",
+        TagKind::Track => {
+            // El número de pista y su total van juntos: un `TRACKTOTAL` sin
+            // `TRACKNUMBER` no significa nada (un total huérfano), y el contrato
+            // de `track-numbering` prohíbe ese estado, así que borrar el número
+            // borra también el total.
+            tag.remove("TRACKNUMBER").count();
+            tag.remove("TRACKTOTAL").count();
+            return true;
+        }
+        TagKind::Season => {
+            // Igual que la pista: el total de temporada (`DISCTOTAL`) se va con
+            // su número (`DISCNUMBER`) para no dejar un total huérfano.
+            tag.remove("DISCNUMBER").count();
+            tag.remove("DISCTOTAL").count();
+            return true;
+        }
+        TagKind::Copyright => "COPYRIGHT",
+        TagKind::Composer => "COMPOSER",
+        TagKind::Subtitle => "SUBTITLE",
+        TagKind::AlbumArtist => "ALBUMARTIST",
+        TagKind::Lyrics => {
+            // La letra puede estar en `LYRICS` o en `UNSYNCEDLYRICS` (escrita por
+            // otra herramienta): se borran ambas.
+            tag.remove("LYRICS").count();
+            tag.remove("UNSYNCEDLYRICS").count();
+            return true;
+        }
+        TagKind::Compilation => "COMPILATION",
+        TagKind::AlbumSort => "ALBUMSORT",
+        TagKind::ArtistSort => "ARTISTSORT",
+        TagKind::TitleSort => "TITLESORT",
+        TagKind::Cover => {
+            tag.remove_pictures();
+            return true;
+        }
+        // Sin clave equivalente en Vorbis: no hay nada que eliminar.
+        TagKind::Url | TagKind::OriginalArtist => return false,
+    };
+
+    tag.remove(key).count();
+    true
+}
+
+/// Elimina tags específicos de un comentario de Vorbis.
+///
+/// Acepta **los mismos nombres** (en inglés y en español) que [`remove_tags`]
+/// sobre MP3, porque todos comparten la tabla de alias [`classify_tag_alias`].
+/// Los tags sin clave equivalente en Vorbis ([`TagKind::Url`] y
+/// [`TagKind::OriginalArtist`]) se omiten con un aviso, sin abortar.
+///
+/// # Retorna
+///
+/// `true` si se reconoció al menos un tag (aunque la clave no existiera), del
+/// mismo modo que [`remove_tags`].
+pub fn remove_tags_ogg(tag: &mut VorbisComments, tags_to_remove: &[String]) -> bool {
+    let mut changed = false;
+
+    for tag_name in tags_to_remove {
+        let removed = match classify_tag_alias(tag_name) {
+            Some(TagKind::Url | TagKind::OriginalArtist) => {
+                eprintln!(
+                    "⚠️  El tag '{}' no tiene clave equivalente en OGG; se omite.",
+                    tag_name
+                );
+                false
+            }
+            Some(kind) => remove_ogg_kind(tag, kind),
+            None => {
+                eprintln!(
+                    "⚠️  Tag desconocido: '{}'. Tags válidos: {}",
+                    tag_name, VALID_TAG_NAMES
+                );
+                false
+            }
+        };
+
+        if removed {
+            outln!("✓ Eliminado: {}", tag_name);
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Vacía el comentario de Vorbis de un archivo Ogg Vorbis.
+///
+/// Elimina todas las claves de usuario y todas las carátulas, pero **preserva el
+/// vendor**: el comentario es obligatorio en el contenedor y no se puede
+/// eliminar, así que se deja el comentario sin ningún campo de usuario en lugar
+/// de borrarlo. El audio queda intacto (solo se reemplaza el paquete de
+/// comentario) y el archivo sigue siendo reproducible, del mismo modo que
+/// [`remove_all_mp4`] deja el audio de un MP4 intacto.
+///
+/// # Retorna
+///
+/// `true` si el archivo tenía metadatos (y se eliminaron), `false` si no tenía.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar como Ogg Vorbis
+/// o escribir.
+pub fn remove_all_ogg(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let tag = read_vorbis_tag(file)?;
+
+    // Hay metadatos si queda alguna clave de usuario o alguna carátula; el
+    // vendor no cuenta (es parte obligatoria del contenedor, no del contenido).
+    let had_metadata = tag.items().next().is_some() || !tag.pictures().is_empty();
+
+    if had_metadata {
+        // Se vacía el comentario conservando el vendor: `lofty` lo relee del
+        // archivo al escribir, así que basta con no llevar ningún campo.
+        let mut emptied = VorbisComments::new();
+        emptied.set_vendor(tag.vendor().to_string());
+        write_vorbis_tag(file, &emptied)?;
+    }
+
+    Ok(had_metadata)
+}
+
+/// Muestra los metadatos de un comentario de Vorbis en el mismo formato legible
+/// (mismos emojis y mismos nombres de campo) que [`display_tags`] usa en MP3 y
+/// [`display_tags_mp4`] en MP4.
+///
+/// Solo se muestran los campos de la tabla de mapeo ([`VORBIS_COMMENT_MAP`]) más
+/// las carátulas y la letra: el **vendor** y la clave `ENCODER` (que toda
+/// herramienta escribe, pero no son metadatos del usuario) no se muestran. Las
+/// claves se leen de la propia tabla para que el mapeo no quede duplicado. Cuando
+/// no hay ningún campo de la tabla, ni carátulas ni letra, se informa de que no
+/// se encontraron metadatos.
+pub fn display_tags_ogg(tag: &VorbisComments) {
+    outln!("\n📋 Metadatos encontrados:\n");
+    outln!("═══════════════════════════════════════");
+
+    let mut found = 0usize;
+
+    if let Some(title) = tag.get(vorbis_key("--title")) {
+        outln!("🎵 Título:    {}", title);
+        found += 1;
+    }
+
+    if let Some(artist) = tag.get(vorbis_key("--artist")) {
+        outln!("🎤 Artista:   {}", artist);
+        found += 1;
+    }
+
+    if let Some(album) = tag.get(vorbis_key("--album")) {
+        outln!("💿 Álbum:     {}", album);
+        found += 1;
+    }
+
+    // `--year` y `--date` son claves distintas en OGG: cada una con su etiqueta.
+    if let Some(year) = tag.get(vorbis_key("--year")) {
+        outln!("📅 Año:       {}", year);
+        found += 1;
+    }
+
+    if let Some(date) = tag.get(vorbis_key("--date")) {
+        outln!("📆 Fecha:     {}", date);
+        found += 1;
+    }
+
+    if let Some(genre) = tag.get(vorbis_key("--genre")) {
+        outln!("🎸 Género:    {}", genre);
+        found += 1;
+    }
+
+    if let Some(track) = tag.get(vorbis_key("--track")) {
+        outln!("#️⃣  Pista:     {}", track);
+        found += 1;
+    }
+
+    if let Some(season) = tag.get(vorbis_key("--season")) {
+        outln!("📺 Temporada: {}", season);
+        found += 1;
+    }
+
+    if let Some(copyright) = tag.get(vorbis_key("--copyright")) {
+        outln!("©️  Copyright: {}", copyright);
+        found += 1;
+    }
+
+    if let Some(composer) = tag.get(vorbis_key("--composer")) {
+        outln!("🎼 Compositor: {}", composer);
+        found += 1;
+    }
+
+    if let Some(subtitle) = tag.get(vorbis_key("--subtitle")) {
+        outln!("📄 Subtítulo: {}", subtitle);
+        found += 1;
+    }
+
+    if let Some(album_artist) = tag.get(vorbis_key("--album-artist")) {
+        outln!("👥 Artista del álbum: {}", album_artist);
+        found += 1;
+    }
+
+    // Mostrar carátulas si existen
+    let pictures = tag.pictures();
+    if !pictures.is_empty() {
+        outln!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+        for (i, (pic, _)) in pictures.iter().enumerate() {
+            outln!(
+                "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
+                i + 1,
+                pic.pic_type(),
+                pic.mime_type().map(|m| m.as_str()).unwrap_or(""),
+                pic.data().len()
+            );
+        }
+        found += pictures.len();
+    }
+
+    // Mostrar letra si existe (`LYRICS`, o `UNSYNCEDLYRICS` de otra herramienta)
+    if let Some(lyrics) = tag
+        .get(vorbis_key("--lyrics"))
+        .or_else(|| tag.get("UNSYNCEDLYRICS"))
+    {
+        outln!("📝 Letra:");
+        // Mostrar solo las primeras 3 líneas como preview
+        let lines: Vec<&str> = lyrics.lines().collect();
+        for line in lines.iter().take(3) {
+            outln!("   {}", line);
+        }
+        if lines.len() > 3 {
+            outln!("   ... ({} líneas más)", lines.len() - 3);
+        }
+        found += 1;
+    }
+
+    // Mostrar metadatos de Apple si existen
+    if tag.get(vorbis_key("--compilation")) == Some("1") {
+        outln!(" Compilación: Sí");
+        found += 1;
+    }
+
+    if let Some(album_sort) = tag.get(vorbis_key("--album-sort")) {
+        outln!("🔤 Orden álbum: {}", album_sort);
+        found += 1;
+    }
+
+    if let Some(artist_sort) = tag.get(vorbis_key("--artist-sort")) {
+        outln!("🔤 Orden artista: {}", artist_sort);
+        found += 1;
+    }
+
+    if let Some(title_sort) = tag.get(vorbis_key("--title-sort")) {
+        outln!("🔤 Orden título: {}", title_sort);
+        found += 1;
+    }
+
+    if found > 0 {
+        outln!("\n📦 Total de metadatos: {}", found);
+    } else {
+        outln!("\n⚠️  No se encontraron metadatos.");
     }
 
     outln!("═══════════════════════════════════════\n");

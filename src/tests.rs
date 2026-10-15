@@ -1336,7 +1336,7 @@ fn test_detect_format_too_short() {
 
 #[test]
 fn test_detect_format_unsupported_magic_bytes() {
-    let magics: [&[u8]; 6] = [b"fLaC", b"OggS", b"RIFF", b"FORM", b"MAC ", b"wvpk"];
+    let magics: [&[u8]; 5] = [b"fLaC", b"RIFF", b"FORM", b"MAC ", b"wvpk"];
     for magic in magics {
         let mut header = magic.to_vec();
         header.extend_from_slice(&[0u8; 8]);
@@ -1371,6 +1371,146 @@ fn test_detect_format_ignores_extension() {
     let path = create_temp_file("detect_mp4_as_mp3", "mp3", &mp4_content);
     assert_eq!(detect_format(&path).unwrap(), AudioFormat::Mp4);
     cleanup_file(&path);
+}
+
+/// Ruta absoluta al fixture Ogg Vorbis real y sin metadatos, versionado en el repo.
+///
+/// Es un Ogg Vorbis genuino: el patrón de captura `OggS` en el offset 0, la
+/// versión `0` en el byte 4, un único segmento declarado en el byte 26 y el
+/// primer paquete `\x01vorbis` (cabecera de identificación) en el offset 28.
+fn fixture_ogg_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.ogg")
+}
+
+/// Construye una página Ogg de un solo paquete con el identificador de códec
+/// indicado como primer (y único) paquete.
+///
+/// Layout de la página Ogg (cabecera de 27 bytes + tabla de segmentos + datos):
+/// * bytes 0-3   : patrón de captura `OggS`
+/// * byte 4      : versión del flujo (`0`)
+/// * byte 5      : tipo de página (`0`)
+/// * bytes 6-13  : posición de granule (8 bytes)
+/// * bytes 14-17 : número de serie del flujo (4 bytes)
+/// * bytes 18-21 : número de secuencia de la página (4 bytes)
+/// * bytes 22-25 : CRC (4 bytes)
+/// * byte 26     : número de segmentos de página (`1`)
+/// * byte 27     : tabla de segmentos (lacing), un segmento del tamaño del códec
+/// * bytes 28-…  : primer paquete, el identificador de códec
+///
+/// La tabla de segmentos declara tantos bytes como ocupe el identificador, de
+/// modo que la página sea estructuralmente válida y el primer paquete empiece
+/// justo en el offset 28.
+fn synthetic_ogg_page(codec: &[u8]) -> Vec<u8> {
+    assert!(
+        !codec.is_empty() && codec.len() <= 255,
+        "el identificador de códec debe caber en un único segmento Ogg"
+    );
+    let mut page = Vec::with_capacity(28 + codec.len());
+    page.extend_from_slice(b"OggS"); // 0-3: patrón de captura
+    page.push(0x00); // 4: versión del flujo
+    page.push(0x00); // 5: tipo de página (sin BOS ni EOS)
+    page.extend_from_slice(&[0x00; 20]); // 6-25: granule + serial + secuencia + CRC
+    page.push(0x01); // 26: número de segmentos de página
+    page.push(codec.len() as u8); // 27: tabla de segmentos (un segmento)
+    page.extend_from_slice(codec); // 28-…: primer paquete
+    page
+}
+
+#[test]
+fn test_detect_format_ogg_vorbis() {
+    // El fixture versionado es un Ogg Vorbis real: el primer paquete arranca en
+    // el offset 28 con la cabecera de identificación `\x01vorbis`.
+    assert_eq!(
+        detect_format(&fixture_ogg_path()).unwrap(),
+        AudioFormat::OggVorbis
+    );
+
+    // La extensión del nombre no interviene: el mismo contenido renombrado como
+    // `.mp3` sigue reconociéndose por sus bytes como Ogg Vorbis.
+    let content = fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg");
+    let path = create_temp_file("detect_ogg_as_mp3", "mp3", &content);
+    assert_eq!(detect_format(&path).unwrap(), AudioFormat::OggVorbis);
+    cleanup_file(&path);
+
+    // Por bytes: el identificador de códec vive en el offset 28, así que se
+    // pasan 64 bytes (no 16) para poder reconocerlo.
+    assert_eq!(
+        detect_format_from_bytes(&content[..64]),
+        AudioFormat::OggVorbis
+    );
+}
+
+#[test]
+fn test_detect_format_ogg_other_codecs() {
+    // Contenedor Ogg con un códec reconocible pero fuera de alcance: son
+    // formatos no soportados (`Unsupported`), no contenido desconocido.
+    let codecs: [&[u8]; 4] = [
+        b"OpusHead",   // Opus
+        b"Speex   ",   // Speex (con los tres espacios finales)
+        b"\x7fFLAC",   // FLAC dentro de Ogg
+        b"\x80theora", // vídeo Theora
+    ];
+    for codec in codecs {
+        let page = synthetic_ogg_page(codec);
+        assert_eq!(
+            detect_format_from_bytes(&page),
+            AudioFormat::Unsupported,
+            "el códec {:?} debe reconocerse como Ogg no soportado",
+            String::from_utf8_lossy(codec)
+        );
+    }
+}
+
+#[test]
+fn test_detect_format_ogg_incomplete_page() {
+    // El contrato distingue «no se puede determinar el formato» (`Unknown`) de
+    // «formato reconocible pero no soportado» (`Unsupported`). Sin la cabecera
+    // de página completa y su primer paquete no se puede siquiera determinar
+    // que el contenedor sea Ogg, así que los tres casos son `Unknown`.
+
+    // (1) Solo el patrón de captura, sin cabecera de página.
+    assert_eq!(detect_format_from_bytes(b"OggS"), AudioFormat::Unknown);
+
+    // (2) Cabecera de página completa (27 bytes: patrón, versión, tipo, granule,
+    // serial, secuencia, CRC y número de segmentos), pero sin tabla de
+    // segmentos ni primer paquete.
+    let mut header_only = b"OggS".to_vec();
+    header_only.extend_from_slice(&[0x00; 23]); // versión + 22 bytes más
+    assert_eq!(header_only.len(), 27);
+    assert_eq!(detect_format_from_bytes(&header_only), AudioFormat::Unknown);
+
+    // (3) Cabecera de página con su tabla de segmentos declarando un paquete,
+    // pero cortada antes de que llegue el primer paquete completo: solo 4 de
+    // los 7 bytes de `\x01vorbis`.
+    let full_page = synthetic_ogg_page(b"\x01vorbis");
+    assert_eq!(full_page.len(), 35);
+    assert_eq!(
+        detect_format_from_bytes(&full_page[..32]),
+        AudioFormat::Unknown
+    );
+}
+
+#[test]
+fn test_detect_format_ogg_empty_packet() {
+    // Flujo Ogg degenerado: la página declara un único segmento de *lacing* `0`,
+    // de modo que el «primer paquete» es el slice vacío. No hay identificador de
+    // códec que leer, así que el formato **no se puede determinar**: el contrato
+    // lo deja fuera de «formato no soportado», porque nada reconoce aquí un
+    // códec concreto. Se construye la página a mano (no vale `synthetic_ogg_page`,
+    // que exige un identificador no vacío).
+    let mut page = Vec::with_capacity(28);
+    page.extend_from_slice(b"OggS"); // 0-3: patrón de captura
+    page.push(0x00); // 4: versión del flujo (la única válida)
+    page.push(0x00); // 5: tipo de página
+    page.extend_from_slice(&[0x00; 20]); // 6-25: granule + serial + secuencia + CRC
+    page.push(0x01); // 26: número de segmentos de página
+    page.push(0x00); // 27: único valor de *lacing* `0` → primer paquete vacío
+    assert_eq!(page.len(), 28);
+
+    assert_eq!(detect_format_from_bytes(&page), AudioFormat::Unknown);
 }
 
 // ---------------------------------------------------------------------------
@@ -2934,4 +3074,722 @@ fn build_mp4_without_trak() -> Vec<u8> {
     buf.extend(b"\x00\x01\x02\x03\x04\x05");
 
     buf
+
+// --- FIN tests MP4 ---
+
+// --- INICIO: tests OGG (de la rama) ---
+
+// ---------------------------------------------------------------------------
+// Backend OGG (`VorbisComments`): mapeo, escritura, relectura, carátula y borrado
+// ---------------------------------------------------------------------------
+//
+// Fase RED del grupo 4 del cambio `ogg-support-and-track-totals`: estos tests
+// exigen el backend de OGG y todavía no compilan, porque las funciones y tipos
+// de `src/lib.rs` que invocan aún no existen.
+
+use lofty::file::AudioFile;
+use lofty::ogg::OggPictureStorage;
+use lofty::ogg::tag::VorbisComments;
+use std::collections::HashSet;
+use std::time::Duration;
+
+/// Duración del audio de un `.ogg`, leída con `lofty`.
+///
+/// Sirve para comprobar que `remove --all` solo vacía el comentario y deja el
+/// audio (y por tanto la duración) intacto, sin depender del layout de páginas.
+fn ogg_duration(path: &Path) -> Duration {
+    let mut file = fs::File::open(path).expect("No se pudo abrir el .ogg temporal");
+    lofty::read_from(&mut file)
+        .expect("lofty debe poder leer el .ogg")
+        .properties()
+        .duration()
+}
+
+#[test]
+fn test_vorbis_comment_map_cubre_los_dieciocho_flags() {
+    // La tabla es la única fuente del mapeo: 18 asignaciones flag → clave.
+    assert_eq!(
+        VORBIS_COMMENT_MAP.len(),
+        18,
+        "la tabla debe cubrir las 18 asignaciones"
+    );
+
+    // Ni flags ni claves repetidos.
+    let flags: HashSet<&str> = VORBIS_COMMENT_MAP
+        .iter()
+        .map(|mapping| mapping.flag)
+        .collect();
+    let keys: HashSet<&str> = VORBIS_COMMENT_MAP
+        .iter()
+        .map(|mapping| mapping.key)
+        .collect();
+    assert_eq!(flags.len(), 18, "ningún flag de la tabla debe repetirse");
+    assert_eq!(keys.len(), 18, "ninguna clave de la tabla debe repetirse");
+
+    // Cada par exacto, en los dos sentidos.
+    let expected: [(&str, &str); 18] = [
+        ("--title", "TITLE"),
+        ("--artist", "ARTIST"),
+        ("--album", "ALBUM"),
+        ("--album-artist", "ALBUMARTIST"),
+        ("--year", "YEAR"),
+        ("--date", "DATE"),
+        ("--genre", "GENRE"),
+        ("--track", "TRACKNUMBER"),
+        ("--season", "DISCNUMBER"),
+        ("--composer", "COMPOSER"),
+        ("--copyright", "COPYRIGHT"),
+        ("--lyrics", "LYRICS"),
+        ("--cover", "METADATA_BLOCK_PICTURE"),
+        ("--compilation", "COMPILATION"),
+        ("--title-sort", "TITLESORT"),
+        ("--artist-sort", "ARTISTSORT"),
+        ("--album-sort", "ALBUMSORT"),
+        ("--subtitle", "SUBTITLE"),
+    ];
+    for (flag, key) in expected {
+        let mapping = VorbisCommentMapping::for_flag(flag)
+            .unwrap_or_else(|| panic!("falta el flag {flag} en la tabla"));
+        assert_eq!(mapping.key, key, "{flag} debe mapear a {key}");
+
+        // El camino inverso clave → flag debe existir y coincidir.
+        let reverse = VorbisCommentMapping::for_key(key)
+            .unwrap_or_else(|| panic!("falta la clave {key} en la tabla"));
+        assert_eq!(reverse.flag, flag, "{key} debe revertirse a {flag}");
+    }
+
+    // `--url` y `--original-artist` NO tienen equivalente en Vorbis.
+    assert!(
+        VorbisCommentMapping::for_flag("--url").is_none(),
+        "--url no debe estar en la tabla"
+    );
+    assert!(
+        VorbisCommentMapping::for_flag("--original-artist").is_none(),
+        "--original-artist no debe estar en la tabla"
+    );
+    // Tampoco deben existir claves inventadas para ellos.
+    assert!(VorbisCommentMapping::for_key("WEBSITE").is_none());
+    assert!(VorbisCommentMapping::for_key("ORIGINALARTIST").is_none());
+
+    // Todas las claves en mayúsculas y sin espacios.
+    for mapping in VORBIS_COMMENT_MAP {
+        assert_eq!(
+            mapping.key,
+            mapping.key.to_uppercase(),
+            "la clave {} debe estar en mayúsculas",
+            mapping.key
+        );
+        assert!(
+            !mapping.key.contains(' '),
+            "la clave {} no debe contener espacios",
+            mapping.key
+        );
+    }
+}
+
+#[test]
+fn test_apply_metadata_ogg_escribe_las_claves_del_mapeo() {
+    let artists = vec!["Artista Uno".to_string(), "Artista Dos".to_string()];
+    let options = OggEditOptions {
+        title: Some("Título"),
+        artists: &artists,
+        album: Some("Álbum"),
+        album_artist: Some("Artista del álbum"),
+        year: Some(2026),
+        genre: Some("Rock"),
+        track: Some(7),
+        season: Some(2),
+        date: Some("2026-10-13"),
+        copyright: Some("© 2026 Test Records"),
+        composer: Some("Compositor"),
+        subtitle: Some("Subtítulo"),
+        compilation: true,
+        title_sort: Some("Título, El"),
+        artist_sort: Some("Artista, El"),
+        album_sort: Some("Álbum, El"),
+        ..Default::default()
+    };
+
+    let mut tag = VorbisComments::new();
+    let report = apply_metadata_ogg(&mut tag, &options);
+
+    assert!(report.changed);
+    assert_eq!(tag.get("TITLE"), Some("Título"));
+    // Los múltiples artistas se unen con `"; "`.
+    assert_eq!(tag.get("ARTIST"), Some("Artista Uno; Artista Dos"));
+    assert_eq!(tag.get("ALBUM"), Some("Álbum"));
+    assert_eq!(tag.get("ALBUMARTIST"), Some("Artista del álbum"));
+    assert_eq!(tag.get("GENRE"), Some("Rock"));
+    assert_eq!(tag.get("TRACKNUMBER"), Some("7"));
+    assert_eq!(tag.get("DISCNUMBER"), Some("2"));
+    assert_eq!(tag.get("COMPOSER"), Some("Compositor"));
+    assert_eq!(tag.get("COPYRIGHT"), Some("© 2026 Test Records"));
+    assert_eq!(tag.get("SUBTITLE"), Some("Subtítulo"));
+    // La compilación se escribe con el valor `"1"`.
+    assert_eq!(tag.get("COMPILATION"), Some("1"));
+    assert_eq!(tag.get("TITLESORT"), Some("Título, El"));
+    assert_eq!(tag.get("ARTISTSORT"), Some("Artista, El"));
+    assert_eq!(tag.get("ALBUMSORT"), Some("Álbum, El"));
+    // `--year` y `--date` acaban en claves DISTINTAS, sin absorberse.
+    assert_eq!(tag.get("YEAR"), Some("2026"));
+    assert_eq!(tag.get("DATE"), Some("2026-10-13"));
+}
+
+#[test]
+fn test_ogg_ida_y_vuelta_conserva_claves_ajenas() {
+    let path = create_temp_file(
+        "ogg_custom_field",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+
+    // Escribir una clave ajena al mapeo sobre la copia del fixture.
+    let mut tag = read_vorbis_tag(&path).unwrap();
+    tag.insert("MY_CUSTOM_FIELD".to_string(), "valor propio".to_string());
+    write_vorbis_tag(&path, &tag).unwrap();
+
+    // Editar el título con el backend de alto nivel.
+    let options = OggEditOptions {
+        title: Some("Título editado"),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    // Releer y comprobar la preservación exacta.
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(tag.get("TITLE"), Some("Título editado"));
+    assert_eq!(
+        tag.get("MY_CUSTOM_FIELD"),
+        Some("valor propio"),
+        "una clave ajena al mapeo debe sobrevivir a `edit`"
+    );
+
+    // `encoder` conserva su valor Y su caja original en minúsculas (lo que
+    // justifica el tipo concreto `VorbisComments` frente al `Tag` genérico).
+    assert_eq!(tag.get("encoder"), Some("Lavc libvorbis"));
+    assert!(
+        tag.items()
+            .any(|(key, value)| key == "encoder" && value == "Lavc libvorbis"),
+        "la clave `encoder` debe conservar su caja original en minúsculas"
+    );
+
+    // El vendor sigue siendo `ffmpeg`.
+    assert_eq!(tag.vendor(), "ffmpeg");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_edit_ogg_sin_cambios_no_reescribe() {
+    let path = create_temp_file(
+        "ogg_noop",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+    let before = fs::read(&path).unwrap();
+
+    let report = edit_ogg(&path, &OggEditOptions::default()).unwrap();
+    assert!(!report.changed, "sin flags no debe haber ningún cambio");
+
+    // El archivo debe quedar byte a byte idéntico.
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "`edit` sin flags no debe reescribir el archivo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_ogg_omite_url_y_artista_original_con_aviso() {
+    let path = create_temp_file(
+        "ogg_omit",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+
+    // Claves presentes antes de editar, para exigir que no se añada ninguna.
+    let before_keys: HashSet<String> = read_vorbis_tag(&path)
+        .unwrap()
+        .items()
+        .map(|(key, _)| key.to_string())
+        .collect();
+
+    let options = OggEditOptions {
+        title: Some("Con URL"),
+        url: Some("https://ejemplo.test"),
+        original_artist: Some("Artista Original"),
+        ..Default::default()
+    };
+    let report = edit_ogg(&path, &options).unwrap();
+
+    // El título sí se escribe, así que hubo cambio.
+    assert!(report.changed, "el título indicado sí se escribe");
+    // Un aviso por cada campo omitido, del helper correspondiente.
+    assert_eq!(report.warnings.len(), 2, "un aviso por campo omitido");
+    assert!(
+        report
+            .warnings
+            .contains(&ogg_field_omitted_warning("--url")),
+        "debe avisar de la omisión de --url: {:?}",
+        report.warnings
+    );
+    assert!(
+        report
+            .warnings
+            .contains(&ogg_field_omitted_warning("--original-artist")),
+        "debe avisar de la omisión de --original-artist: {:?}",
+        report.warnings
+    );
+
+    // Ninguno de los dos campos tiene clave en el mapeo.
+    assert!(VorbisCommentMapping::for_key("WEBSITE").is_none());
+    assert!(VorbisCommentMapping::for_key("ORIGINALARTIST").is_none());
+
+    // Y el archivo no gana ninguna clave: solo `TITLE` además de las de antes.
+    let after_keys: HashSet<String> = read_vorbis_tag(&path)
+        .unwrap()
+        .items()
+        .map(|(key, _)| key.to_string())
+        .collect();
+    let mut expected = before_keys;
+    expected.insert("TITLE".to_string());
+    assert_eq!(
+        after_keys, expected,
+        "los campos omitidos no deben añadir ninguna clave al archivo"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_ogg_caratula_en_metadata_block_picture() {
+    for (extension, bytes, mime) in [
+        ("jpg", JPEG_BYTES, "image/jpeg"),
+        ("png", PNG_BYTES, "image/png"),
+    ] {
+        let path = create_temp_file(
+            &format!("ogg_cover_{extension}"),
+            "ogg",
+            &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+        );
+        let image = write_temp_image(&format!("ogg_cover_{extension}"), extension, bytes);
+
+        let options = OggEditOptions {
+            cover: Some(OggCover {
+                path: &image,
+                data: bytes,
+            }),
+            ..Default::default()
+        };
+        let report = edit_ogg(&path, &options).unwrap();
+        assert!(report.changed, "{extension} debe contar como cambio");
+
+        // La clave `METADATA_BLOCK_PICTURE` existe físicamente en el archivo
+        // (al releerla, `lofty` la interpreta como imagen, no como ítem).
+        assert!(
+            contains_bytes(&fs::read(&path).unwrap(), b"METADATA_BLOCK_PICTURE"),
+            "{extension}: debe existir la clave de carátula"
+        );
+
+        let tag = read_vorbis_tag(&path).unwrap();
+        assert_eq!(
+            tag.pictures().len(),
+            1,
+            "{extension}: debe haber una imagen"
+        );
+        let picture = &tag.pictures()[0].0;
+        assert_eq!(
+            picture.mime_type().map(|m| m.as_str()),
+            Some(mime),
+            "{extension}: el MIME debe derivarse de la extensión"
+        );
+        assert_eq!(
+            picture.pic_type(),
+            PictureType::CoverFront,
+            "{extension}: el tipo de carátula debe ser frontal"
+        );
+
+        cleanup_file(&path);
+        cleanup_file(&image);
+    }
+}
+
+#[test]
+fn test_ogg_caratula_webp_sin_degradar() {
+    let path = create_temp_file(
+        "ogg_cover_webp",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+    let image = write_temp_image("ogg_cover_webp", "webp", WEBP_BYTES);
+
+    let options = OggEditOptions {
+        cover: Some(OggCover {
+            path: &image,
+            data: WEBP_BYTES,
+        }),
+        ..Default::default()
+    };
+    let report = edit_ogg(&path, &options).unwrap();
+    assert!(report.changed, "la carátula WebP debe contar como cambio");
+    // A diferencia de MP4, en OGG NO hay degradación de WebP ni aviso.
+    assert!(
+        report.warnings.is_empty(),
+        "en OGG el WebP no se degrada y no debe emitir aviso: {:?}",
+        report.warnings
+    );
+
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(tag.pictures().len(), 1, "la carátula debe estar presente");
+    assert_eq!(
+        tag.pictures()[0].0.mime_type().map(|m| m.as_str()),
+        Some("image/webp"),
+        "el MIME debe ser el real de la extensión, sin degradar"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_ogg_caratula_de_imagen_corta_no_aborta() {
+    let path = create_temp_file(
+        "ogg_cover_short",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+    // 3 bytes: por debajo del umbral de 8 con el que `lofty` falla al inferir
+    // las dimensiones de la imagen.
+    let short: &[u8] = &[0xFF, 0xD8, 0xFF];
+    let image = write_temp_image("ogg_cover_short", "jpg", short);
+
+    let options = OggEditOptions {
+        cover: Some(OggCover {
+            path: &image,
+            data: short,
+        }),
+        ..Default::default()
+    };
+    let report = edit_ogg(&path, &options).expect("una imagen corta no debe abortar la edición");
+    assert!(report.changed);
+
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(
+        tag.pictures().len(),
+        1,
+        "la carátula corta debe quedar escrita"
+    );
+    assert_eq!(
+        tag.pictures()[0].0.mime_type().map(|m| m.as_str()),
+        Some("image/jpeg"),
+        "el MIME se deriva de la extensión aunque las dimensiones no se puedan inferir"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_ogg_letra_en_lyrics() {
+    let path = create_temp_file(
+        "ogg_lyrics",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+    let lyrics = "Primera línea\nSegunda línea\n\nCuarta con salto";
+
+    let options = OggEditOptions {
+        lyrics: Some(lyrics),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert_eq!(
+        tag.get("LYRICS"),
+        Some(lyrics),
+        "la letra debe conservarse entera, incluidos los saltos de línea"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_remove_tags_ogg_usa_los_alias_de_ingles_y_espanol() {
+    // `remove title` y `remove título` eliminan `TITLE`, cada uno por su alias.
+    for name in ["title", "título"] {
+        let mut tag = VorbisComments::new();
+        tag.insert("TITLE".to_string(), "T".to_string());
+        assert!(
+            remove_tags_ogg(&mut tag, &[name.to_string()]),
+            "{name} debe reconocerse como alias de título"
+        );
+        assert!(tag.get("TITLE").is_none(), "{name} debe eliminar TITLE");
+    }
+
+    // `remove track` elimina `TRACKNUMBER` **y** su total `TRACKTOTAL`: borrar
+    // el número de pista borra también el total para no dejar un total huérfano
+    // (lo exige el contrato de `track-numbering`). El total se inserta a mano
+    // porque su escritura por la vía de edición llega en el grupo 5 del change
+    // `ogg-support-and-track-totals`; aquí solo se comprueba el borrado.
+    let mut tag = VorbisComments::new();
+    tag.insert("TRACKNUMBER".to_string(), "7".to_string());
+    tag.insert("TRACKTOTAL".to_string(), "12".to_string());
+    assert!(remove_tags_ogg(&mut tag, &["track".to_string()]));
+    assert!(
+        tag.get("TRACKNUMBER").is_none(),
+        "`track` debe eliminar TRACKNUMBER"
+    );
+    assert!(
+        tag.get("TRACKTOTAL").is_none(),
+        "`track` debe eliminar también TRACKTOTAL: el total se va con su número"
+    );
+
+    // `remove season` (temporada) elimina `DISCNUMBER` **y** su total `DISCTOTAL`
+    // por la misma razón.
+    let mut tag = VorbisComments::new();
+    tag.insert("DISCNUMBER".to_string(), "2".to_string());
+    tag.insert("DISCTOTAL".to_string(), "3".to_string());
+    assert!(remove_tags_ogg(&mut tag, &["season".to_string()]));
+    assert!(
+        tag.get("DISCNUMBER").is_none(),
+        "`season` debe eliminar DISCNUMBER"
+    );
+    assert!(
+        tag.get("DISCTOTAL").is_none(),
+        "`season` debe eliminar también DISCTOTAL: el total se va con su número"
+    );
+
+    // `remove carátula` elimina la carátula escrita en `METADATA_BLOCK_PICTURE`.
+    let path = create_temp_file(
+        "ogg_remove_cover",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+    let image = write_temp_image("ogg_remove_cover", "jpg", JPEG_BYTES);
+    let options = OggEditOptions {
+        cover: Some(OggCover {
+            path: &image,
+            data: JPEG_BYTES,
+        }),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+    assert!(contains_bytes(
+        &fs::read(&path).unwrap(),
+        b"METADATA_BLOCK_PICTURE"
+    ));
+
+    let mut tag = read_vorbis_tag(&path).unwrap();
+    assert!(remove_tags_ogg(&mut tag, &["carátula".to_string()]));
+    write_vorbis_tag(&path, &tag).unwrap();
+
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), b"METADATA_BLOCK_PICTURE"),
+        "`carátula` debe eliminar la clave METADATA_BLOCK_PICTURE"
+    );
+    assert!(read_vorbis_tag(&path).unwrap().pictures().is_empty());
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+
+    // Un nombre desconocido no cambia nada y no cuenta como eliminación.
+    let mut tag = VorbisComments::new();
+    tag.insert("TITLE".to_string(), "T".to_string());
+    assert!(
+        !remove_tags_ogg(&mut tag, &["inventado".to_string()]),
+        "un nombre desconocido no debe reportar cambio"
+    );
+    assert_eq!(tag.get("TITLE"), Some("T"));
+}
+
+#[test]
+fn test_remove_all_ogg_vacia_el_comentario_y_preserva_vendor_y_audio() {
+    let path = create_temp_file(
+        "ogg_remove_all",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+    let image = write_temp_image("ogg_remove_all", "png", PNG_BYTES);
+
+    // Escribir campos de usuario y una carátula.
+    let options = OggEditOptions {
+        title: Some("T"),
+        artists: &["A".to_string()],
+        genre: Some("Rock"),
+        cover: Some(OggCover {
+            path: &image,
+            data: PNG_BYTES,
+        }),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    let duration_before = ogg_duration(&path);
+    assert_eq!(read_vorbis_tag(&path).unwrap().get("TITLE"), Some("T"));
+    assert_eq!(read_vorbis_tag(&path).unwrap().pictures().len(), 1);
+
+    let removed = remove_all_ogg(&path).unwrap();
+    assert!(removed, "había metadatos que eliminar");
+
+    // El comentario sigue existiendo (es obligatorio), pero sin claves de usuario.
+    let tag = read_vorbis_tag(&path).unwrap();
+    assert!(tag.get("TITLE").is_none(), "TITLE debe desaparecer");
+    assert!(tag.get("ARTIST").is_none(), "ARTIST debe desaparecer");
+    assert!(tag.get("GENRE").is_none(), "GENRE debe desaparecer");
+    assert!(tag.pictures().is_empty(), "no debe quedar ninguna carátula");
+    assert!(
+        !contains_bytes(&fs::read(&path).unwrap(), b"METADATA_BLOCK_PICTURE"),
+        "la clave de carátula debe desaparecer del archivo"
+    );
+
+    // El vendor se conserva.
+    assert_eq!(tag.vendor(), "ffmpeg", "el vendor debe conservarse");
+
+    // El archivo sigue siendo un Ogg Vorbis válido y el audio no cambia.
+    assert_eq!(detect_format(&path).unwrap(), AudioFormat::OggVorbis);
+    assert_eq!(
+        ogg_duration(&path),
+        duration_before,
+        "el audio debe quedar intacto: la duración no debe cambiar"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+#[test]
+fn test_display_tags_ogg_no_muestra_vendor_ni_encoder() {
+    // NOTA: `display_tags_ogg` escribe por stdout con `outln!`, que vuelca a la
+    // salida estándar del proceso y no es capturable con el harness de
+    // `cargo test` sin dependencias externas (los tests de `display_tags` y
+    // `display_tags_mp4` tampoco la capturan y solo comprueban que no haya
+    // pánico). Por eso aquí se verifica lo comprobable sin capturar stdout: que
+    // el tag con solo vendor+encoder no expone ninguna clave del mapeo (nada que
+    // mostrar al usuario) y que el tag con campos sí las expone.
+    let mut only_vendor_encoder = VorbisComments::new();
+    only_vendor_encoder.set_vendor("ffmpeg".to_string());
+    only_vendor_encoder.insert("encoder".to_string(), "Lavc libvorbis".to_string());
+    assert_eq!(only_vendor_encoder.vendor(), "ffmpeg");
+    assert_eq!(only_vendor_encoder.get("encoder"), Some("Lavc libvorbis"));
+    assert!(
+        VORBIS_COMMENT_MAP
+            .iter()
+            .all(|mapping| only_vendor_encoder.get(mapping.key).is_none()),
+        "un .ogg recién creado solo tiene vendor y encoder: ninguna clave del mapeo"
+    );
+    // No debe entrar en pánico (no hay nada que mostrar).
+    display_tags_ogg(&only_vendor_encoder);
+
+    let mut with_fields = VorbisComments::new();
+    with_fields.set_vendor("ffmpeg".to_string());
+    with_fields.insert("encoder".to_string(), "Lavc libvorbis".to_string());
+    with_fields.insert("TITLE".to_string(), "T".to_string());
+    with_fields.insert("ARTIST".to_string(), "A".to_string());
+    with_fields.insert("ALBUM".to_string(), "Alb".to_string());
+    // Los campos del mapeo sí están presentes y son los que `show` debe mostrar.
+    assert_eq!(with_fields.get("TITLE"), Some("T"));
+    assert_eq!(with_fields.get("ARTIST"), Some("A"));
+    assert_eq!(with_fields.get("ALBUM"), Some("Alb"));
+    display_tags_ogg(&with_fields);
+}
+
+/// Verifica la **serialización cruda** del comentario de Vorbis que escribe
+/// `edit_ogg`, sin pasar por `lofty` ni por [`read_vorbis_tag`].
+///
+/// El resto de tests del backend releen con `read_vorbis_tag`, que es el lector
+/// del propio CLI: si escritura y lectura compartieran un error de clave (por
+/// ejemplo `TIT2` en lugar de `TITLE`), esos tests seguirían en verde. Aquí el
+/// comentario se reparsea a mano sobre los bytes del fichero, de modo que la
+/// verificación es entre dos caminos distintos y no una tautología: cambiar una
+/// clave del mapeo rompe este test aunque la relectura del CLI no se enterase.
+///
+/// Formato **medido** (extracto real de `xxd` del fichero tras `edit_ogg`):
+///
+/// ```text
+/// 00000070  6e 63 6f 64 65 72 3d 4c 61 76 63 20 6c 69 62 76  ncoder=Lavc libv
+/// 00000080  6f 72 62 69 73 12 00 00 00 54 49 54 4c 45 3d 54  orbis....TITLE=T
+/// 00000090  69 74 75 6c 6f 20 43 72 75 64 6f 0f 00 00 00 41  itulo Crudo....A
+/// 000000a0  52 54 49 53 54 3d 55 6e 6f 3b 20 44 6f 73 11 00  RTIST=Uno; Dos..
+/// ```
+///
+/// Tras la cabecera `\x03vorbis` y el vendor, cada campo es una longitud
+/// little-endian de 4 bytes seguida del texto UTF-8 `CLAVE=valor`: el separador
+/// es un **`=`** literal (`0x3D`), **no** un byte nulo. Por eso los patrones de
+/// búsqueda en crudo son `b"TITLE=..."`, `b"ARTIST=..."`, etc., tal cual
+/// aparecen en el volcado (no hay nulo entre la clave y el valor).
+#[test]
+fn test_ogg_claves_serializadas_en_el_comentario_crudo() {
+    let path = create_temp_file(
+        "ogg_crudo",
+        "ogg",
+        &fs::read(fixture_ogg_path()).expect("No se pudo leer el fixture Ogg"),
+    );
+
+    let artists = vec!["Uno".to_string(), "Dos".to_string()];
+    let options = OggEditOptions {
+        title: Some("Titulo Crudo"),
+        artists: &artists,
+        album: Some("Album Crudo"),
+        track: Some(7),
+        compilation: true,
+        // Campos sin clave equivalente en Vorbis: se indican a propósito para
+        // comprobar que su omisión con aviso no inventa ninguna clave en crudo.
+        url: Some("https://ejemplo.test"),
+        original_artist: Some("Original"),
+        ..Default::default()
+    };
+    edit_ogg(&path, &options).unwrap();
+
+    // Lectura cruda: el fichero entero como bytes, sin `lofty` ni
+    // `read_vorbis_tag`.
+    let bytes = fs::read(&path).unwrap();
+
+    // Cada par se serializa como `CLAVE=valor` (con `=` literal, medido arriba).
+    assert!(
+        contains_bytes(&bytes, b"TITLE=Titulo Crudo"),
+        "el comentario crudo debe contener `TITLE=Titulo Crudo`"
+    );
+    // Los múltiples artistas van unidos con el separador `"; "` exacto.
+    assert!(
+        contains_bytes(&bytes, b"ARTIST=Uno; Dos"),
+        "el comentario crudo debe contener `ARTIST=Uno; Dos` (separador \"; \" exacto)"
+    );
+    assert!(
+        contains_bytes(&bytes, b"ALBUM=Album Crudo"),
+        "el comentario crudo debe contener `ALBUM=Album Crudo`"
+    );
+    assert!(
+        contains_bytes(&bytes, b"TRACKNUMBER=7"),
+        "el comentario crudo debe contener `TRACKNUMBER=7`"
+    );
+    // La compilación se serializa con el valor `"1"`.
+    assert!(
+        contains_bytes(&bytes, b"COMPILATION=1"),
+        "el comentario crudo debe contener `COMPILATION=1`"
+    );
+
+    // La clave `encoder` escrita por `ffmpeg` sigue en el fichero crudo y con su
+    // caja original en minúsculas: el tipo concreto `VorbisComments` no normaliza
+    // la caja de las claves que no gestiona. Si el backend hubiera escrito
+    // `ENCODER=...` o hubiera perdido la clave, esta comprobación fallaría.
+    assert!(
+        contains_bytes(&bytes, b"encoder=Lavc libvorbis"),
+        "el comentario crudo debe conservar `encoder=Lavc libvorbis` en minúsculas"
+    );
+
+    // Los campos omitidos con aviso NO deben dejar clave alguna: ni una
+    // inventada, ni una de reemplazo.
+    assert!(
+        !contains_bytes(&bytes, b"WEBSITE="),
+        "`--url` no debe escribir ninguna clave en el comentario crudo"
+    );
+    assert!(
+        !contains_bytes(&bytes, b"ORIGINALARTIST="),
+        "`--original-artist` no debe escribir ninguna clave en el comentario crudo"
+    );
+
+    cleanup_file(&path);
 }
