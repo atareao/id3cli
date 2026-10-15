@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`) y **OGG Vorbis** (comentarios Vorbis).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-271%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-273%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -753,11 +753,11 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **271 tests** (160 unitarios + 111 de integración):
+El proyecto tiene **cobertura completa** con **273 tests** (162 unitarios + 111 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (271)
-cargo test --lib        # Solo tests unitarios (160)
+cargo test              # Ejecutar todos los tests (273)
+cargo test --lib        # Solo tests unitarios (162)
 cargo test --test '*'   # Solo tests de integración (111)
 ```
 

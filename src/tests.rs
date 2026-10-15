@@ -3074,6 +3074,7 @@ fn build_mp4_without_trak() -> Vec<u8> {
     buf.extend(b"\x00\x01\x02\x03\x04\x05");
 
     buf
+}
 
 // --- FIN tests MP4 ---
 
