@@ -5035,3 +5035,77 @@ fn test_cli_remove_track_elimina_numero_y_total() {
     cleanup_file(&m4a_path);
     cleanup_file(&ogg_path);
 }
+
+// ---------------------------------------------------------------------------
+// La ayuda del CLI nombra los tres formatos (grupo 6, tarea 6.3)
+//
+// Fase RED del grupo 6 del cambio `ogg-support-and-track-totals`: hoy la ayuda
+// solo menciona MP3 y MP4, así que este test FALLA.
+// ---------------------------------------------------------------------------
+
+/// Texto combinado de stdout y stderr de una ejecución del CLI.
+fn salida_completa(output: &std::process::Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// Primera línea de `texto` que contiene `marca`.
+fn linea_de_flag<'a>(texto: &'a str, marca: &str) -> Option<&'a str> {
+    texto.lines().find(|linea| linea.contains(marca))
+}
+
+#[test]
+fn test_cli_help_nombra_los_tres_formatos() {
+    // (1) Los cuatro puntos de ayuda salen con código 0 y nombran MP3, MP4 y OGG.
+    let ayudas: [(&str, &[&str]); 4] = [
+        ("--help", &["--help"]),
+        ("show --help", &["show", "--help"]),
+        ("edit --help", &["edit", "--help"]),
+        ("remove --help", &["remove", "--help"]),
+    ];
+    for (etiqueta, args) in ayudas {
+        let output = run_cli(args);
+        assert!(
+            output.status.success(),
+            "`id3cli {etiqueta}` debe salir con código 0: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let texto = salida_completa(&output);
+        for formato in ["MP3", "MP4", "OGG"] {
+            assert!(
+                texto.contains(formato),
+                "la ayuda de `id3cli {etiqueta}` no nombra {formato}:\n{texto}"
+            );
+        }
+    }
+
+    // (2) `edit --help` documenta la forma con total en `--track` y `--season`:
+    //     la línea de cada flag contiene la grafía `N/TOTAL`.
+    let edit = salida_completa(&run_cli(&["edit", "--help"]));
+    let linea_track = linea_de_flag(&edit, "--track")
+        .unwrap_or_else(|| panic!("la ayuda de `edit` no documenta el flag `--track`:\n{edit}"));
+    assert!(
+        linea_track.contains("N/TOTAL"),
+        "la ayuda de `--track` debe documentar la forma con total (N/TOTAL): {linea_track}"
+    );
+    let linea_season = linea_de_flag(&edit, "--season")
+        .unwrap_or_else(|| panic!("la ayuda de `edit` no documenta el flag `--season`:\n{edit}"));
+    assert!(
+        linea_season.contains("N/TOTAL"),
+        "la ayuda de `--season` debe documentar la forma con total (N/TOTAL): {linea_season}"
+    );
+
+    // (3) `remove --help` conserva TODOS los nombres aceptados de
+    //     `id3cli::VALID_TAG_NAMES`, no solo una muestra.
+    let remove = salida_completa(&run_cli(&["remove", "--help"]));
+    for nombre in id3cli::VALID_TAG_NAMES.split(',').map(str::trim) {
+        assert!(
+            remove.contains(nombre),
+            "la ayuda de `remove` no lista el nombre de tag `{nombre}` de \
+             `id3cli::VALID_TAG_NAMES`:\n{remove}"
+        );
+    }
+}

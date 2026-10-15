@@ -4459,3 +4459,382 @@ fn test_mp3_remove_track_elimina_el_total() {
         "TPOS debe desaparecer por completo, sin total huérfano"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Coherencia entre la documentación y el código (grupo 6, tareas 6.2 y 6.3)
+//
+// Fase RED del grupo 6 del cambio `ogg-support-and-track-totals`: este test
+// convierte en contrato verificable lo que el README y `Cargo.toml` deben decir
+// una vez documentado el soporte de OGG y el total de pista y temporada. Hoy
+// FALLA porque la documentación todavía describe solo MP3 y MP4.
+// ---------------------------------------------------------------------------
+
+/// Nivel de un encabezado markdown (`##` → 2), o `None` si la línea no lo es.
+fn nivel_encabezado(linea: &str) -> Option<usize> {
+    let recortada = linea.trim_start();
+    if !recortada.starts_with('#') {
+        return None;
+    }
+    let nivel = recortada.chars().take_while(|&c| c == '#').count();
+    let resto = &recortada[nivel..];
+    if resto.is_empty() || resto.starts_with(' ') {
+        Some(nivel)
+    } else {
+        None
+    }
+}
+
+/// Cuerpo de la primera sección cuyo encabezado satisface `predicado`.
+///
+/// La sección va desde la línea siguiente al encabezado hasta el próximo
+/// encabezado de nivel **menor o igual** (o el final del documento), de modo
+/// que una subsección `###` queda dentro de su `##` padre y las secciones
+/// hermanas no se contaminan. `buscar` describe el encabezado esperado, para que
+/// el fallo explique el contrato incumplido en vez de dar un pánico opaco.
+fn seccion_markdown(
+    markdown: &str,
+    buscar: &str,
+    predicado: impl Fn(&str) -> bool,
+) -> Result<String, String> {
+    let lineas: Vec<&str> = markdown.lines().collect();
+
+    // Nivel de encabezado de cada línea, con `None` para lo que no lo es y para
+    // las líneas dentro de un bloque de código ```: el README tiene comentarios
+    // bash que empiezan por `#` (por ejemplo `# Eliminar todos los tags...`) y
+    // no deben confundirse con encabezados.
+    let mut niveles: Vec<Option<usize>> = Vec::with_capacity(lineas.len());
+    let mut en_fence = false;
+    for linea in &lineas {
+        let recortada = linea.trim_start();
+        if recortada.starts_with("```") {
+            en_fence = !en_fence;
+            niveles.push(None);
+            continue;
+        }
+        niveles.push(if en_fence {
+            None
+        } else {
+            nivel_encabezado(linea)
+        });
+    }
+
+    let (indice, nivel) = niveles
+        .iter()
+        .enumerate()
+        .find_map(|(i, n)| n.filter(|_| predicado(lineas[i])).map(|n| (i, n)))
+        .ok_or_else(|| format!("no hay ninguna sección con encabezado que {buscar}"))?;
+
+    let mut cuerpo = Vec::new();
+    for i in indice + 1..lineas.len() {
+        match niveles[i] {
+            Some(nivel_hijo) if nivel_hijo <= nivel => break,
+            _ => cuerpo.push(lineas[i]),
+        }
+    }
+    Ok(cuerpo.join("\n"))
+}
+
+/// Cuenta las líneas cuyo `trim()` es exactamente `#[test]`.
+///
+/// Se cuenta el **fichero fuente** en vez de escribir la cifra a mano: así el
+/// contrato de la documentación sigue vivo solo, sin que nadie tenga que
+/// actualizar un número cada vez que crece la suite de tests.
+fn contar_tests(fuente: &str) -> usize {
+    fuente
+        .lines()
+        .filter(|linea| linea.trim() == "#[test]")
+        .count()
+}
+
+/// ¿Aparece `palabra` como palabra completa en `linea` (sin distinguir caja)?
+fn linea_contiene_palabra(linea: &str, palabra: &str) -> bool {
+    linea
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|token| token.eq_ignore_ascii_case(palabra))
+}
+
+/// Índice de la primera aparición de `etiqueta` en `linea`, sin distinguir caja.
+fn posicion_ci(linea: &str, etiqueta: &str) -> Option<usize> {
+    let aguja = etiqueta.to_lowercase();
+    linea
+        .char_indices()
+        .find(|(i, _)| linea[*i..].to_lowercase().starts_with(&aguja))
+        .map(|(i, _)| i)
+}
+
+/// Último entero que aparece en `texto`, o `None` si no hay ninguno.
+fn ultimo_entero(texto: &str) -> Option<u64> {
+    let bytes = texto.as_bytes();
+    let mut i = texto.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i].is_ascii_digit() {
+            let fin = i + 1;
+            let mut inicio = i;
+            while inicio > 0 && bytes[inicio - 1].is_ascii_digit() {
+                inicio -= 1;
+            }
+            return texto[inicio..fin].parse().ok();
+        }
+    }
+    None
+}
+
+/// Último entero que aparece **antes** de la primera aparición de `etiqueta`.
+fn cifra_antes_de(linea: &str, etiqueta: &str) -> Option<u64> {
+    let pos = posicion_ci(linea, etiqueta)?;
+    ultimo_entero(&linea[..pos])
+}
+
+/// Cifra del escudo de tests (`tests-<N>%20passing`) del README.
+fn cifra_de_escudo(markdown: &str) -> Option<u64> {
+    let marca = "tests-";
+    let pos = markdown.find(marca)?;
+    let digitos: String = markdown[pos + marca.len()..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if digitos.is_empty() {
+        None
+    } else {
+        digitos.parse().ok()
+    }
+}
+
+#[test]
+fn test_documentacion_describe_los_tres_formatos() {
+    let readme = include_str!("../README.md");
+    let manifiesto = include_str!("../Cargo.toml");
+
+    // El recuento se MIDE del código fuente (ver `contar_tests`) en vez de
+    // copiarse a mano; incluye el propio test que está corriendo.
+    let tests_unitarios = contar_tests(include_str!("tests.rs"));
+    let tests_integracion = contar_tests(include_str!("../tests/integration_test.rs"));
+    let total_tests = tests_unitarios + tests_integracion;
+
+    let mut fallos: Vec<String> = Vec::new();
+
+    // (1) Los tres formatos soportados en `## Formatos admitidos`: la sección
+    //     nombra MP3, MP4 y OGG; ninguna línea de «No soportado» menciona OGG; y
+    //     esas líneas siguen listando Opus, Speex, FLAC, WAV, AIFF y APE.
+    match seccion_markdown(readme, "contenga «Formatos admitidos»", |h| {
+        h.contains("Formatos admitidos")
+    }) {
+        Err(error) => fallos.push(format!("[1] {error}")),
+        Ok(seccion) => {
+            for formato in ["MP3", "MP4", "OGG"] {
+                if !seccion.contains(formato) {
+                    fallos.push(format!(
+                        "[1] la sección «Formatos admitidos» no nombra {formato}"
+                    ));
+                }
+            }
+            let no_soportados: Vec<&str> = seccion
+                .lines()
+                .filter(|linea| linea.contains("No soportado"))
+                .collect();
+            if no_soportados.is_empty() {
+                fallos.push(
+                    "[1] la sección «Formatos admitidos» no tiene ninguna línea de «No soportado»"
+                        .to_string(),
+                );
+            }
+            for linea in &no_soportados {
+                if linea.contains("OGG") {
+                    fallos.push(format!(
+                        "[1] una línea de «No soportado» sigue tratando OGG como no soportado: {linea}"
+                    ));
+                }
+            }
+            let texto_no_soportados = no_soportados.join("\n");
+            for pendiente in ["Opus", "Speex", "FLAC", "WAV", "AIFF", "APE"] {
+                if !texto_no_soportados.contains(pendiente) {
+                    fallos.push(format!(
+                        "[1] las líneas de «No soportado» ya no mencionan {pendiente}"
+                    ));
+                }
+            }
+        }
+    }
+
+    // (2) Tres secciones de mapeo, una por formato, cada una con al menos una
+    //     fila de tabla que nombra un flag del CLI.
+    let secciones_mapeo = [
+        (
+            "MP3 (encabezado con `ID3v2`)",
+            seccion_markdown(readme, "contenga «ID3v2»", |h| h.contains("ID3v2")),
+        ),
+        (
+            "MP4 (encabezado con `Mapeo` y `MP4`)",
+            seccion_markdown(readme, "contenga «Mapeo» y «MP4»", |h| {
+                h.contains("Mapeo") && h.contains("MP4")
+            }),
+        ),
+        (
+            "OGG (encabezado con `Mapeo` y `OGG`)",
+            seccion_markdown(readme, "contenga «Mapeo» y «OGG»", |h| {
+                h.contains("Mapeo") && h.contains("OGG")
+            }),
+        ),
+    ];
+    for (etiqueta, resultado) in secciones_mapeo {
+        match resultado {
+            Err(error) => fallos.push(format!("[2] mapeo {etiqueta}: {error}")),
+            Ok(seccion) => {
+                let tiene_flag = seccion
+                    .lines()
+                    .any(|linea| linea.contains("--title") || linea.contains("--artist"));
+                if !tiene_flag {
+                    fallos.push(format!(
+                        "[2] el mapeo {etiqueta} no tiene ninguna fila de tabla con `--title` o `--artist`"
+                    ));
+                }
+            }
+        }
+    }
+
+    // (3) Degradaciones por formato.
+    match seccion_markdown(readme, "sea la sección de degradaciones de MP4", |h| {
+        h.contains("MP4") && (h.contains("Limitacion") || h.contains("Degradac"))
+    }) {
+        Err(error) => fallos.push(format!("[3] {error}")),
+        Ok(seccion) => {
+            let minusculas = seccion.to_lowercase();
+            if !minusculas.contains("webp") {
+                fallos
+                    .push("[3] la sección de degradaciones de MP4 no menciona `webp`".to_string());
+            }
+            if !(seccion.contains("©lyr") || minusculas.contains("letra")) {
+                fallos.push(
+                    "[3] la sección de degradaciones de MP4 no menciona `©lyr` ni `letra`"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    // Criterio mínimo para OGG: alguna línea dice que en OGG el WebP NO se
+    // degrada, es decir menciona `webp`, `OGG` y la palabra `no` a la vez. El
+    // texto exacto es libre; si la redacción final lo repartiera en varias
+    // líneas, se ajusta este criterio junto con el README (queda escrito aquí
+    // a propósito).
+    let ogg_no_degrada = readme.lines().any(|linea| {
+        linea_contiene_palabra(linea, "webp")
+            && linea_contiene_palabra(linea, "OGG")
+            && linea_contiene_palabra(linea, "no")
+    });
+    if !ogg_no_degrada {
+        fallos.push(
+            "[3] el README no dice en ninguna línea que en OGG el WebP no se degrada \
+             (`webp` + `OGG` + `no` en la misma línea)"
+                .to_string(),
+        );
+    }
+
+    // (4) Hoja de ruta: OGG como soportado y Opus, Speex y FLAC como pendientes.
+    match seccion_markdown(readme, "contenga «Roadmap»", |h| h.contains("Roadmap")) {
+        Err(error) => fallos.push(format!("[4] {error}")),
+        Ok(seccion) => {
+            let ogg_hecho = seccion.lines().any(|linea| {
+                let recortada = linea.trim_start();
+                recortada.starts_with("- [x]") && linea_contiene_palabra(recortada, "OGG")
+            });
+            if !ogg_hecho {
+                fallos.push(
+                    "[4] la hoja de ruta no marca OGG como soportado (falta una línea `- [x]` que lo mencione)"
+                        .to_string(),
+                );
+            }
+            for pendiente in ["Opus", "Speex", "FLAC"] {
+                let sigue_pendiente = seccion.lines().any(|linea| {
+                    let recortada = linea.trim_start();
+                    recortada.starts_with("- [ ]") && linea_contiene_palabra(recortada, pendiente)
+                });
+                if !sigue_pendiente {
+                    fallos.push(format!(
+                        "[4] la hoja de ruta no mantiene {pendiente} como pendiente (falta una línea `- [ ]` que lo mencione)"
+                    ));
+                }
+            }
+        }
+    }
+
+    // (5) El recuento declarado coincide con el medido del código fuente.
+    match cifra_de_escudo(readme) {
+        Some(declarado) if declarado == total_tests as u64 => {}
+        Some(declarado) => fallos.push(format!(
+            "[5] el escudo del README declara {declarado} tests, pero la suite medida tiene \
+             {total_tests} ({tests_unitarios} unitarios + {tests_integracion} de integración)"
+        )),
+        None => fallos.push("[5] el README no tiene un escudo `tests-<N>%20passing`".to_string()),
+    }
+    // La línea del desglose es la que nombra «unitario(s)» y «integración»; el
+    // árbol de directorios del README también menciona «unitarios», pero sin
+    // «integración», así que no se confunde con esta.
+    let linea_desglose = readme.lines().find(|linea| {
+        posicion_ci(linea, "unitario").is_some() && posicion_ci(linea, "integración").is_some()
+    });
+    match linea_desglose {
+        None => fallos.push(
+            "[5] el README no declara el desglose de tests (una línea con «unitario(s)» y «integración»)"
+                .to_string(),
+        ),
+        Some(linea) => {
+            let total_declarado = cifra_antes_de(linea, "tests");
+            let unit_declarado = cifra_antes_de(linea, "unitario");
+            let integ_declarado = cifra_antes_de(linea, "integración");
+            if unit_declarado != Some(tests_unitarios as u64) {
+                fallos.push(format!(
+                    "[5] el README declara {unit_declarado:?} tests unitarios, pero la suite medida tiene {tests_unitarios}"
+                ));
+            }
+            if integ_declarado != Some(tests_integracion as u64) {
+                fallos.push(format!(
+                    "[5] el README declara {integ_declarado:?} tests de integración, pero la suite medida tiene {tests_integracion}"
+                ));
+            }
+            if total_declarado != Some(total_tests as u64) {
+                fallos.push(format!(
+                    "[5] el README declara {total_declarado:?} tests en total, pero la suite medida tiene {total_tests}"
+                ));
+            }
+        }
+    }
+
+    // (6) Manifiesto: la `description` nombra los tres formatos y las `keywords`
+    //     siguen siendo exactamente las cinco de hoy, en el mismo orden.
+    match manifiesto
+        .lines()
+        .find(|linea| linea.trim_start().starts_with("description"))
+    {
+        None => fallos.push("[6] `Cargo.toml` no declara `description`".to_string()),
+        Some(linea) => {
+            for formato in ["MP3", "MP4", "OGG"] {
+                if !linea.contains(formato) {
+                    fallos.push(format!(
+                        "[6] la `description` de `Cargo.toml` no menciona {formato}: {linea}"
+                    ));
+                }
+            }
+        }
+    }
+    match lista_manifiesto(manifiesto, "keywords") {
+        Err(error) => fallos.push(format!("[6] {error}")),
+        Ok(keywords) => {
+            const ESPERADAS: [&str; 5] = ["id3", "mp3", "mp4", "metadata", "cli"];
+            let declaradas: Vec<&str> = keywords.iter().map(String::as_str).collect();
+            if declaradas != ESPERADAS {
+                fallos.push(format!(
+                    "[6] las `keywords` de `Cargo.toml` deben ser exactamente {ESPERADAS:?} en ese orden, pero declara {declaradas:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        fallos.is_empty(),
+        "La documentación no cumple el contrato de los tres formatos (OGG) y el total de \
+         pista/temporada. {} comprobación(es) fallida(s):\n- {}",
+        fallos.len(),
+        fallos.join("\n- ")
+    );
+}

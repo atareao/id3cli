@@ -1,16 +1,16 @@
 # id3cli
 
-CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4) y **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`).
+CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`) y **OGG Vorbis** (comentarios Vorbis).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-271%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
 
 ✨ **Completo y fácil de usar**
 
-- 🎧 **MP3 y MP4:** escribe tags ID3v2.4 en MP3 y átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`)
+- 🎧 **MP3, MP4 y OGG:** escribe tags ID3v2.4 en MP3, átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`) y comentarios Vorbis en OGG Vorbis
 - 🔍 **Detección de formato por contenido:** el formato se decide por los *magic bytes* del archivo, nunca por su extensión; los formatos que no soporta se rechazan con un mensaje claro y sin tocar el archivo
 - 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, temporada, fecha, copyright
 - 🎙️ **Soporte completo para podcasts:** compositor, subtítulo, artista original, artista del álbum, temporada (TPOS)
@@ -31,15 +31,18 @@ El formato del archivo se determina **por su contenido** (sus *magic bytes* inic
 | --- | --- | --- |
 | **Soportado** | MP3 (con o sin cabecera `ID3`) | `show`, `edit` y `remove` operan sobre él; los tags se escriben como ID3v2.4 |
 | **Soportado** | MP4 / M4A (`.m4a`, `.mp4`, `.m4b`): átomo `ftyp` en el offset 4, con cualquier brand | `show`, `edit` y `remove` operan sobre él; los metadatos se **leen y escriben** como átomos `ilst` estilo iTunes |
-| **No soportado** | FLAC (`fLaC`), OGG/Opus (`OggS`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+| **Soportado** | OGG Vorbis (`OggS`, versión `0`, primer paquete `\x01vorbis`) | `show`, `edit` y `remove` operan sobre él; los metadatos se escriben como comentarios Vorbis (`CLAVE=valor`) |
+| **No soportado** | Opus (`OpusHead`) y Speex, en contenedor Ogg; FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 | **Indeterminado** | Contenido no reconocible o archivo demasiado corto | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+
+Un contenedor **Ogg** es solo un sobre, así que el formato se decide por el **códec de su primer paquete**, no por la cabecera de página. Solo se acepta si ese primer paquete empieza por `\x01vorbis`; si empieza por `OpusHead` (Opus), por `Speex` o por `\x7fFLAC` (FLAC dentro de un Ogg), o si es el de Theora, el archivo se rechaza como formato fuera de alcance. Una página Ogg **truncada**, **sin primer paquete** o con un paquete **vacío** queda como *formato sin determinar*, y en ese caso tampoco se toca el archivo.
 
 En todos los casos de error el archivo queda **intacto**: la detección ocurre antes de abrir el archivo para escritura, de modo que un formato no soportado nunca se toca.
 
 **En resumen:**
 
-- **Soportados:** MP3 (ID3v2.4) y MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes). Ambos admiten `show`, `edit` y `remove` completos.
-- **No soportados:** FLAC (`fLaC`), OGG/Opus (`OggS`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
+- **Soportados:** MP3 (ID3v2.4), MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes) y OGG Vorbis (comentarios Vorbis). Los tres admiten `show`, `edit` y `remove` completos.
+- **No soportados:** Opus y Speex (contenedores Ogg cuyo primer paquete no es Vorbis), FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
 
 ## Instalación
 
@@ -81,7 +84,7 @@ id3cli show <FILE>
 # Editar tags del archivo
 id3cli edit <FILE> [OPTIONS]
 
-# Eliminar todos los tags del archivo (ID3v1 e ID3v2 en MP3, átomos ilst en MP4)
+# Eliminar todos los tags del archivo (ID3v1 e ID3v2 en MP3, átomos ilst en MP4 y campos de usuario en OGG: el comentario de Vorbis se vacía pero no se elimina)
 id3cli remove <FILE> --all
 
 # Eliminar tags específicos del archivo
@@ -92,8 +95,8 @@ id3cli remove <FILE> [TAGS...]
 
 | Argumento    | Descripción                                         |
 | ------------ | --------------------------------------------------- |
-| `<FILE>`     | Ruta del archivo de audio MP3 o MP4 (requerido)      |
-| `-a, --all`  | Eliminar **físicamente** todos los metadatos del archivo: en MP3 el bloque ID3 (ID3v1 e ID3v2) y en MP4 el árbol de átomos `ilst`. Si el archivo no tenía tags, muestra un aviso |
+| `<FILE>`     | Ruta del archivo de audio MP3, MP4 u OGG (requerido) |
+| `-a, --all`  | Eliminar todos los metadatos del archivo: en MP3 desaparece el bloque ID3 (ID3v1 e ID3v2) y en MP4 el árbol de átomos `ilst`. En OGG el comentario de Vorbis es obligatorio en el contenedor, así que **no se elimina**: se **vacían** todos sus campos de usuario preservando el *vendor* (ni el *vendor* ni `ENCODER` figuran como metadatos). Si el archivo no tenía tags, muestra un aviso |
 | `[TAGS...]`  | Tags a eliminar (uno o más argumentos posicionales) |
 
 **Tags disponibles:** `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
@@ -104,14 +107,14 @@ También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`,
 
 | Opción                                | Descripción                                                  |
 | ------------------------------------- | ------------------------------------------------------------ |
-| `<FILE>`                              | Ruta del archivo de audio MP3 o MP4 (argumento posicional, requerido) |
+| `<FILE>`                              | Ruta del archivo de audio MP3, MP4 u OGG (argumento posicional, requerido) |
 | `-t, --title <TITLE>`                 | Título de la canción                                         |
 | `-a, --artist <ARTIST>`               | Artista (se puede repetir para múltiples artistas)           |
 | `-A, --album <ALBUM>`                 | Álbum                                                        |
 | `-y, --year <YEAR>`                   | Año                                                          |
 | `-g, --genre <GENRE>`                 | Género                                                       |
-| `-T, --track <TRACK>`                 | Número de pista                                              |
-| `-S, --season <SEASON>`               | Temporada (TPOS - útil para podcasts)                        |
+| `-T, --track <TRACK>`                 | Número de pista, en forma `N` o `N/T` (número y total)       |
+| `-S, --season <SEASON>`               | Temporada, en forma `N` o `N/T` (TPOS - útil para podcasts)  |
 | `-d, --date <DATE>`                   | Fecha de grabación (YYYY-MM-DD o YYYY)                       |
 | `-C, --copyright <COPYRIGHT>`         | Copyright                                                    |
 | `--composer <COMPOSER>`               | Compositor (TCOM)                                            |
@@ -129,7 +132,7 @@ También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`,
 
 ### 🖥️ Salida estándar, avisos y errores
 
-La salida normal del CLI se escribe por **stdout** y los avisos y los errores por **stderr**, y esto es idéntico en MP3 y en MP4. El tratamiento del pipe cerrado también lo es:
+La salida normal del CLI se escribe por **stdout** y los avisos y los errores por **stderr**, y esto es idéntico en MP3, MP4 y OGG. El tratamiento del pipe cerrado también lo es:
 
 - **Pipe cerrado = final normal.** Si el consumidor cierra la salida antes de que el CLI termine de escribir (por ejemplo `id3cli show cancion.m4a | head -1`), el proceso termina **en silencio y con código de salida 0**: cerrar el pipe no es un error y no se imprime ningún pánico ni ningún mensaje.
 - **Fallo real de escritura = error.** Si la escritura falla por otra causa (por ejemplo un destino sin espacio), el CLI avisa **en español por stderr** y termina con un código de salida **distinto de cero**.
@@ -198,9 +201,9 @@ id3cli edit cancion.mp3 \
   --track 11
 ```
 
-### 🎧 Editar un archivo MP4 (`.m4a`)
+### 🎧 Editar un archivo MP4 (`.m4a`) u OGG Vorbis (`.ogg`)
 
-Los archivos `.m4a` (y en general `.mp4` / `.m4b`) se editan con **exactamente los mismos comandos y flags**; lo único que cambia es que los metadatos se escriben como átomos `ilst` en lugar de frames ID3:
+Los archivos `.m4a` (y en general `.mp4` / `.m4b`) y los OGG Vorbis (`.ogg`) se editan con **exactamente los mismos comandos y flags** que un MP3; lo único que cambia es dónde se guardan los metadatos: átomos `ilst` en MP4 y comentarios Vorbis en OGG, en lugar de frames ID3:
 
 ```bash
 id3cli edit cancion.m4a \
@@ -234,6 +237,55 @@ id3cli show cancion.m4a
 ```
 
 > [!tip] El formato se detecta por el **contenido** del archivo, no por su extensión: un MP3 renombrado a `.m4a` se sigue editando como MP3 y viceversa.
+
+### 🎼 Editar un archivo OGG Vorbis (`.ogg`)
+
+En un `.ogg` la edición es igual de directa: los metadatos van a **comentarios Vorbis** (pares `CLAVE=valor`) en lugar de frames ID3 o átomos `ilst`.
+
+```bash
+id3cli edit cancion.ogg \
+  --title "Bohemian Rhapsody" \
+  --artist "Queen" \
+  --album "A Night at the Opera" \
+  --year 1975 \
+  --genre "Rock" \
+  --track 11
+```
+
+Y se consulta igual con `show`:
+
+```bash
+id3cli show cancion.ogg
+```
+
+**Salida:**
+
+```text
+📋 Tags encontrados:
+
+═══════════════════════════════════════
+🎵 Título:    Bohemian Rhapsody
+🎤 Artista:   Queen
+💿 Álbum:     A Night at the Opera
+📅 Año:       1975
+🎸 Género:    Rock
+#️⃣  Pista:     11
+═══════════════════════════════════════
+```
+
+### 📊 Indicar el total de pista y de temporada
+
+`--track` y `--season` admiten tanto un número suelto (`N`) como el par número/total (`N/T`), en los tres formatos:
+
+```bash
+# Pista 7 de 12, temporada 1 de 2
+id3cli edit disco.mp3 --track 7/12 --season 1/2
+
+# Lo mismo en un OGG: el total va a `TRACKTOTAL` y `DISCTOTAL`
+id3cli edit disco.ogg --track 7/12 --season 1/2
+```
+
+> [!warning] El cero en el total se comporta distinto según el contenedor. MP3 y OGG guardan el par como **texto**, así que `--track 7/0` se escribe y se muestra tal cual. En MP4 el átomo `trkn`/`disk` guarda el par en **16 bits**: el CLI avisa por stderr cuando el número o el total no son representables y, para no dejar un total huérfano, omite el par completo si no cabe el número (ver [Limitaciones conocidas en MP4](#limitaciones-conocidas-en-mp4)).
 
 ### 👥 Múltiples artistas (colaboraciones)
 
@@ -534,11 +586,49 @@ En un `.m4a` (y en general en un contenedor MP4 con `ilst`) los metadatos no son
 
 ### Limitaciones conocidas en MP4
 
-Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan documentados aquí de forma explícita:
+Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan documentados aquí de forma explícita, junto con una limitación del átomo numérico:
 
 - **La carátula WebP no se muestra.** El átomo `covr` solo admite los tipos *well-known* JPEG (13), PNG (14), GIF (12) y BMP (27). Ante un `.webp` el CLI **no falla**: escribe la carátula dejando el tipo de dato **reservado (0)** y avisa por stderr de que esa carátula **no será visible en iTunes ni en macOS**. En MP3 el `.webp` sigue funcionando con normalidad vía `APIC`.
 - **La letra pierde el código de idioma.** El átomo `©lyr` no tiene campo de idioma, así que la letra de un MP4 se guarda sin el `spa` que sí lleva el frame `USLT` de MP3. El texto se conserva **íntegro**; lo único que se pierde es la marca de idioma.
 - **`--url` y `--original-artist` se omiten con aviso.** Ninguno de los dos tiene átomo equivalente en `ilst`. Sobre un MP4 el CLI **no falla ni inventa** un átomo *freeform* de reemplazo: avisa por stderr, omite ese campo, escribe el resto con normalidad y termina con código de salida cero. Si son los únicos flags indicados, no hay cambio real que escribir y el archivo **no se reescribe**. En MP3 se comportan con normalidad (`--url` → `WOAR`, `--original-artist` → `TOPE`, sin aviso).
+- **El total de pista y de temporada se limita a 16 bits.** Los átomos `trkn` y `disk` guardan el par número/total en **16 bits**, así que solo admiten valores `1..=65535` y el `0` no es representable. Cuando el **número** de `--track` / `--season` no cabe, el CLI avisa por stderr y **omite el par completo** (número y total) para no dejar un total huérfano; cuando solo es el **total** el que no cabe, escribe el número y omite el total. En MP3 (`TRCK`/`TPOS`) y en OGG (`TRACKNUMBER`/`DISCNUMBER` con `TRACKTOTAL`/`DISCTOTAL`) el par se guarda como **texto**, de modo que allí no existe ese límite y un total `0` se escribe y se muestra tal cual (`7/0`).
+
+---
+
+## Mapeo de tags en OGG Vorbis
+
+En un `.ogg` los metadatos son **comentarios Vorbis** (`VORBIS_COMMENT`): pares `CLAVE=valor` en texto plano dentro del contenedor Ogg, no frames ID3 ni átomos `ilst`. La siguiente tabla recoge el mapeo entre cada flag del CLI y la clave del comentario que se escribe:
+
+| Flag CLI | Clave de comentario Vorbis |
+| --- | --- |
+| `--title` | `TITLE` |
+| `--artist` | `ARTIST` |
+| `--album` | `ALBUM` |
+| `--album-artist` | `ALBUMARTIST` |
+| `--year` | `YEAR` |
+| `--date` | `DATE` |
+| `--genre` | `GENRE` |
+| `--track` | `TRACKNUMBER` |
+| `--season` | `DISCNUMBER` |
+| `--composer` | `COMPOSER` |
+| `--copyright` | `COPYRIGHT` |
+| `--lyrics` | `LYRICS` |
+| `--cover` | `METADATA_BLOCK_PICTURE` |
+| `--compilation` | `COMPILATION` |
+| `--title-sort` | `TITLESORT` |
+| `--artist-sort` | `ARTISTSORT` |
+| `--album-sort` | `ALBUMSORT` |
+| `--subtitle` | `SUBTITLE` |
+
+- **El total de pista y de temporada van en claves propias.** Como `TRACKNUMBER` y `DISCNUMBER` guardan solo el número, el total de la forma `N/T` se escribe aparte, en `TRACKTOTAL` y `DISCTOTAL`. Si se borra el número, el CLI elimina también su total para no dejar una clave huérfana.
+- **`--year` y `--date` conviven.** Son claves distintas (`YEAR` y `DATE`), así que a diferencia del átomo `©day` de MP4 no se pisan: un mismo archivo puede llevar las dos.
+
+### Limitaciones conocidas en OGG
+
+- **La carátula WebP no se degrada en OGG.** El bloque `METADATA_BLOCK_PICTURE` admite el tipo MIME tal cual se declara, así que un `.webp` se guarda con su tipo real y se muestra con normalidad: a diferencia del átomo `covr` de MP4, **no** queda con el tipo reservado (0) ni pierde visibilidad. En MP3 también funciona vía `APIC`.
+- **La letra pierde el código de idioma.** `LYRICS` es un comentario de texto sin campo de idioma, así que la letra de un OGG se guarda sin el `spa` que sí lleva el frame `USLT` de MP3 (igual que ocurre con `©lyr` en MP4). El texto se conserva **íntegro**; lo único que se pierde es la marca de idioma.
+- **`--url` y `--original-artist` se omiten con aviso.** Ninguno de los dos tiene clave equivalente en los comentarios Vorbis. Sobre un OGG el CLI **no falla ni inventa** una clave de reemplazo: avisa por stderr, omite ese campo, escribe el resto con normalidad y termina con código de salida cero. Si son los únicos flags indicados, no hay cambio real que escribir y el archivo **no se reescribe**. En MP3 se comportan con normalidad (`--url` → `WOAR`, `--original-artist` → `TOPE`, sin aviso).
+- **El total de pista y temporada no tiene límite de tamaño.** `TRACKNUMBER`/`DISCNUMBER` con `TRACKTOTAL`/`DISCTOTAL` guardan el par como **texto**, así que admiten cualquier valor, incluido un total `0`, que se escribe y se muestra tal cual (`7/0`). Solo el átomo numérico de MP4 lo restringe a 16 bits (ver [Limitaciones conocidas en MP4](#limitaciones-conocidas-en-mp4)).
 
 ---
 
@@ -584,13 +674,13 @@ cargo clippy -- -D warnings
 ```tree
 id3cli/
 ├── src/
-│   ├── lib.rs                     # Librería (1610 líneas) - lógica de negocio
-│   ├── main.rs                    # CLI (664 líneas) - interfaz de comandos show/edit/remove
+│   ├── lib.rs                     # Librería (2664 líneas) - lógica de negocio
+│   ├── main.rs                    # CLI (870 líneas) - interfaz de comandos show/edit/remove
 │   ├── output.rs                  # Salida estándar (49 líneas) - macro outln! y cierre del pipe
-│   └── tests.rs                   # Tests unitarios (2663 líneas)
+│   └── tests.rs                   # Tests unitarios (4706 líneas)
 ├── tests/
-│   ├── integration_test.rs        # Tests de integración (4143 líneas)
-│   └── fixtures/                  # Muestras reales de MP3 y MP4 para los tests
+│   ├── integration_test.rs        # Tests de integración (5111 líneas)
+│   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a y sample.ogg) y sus scripts de regeneración, incluido generate_sample_ogg.sh
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
@@ -638,7 +728,17 @@ id3cli/
 - `display_tags_mp4()` - Muestra los átomos de un MP4
 - `MP4_ATOM_MAP` - Tabla de mapeo entre cada flag y su átomo
 
-**Comunes a ambos formatos:**
+**Funciones principales (OGG Vorbis):**
+
+- `edit_ogg()` - Orquesta la edición de un archivo OGG Vorbis
+- `apply_metadata_ogg()` - Escribe los comentarios Vorbis a partir de los flags del CLI
+- `read_vorbis_tag()` / `write_vorbis_tag()` - Lectura y escritura del comentario Vorbis
+- `remove_tags_ogg()` - Elimina claves concretas del comentario
+- `remove_all_ogg()` - Vacía el comentario preservando el vendor y el audio
+- `display_tags_ogg()` - Muestra los comentarios de un OGG
+- `VORBIS_COMMENT_MAP` - Tabla de mapeo entre cada flag y su clave de comentario
+
+**Comunes a los tres formatos:**
 
 - `detect_format()` / `detect_format_from_bytes()` - Detecta el formato de audio por el contenido (magic bytes), no por la extensión
 - `detect_mime_type()` / `detect_cover_mime_type()` - Detecta el formato de la imagen de carátula
@@ -653,12 +753,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **221 tests** (126 unitarios + 95 de integración):
+El proyecto tiene **cobertura completa** con **271 tests** (160 unitarios + 111 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (221)
-cargo test --lib        # Solo tests unitarios (126)
-cargo test --test '*'   # Solo tests de integración (95)
+cargo test              # Ejecutar todos los tests (271)
+cargo test --lib        # Solo tests unitarios (160)
+cargo test --test '*'   # Solo tests de integración (111)
 ```
 
 **Ejemplos de tests:**
@@ -676,6 +776,9 @@ cargo test --test '*'   # Solo tests de integración (95)
 - Cierre del pipe como final normal de la salida (código 0 y sin mensajes) y fallo real de escritura como error
 - Validación de los metadatos del paquete (`keywords` y `categories`)
 - Tests end-to-end del CLI completo con podcasts
+- OGG Vorbis: fixture real versionado (`sample.ogg`) y detección del contenedor por el códec de su primer paquete (Vorbis), no por la cabecera `OggS`
+- Total de pista y temporada (`N/T`) en los tres formatos, incluida la conservación del total preexistente y el borrado del par número/total como una unidad
+- Coherencia documental: el recuento real de tests y los tres formatos figuran igual en `README.md` y `Cargo.toml`
 
 ---
 
@@ -708,6 +811,10 @@ Desarrollado con 🦀 Rust
 - [ ] Modo batch para procesar múltiples archivos
 - [ ] Binarios para Windows y macOS
 - [x] Soporte para MP4 / M4A (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`)
-- [ ] Soporte para otros formatos de audio (FLAC, OGG, Opus, WAV, AIFF, APE)
+- [x] Soporte para OGG Vorbis (comentarios de Vorbis: `TITLE`, `ARTIST`, `TRACKNUMBER`…)
+- [ ] Soporte para Opus (contenedor Ogg con el códec Opus)
+- [ ] Soporte para Speex (contenedor Ogg con el códec Speex)
+- [ ] Soporte para FLAC (nativo y dentro del contenedor Ogg)
+- [ ] Soporte para otros formatos de audio (WAV, AIFF, APE)
 - [ ] Leer lyrics desde archivo externo (.lrc, .txt)
 - [ ] GUI opcional con egui o similar

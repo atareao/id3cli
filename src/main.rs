@@ -36,11 +36,11 @@ fn report_error(error: Box<dyn Error>) -> ! {
     std::process::exit(1);
 }
 
-/// CLI para añadir metadatos y carátulas a archivos MP3 y MP4
+/// CLI para añadir metadatos y carátulas a archivos MP3, MP4 y OGG
 #[derive(Parser, Debug)]
 #[command(name = "id3cli")]
 #[command(
-    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4) y MP4 (átomos iTunes)",
+    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4), MP4 (átomos iTunes) y OGG Vorbis (comentarios Vorbis)",
     long_about = None
 )]
 struct Args {
@@ -51,14 +51,14 @@ struct Args {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 enum Command {
-    /// Mostrar todos los metadatos del archivo MP3 o MP4
+    /// Mostrar todos los metadatos del archivo MP3, MP4 u OGG
     Show {
-        /// Ruta del archivo de audio (MP3 o MP4)
+        /// Ruta del archivo de audio (MP3, MP4 u OGG)
         file: PathBuf,
     },
-    /// Editar metadatos del archivo MP3 o MP4
+    /// Editar metadatos del archivo MP3, MP4 u OGG
     Edit {
-        /// Ruta del archivo de audio (MP3 o MP4)
+        /// Ruta del archivo de audio (MP3, MP4 u OGG)
         file: PathBuf,
 
         /// Título de la canción
@@ -141,19 +141,19 @@ enum Command {
         #[arg(long)]
         title_sort: Option<String>,
     },
-    /// Eliminar tags específicos del archivo MP3 o MP4
+    /// Eliminar tags específicos del archivo MP3, MP4 u OGG
     Remove {
-        /// Ruta del archivo de audio (MP3 o MP4)
+        /// Ruta del archivo de audio (MP3, MP4 u OGG)
         file: PathBuf,
 
         // Tags a eliminar. La lista se deriva de `id3cli::VALID_TAG_NAMES`, la
-        // misma tabla de alias que comparten la clasificación de MP3 y la de
-        // MP4, para que la ayuda no pueda quedar desincronizada de los nombres
-        // realmente aceptados.
+        // misma tabla de alias que comparten la clasificación de MP3, la de
+        // MP4 y la de OGG, para que la ayuda no pueda quedar desincronizada de
+        // los nombres realmente aceptados.
         #[arg(help = format!("Tags a eliminar, en inglés o en español ({VALID_TAG_NAMES})"))]
         tags: Vec<String>,
 
-        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4)
+        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4 y el bloque de comentarios Vorbis en OGG, preservando el vendor)
         #[arg(short, long)]
         all: bool,
     },
