@@ -56,7 +56,7 @@ Se implementa lo mínimo para satisfacer los contratos: la lista blanca anclada 
 
 ## Seguimiento (fuera del cierre de este cambio)
 
-Aquí NO se finge trabajo hecho: son comprobaciones posteriores a la próxima release real, no tareas de este cambio.
+Aquí NO se finge trabajo hecho: estas comprobaciones no eran tareas de este cambio, sino seguimiento posterior a la release real. Ya están hechas y verificadas tras la 0.5.2, así que quedan cerradas y marcadas, sin dejar de estar fuera del cierre del cambio.
 
-- Que el próximo release real use el push atómico y complete sus tres pasos (push, tag y publicación) sin intervención manual.
-- Que, tras la **próxima** publicación real, el `.crate` descargado de crates.io no contenga el andamiaje del repositorio.
+- [x] Que el próximo release real use el push atómico y complete sus tres pasos (push, tag y publicación) sin intervención manual. Verificado el 2026-10-15: la release 0.5.2 lo confirmó. El paso `Commit, tag and push` del run `Prepare Release` 38684185477 subió rama y tag en un único push (`a86c6cd..1b10f4c main -> main` y `* [new tag] v0.5.2 -> v0.5.2`), sin ningún `::warning::el push atomico fallo`, es decir a la primera y sin reintentos, y el paso `Sync development with main` sincronizó `development` con `main`. Los tres pasos (push, tag y publicación) se completaron sin intervención manual: `release.yml` (run 38684207819) terminó en verde con el binario, la GitHub Release y la publicación en crates.io.
+- [x] Que, tras la **próxima** publicación real, el `.crate` descargado de crates.io no contenga el andamiaje del repositorio. Verificado el 2026-10-15: descargado desde `https://crates.io/api/v1/crates/id3cli/0.5.2/download` y listado su contenido, el paquete tiene **15 ficheros** (los 13 del proyecto más `.cargo_vcs_info.json` y `Cargo.toml.orig`, que genera cargo) y **cero** ficheros del andamiaje: ni `openspec/`, ni `.github/`, ni `AGENTS.md`, ni `GIT_FLOW.md`, ni `RELEASE.md`, ni `cliff.toml`, ni `.justfile`, ni `.vampus.yml`.
