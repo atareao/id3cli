@@ -39,12 +39,15 @@ Verificación de cada tarea del grupo: `cargo test` en verde (unitarios y de int
 
 Los tests de OGG no pueden usar bytes fabricados: hace falta un archivo Vorbis real que `lofty` parsee y que `ffprobe` reconozca. El fixture se genera con `ffmpeg` y se versiona, junto con el script que lo regenera.
 
-- [ ] 3.1 Crear `tests/fixtures/sample.ogg` con `ffmpeg`.
+- [x] 3.1 Crear `tests/fixtures/sample.ogg` con `ffmpeg`.
       Verificación: `libvorbis`, seno de 0,6 s a 44,1 kHz, mono, con `-map_metadata -1 -fflags +bitexact -flags:a +bitexact`, tamaño pequeño y commiteado en `tests/fixtures/`; `ffprobe` MUST reconocerlo como audio Vorbis reproducible.
-- [ ] 3.2 Crear `tests/fixtures/generate_sample_ogg.sh` que regenere el fixture y **verifique estructura, no igualdad de bytes**.
+      Evidencia: `tests/fixtures/sample.ogg`, 4335 bytes; `file` lo reconoce como «Ogg data, Vorbis audio, mono, 44100 Hz, ~60000 bps»; `ffprobe` lo lee como vorbis 44100 Hz mono de 0,60 s; patrón `OggS` con versión `0` en el byte 4 y 1 segmento declarado en el byte 26, con el primer paquete en el offset 28 empezando por `\x01vorbis`; comentario con vendor `ffmpeg` y la única clave `encoder=Lavc libvorbis`, sin ningún campo de usuario.
+- [x] 3.2 Crear `tests/fixtures/generate_sample_ogg.sh` que regenere el fixture y **verifique estructura, no igualdad de bytes**.
       Verificación: el script comprueba patrón `OggS`, versión 0, primer paquete en `27 + header[26]` empezando por `\x01vorbis`, presencia del vendor y de la clave `ENCODER`, y que `ffprobe` reconoce el archivo; MUST NOT comparar el fichero generado contra el versionado byte a byte.
-- [ ] 3.3 Commit propio para el fixture y el script.
+      Evidencia: `tests/fixtures/generate_sample_ogg.sh` (5506 bytes, modo 755) genera a un temporal, verifica estructura y solo entonces mueve el fichero: patrón `OggS` y versión `0`, primer paquete calculado en `27 + byte 26` (avisa si no vale 28), identificador `\x01vorbis`, vendor no vacío y clave `ENCODER` con valor, decodificación completa con `ffmpeg` y ausencia de campos de usuario. Las comprobaciones se probaron con casos negativos —bytes aleatorios, byte del primer paquete corrompido, comentario con `TITLE`, comentario sin `ENCODER` y vendor vacío— y cada uno aborta con su mensaje y código 1, mientras el fixture real pasa con código 0. Regenerar el fixture desde el script reproduce el mismo tamaño y deja el archivo válido.
+- [x] 3.3 Commit propio para el fixture y el script.
       Verificación: el commit MUST contener `tests/fixtures/sample.ogg` y `tests/fixtures/generate_sample_ogg.sh` y MUST NOT contener cambios de `src/` ni de `tests/` que no sean los helpers que copian el fixture a un temporal.
+      Evidencia: commit propio con `tests/fixtures/sample.ogg` y `tests/fixtures/generate_sample_ogg.sh`, sin cambios en `src/` ni en tests.
 
 > [!note] Medido: el comentario de un `.ogg` de `ffmpeg` lleva siempre el vendor y `encoder=Lavc…`, y `-fflags +bitexact` no los elimina, así que el fixture NO es byte a byte reproducible entre versiones de `ffmpeg`. La verificación del script MUST ser estructural.
 
