@@ -374,6 +374,21 @@ fn test_cli_track_number() {
     assert_eq!(tag.title(), Some("Track Test"));
     assert_eq!(tag.track(), Some(5));
 
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): `--track N` escribe el frame `TRCK` con el número a secas,
+    // SIN barra ni total. Se relee con `id3` (otra librería distinta de
+    // `lofty`, que es quien escribe) para que la verificación sea entre
+    // librerías. Cuando se introduzca la forma `N/T` esta expectativa cambiará.
+    let track_text = tag
+        .get("TRCK")
+        .and_then(|frame| frame.content().text())
+        .expect("`id3` debe encontrar el frame TRCK escrito por `lofty`");
+    assert_eq!(track_text, "5", "`--track 5` debe guardar TRCK=\"5\"");
+    assert!(
+        !track_text.contains('/'),
+        "TRCK no debe contener total (`/`): {track_text}"
+    );
+
     cleanup_file(&mp3_path);
 }
 
@@ -1586,6 +1601,21 @@ fn test_cli_add_season() {
     let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
     assert_eq!(tag.disc(), Some(3));
 
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): `--season N` escribe el frame `TPOS` con el número a secas,
+    // SIN barra ni total. Se relee con `id3` (diferente de `lofty`, que
+    // escribe) para verificar entre librerías. Cuando se introduzca `N/T`
+    // esta expectativa cambiará.
+    let season_text = tag
+        .get("TPOS")
+        .and_then(|frame| frame.content().text())
+        .expect("`id3` debe encontrar el frame TPOS escrito por `lofty`");
+    assert_eq!(season_text, "3", "`--season 3` debe guardar TPOS=\"3\"");
+    assert!(
+        !season_text.contains('/'),
+        "TPOS no debe contener total (`/`): {season_text}"
+    );
+
     cleanup_file(&mp3_path);
 }
 
@@ -1653,6 +1683,26 @@ fn test_cli_podcast_with_season() {
     assert_eq!(
         tag.get("TCOP").and_then(|f| f.content().text()),
         Some("© 2026 Podcast Network")
+    );
+
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): ni `TRCK` ni `TPOS` llevan total. `--track 5` y `--season 2`
+    // escriben el número a secas; se relee con `id3` (distinto de `lofty`,
+    // que escribe) y se comprueba que no aparece la barra. Cambiará al
+    // introducirse la forma `N/T`.
+    let track_text = tag
+        .get("TRCK")
+        .and_then(|f| f.content().text())
+        .expect("`id3` debe encontrar el frame TRCK");
+    let season_text = tag
+        .get("TPOS")
+        .and_then(|f| f.content().text())
+        .expect("`id3` debe encontrar el frame TPOS");
+    assert_eq!(track_text, "5", "TRCK debe llevar el número a secas");
+    assert_eq!(season_text, "2", "TPOS debe llevar el número a secas");
+    assert!(
+        !track_text.contains('/') && !season_text.contains('/'),
+        "ni TRCK ni TPOS deben contener total (`/`): {track_text} / {season_text}"
     );
 
     cleanup_file(&mp3_path);
@@ -2713,8 +2763,8 @@ fn test_cli_rejects_malformed_mp4_and_leaves_file_untouched() {
             "'{op}' sobre un MP4 malformado debe terminar con código distinto de cero (stderr: {stderr})"
         );
         assert!(
-            stderr.contains("MP3") && stderr.contains("MP4"),
-            "'{op}' debe enumerar los formatos soportados (MP3 y MP4) en stderr, fue: {stderr}"
+            stderr.contains("MP3") && stderr.contains("MP4") && stderr.contains("OGG"),
+            "'{op}' debe enumerar los formatos soportados (MP3, MP4 y OGG) en stderr, fue: {stderr}"
         );
         assert_eq!(
             fs::read(&path).expect("Failed to read temp file"),
@@ -2790,9 +2840,17 @@ fn test_cli_mp4_renamed_to_mp3_is_detected_by_content() {
 
 #[test]
 fn test_cli_rejects_unsupported_formats_and_leaves_file_untouched() {
+    // El caso `ogg_sin_paquete` NO es un «códec no soportado»: sus bytes forman
+    // una página Ogg (`OggS`) cuyo byte 26 —el número de segmentos— vale `0`, es
+    // decir sin ningún paquete. Como no hay identificador de códec que leer, el
+    // contenido cae en «no se pudo determinar el formato» (`Unknown`), no en
+    // «formato no soportado» (`Unsupported`). Sigue en esta lista porque los dos
+    // mensajes enumeran los formatos soportados y el archivo queda intacto; los
+    // casos de «códec no soportado» (Opus, Speex) van aparte, en
+    // `test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched`.
     let cases: [(&str, &str, &[u8]); 4] = [
         ("flac", "flac", b"fLaC\x00\x00\x00\x22"),
-        ("ogg", "ogg", b"OggS\x00\x02"),
+        ("ogg_sin_paquete", "ogg", b"OggS\x00\x02"),
         ("wav", "wav", b"RIFF\x00\x00\x00\x00WAVE"),
         ("aif", "aif", b"FORM\x00\x00\x00\x00AIFF"),
     ];
@@ -2913,6 +2971,362 @@ fn test_cli_rejects_too_short_file() {
         "un archivo demasiado corto debe informar de que no se pudo decidir, fue: {stderr}"
     );
     assert_eq!(fs::read(&path).expect("Failed to read temp file"), before);
+
+    cleanup_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// OGG Vorbis: enrutado del CLI y operaciones completas (tareas 2.1 y 2.4)
+// ---------------------------------------------------------------------------
+
+/// Ruta absoluta al fixture Ogg Vorbis real y sin campos de usuario.
+///
+/// Es un Ogg Vorbis genuino: patrón `OggS` en el offset 0, versión `0` en el
+/// byte 4, un segmento declarado en el byte 26 y el primer paquete `\x01vorbis`
+/// en el offset 28. Solo lleva el comentario obligatorio (vendor `ffmpeg` y la
+/// clave `ENCODER`), de modo que `edit` ejercita la creación de campos desde
+/// cero.
+fn fixture_ogg_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.ogg")
+}
+
+/// Copia el fixture Ogg Vorbis real a una ruta temporal única.
+///
+/// NO se usa `create_temp_fixture(extension)`: ese helper copia **siempre** el
+/// MP3 versionado y aquí hace falta un `.ogg` real que `lofty` parsee como
+/// Vorbis. Nunca se opera sobre el fixture versionado directamente.
+fn create_temp_ogg() -> PathBuf {
+    let path = unique_temp_path("audio", "ogg");
+    fs::copy(fixture_ogg_path(), &path).expect("Failed to copy OGG fixture");
+    path
+}
+
+/// Construye una página Ogg de un solo paquete con el identificador de códec
+/// indicado como primer (y único) paquete.
+///
+/// Réplica del helper homónimo de `src/tests.rs`: el módulo `tests` de la
+/// librería es privado y no es accesible desde este binario de integración, así
+/// que la construcción se repite aquí con el mismo layout.
+///
+/// * bytes 0-3   : patrón de captura `OggS`
+/// * byte 4      : versión del flujo (`0`)
+/// * byte 5      : tipo de página (`0`)
+/// * bytes 6-25  : granule, serial, secuencia y CRC (a cero)
+/// * byte 26     : número de segmentos de página (`1`)
+/// * byte 27     : tabla de segmentos (lacing), un segmento del tamaño del códec
+/// * bytes 28-…  : primer paquete, el identificador de códec
+fn synthetic_ogg_page(codec: &[u8]) -> Vec<u8> {
+    assert!(
+        !codec.is_empty() && codec.len() <= 255,
+        "el identificador de códec debe caber en un único segmento Ogg"
+    );
+    let mut page = Vec::with_capacity(28 + codec.len());
+    page.extend_from_slice(b"OggS"); // 0-3: patrón de captura
+    page.push(0x00); // 4: versión del flujo
+    page.push(0x00); // 5: tipo de página (sin BOS ni EOS)
+    page.extend_from_slice(&[0x00; 20]); // 6-25: granule + serial + secuencia + CRC
+    page.push(0x01); // 26: número de segmentos de página
+    page.push(codec.len() as u8); // 27: tabla de segmentos (un segmento)
+    page.extend_from_slice(codec); // 28-…: primer paquete
+    page
+}
+
+#[test]
+fn test_cli_ogg_edit_then_show_roundtrip() {
+    let path = create_temp_ogg();
+
+    let edit = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Canción OGG",
+        "--artist",
+        "Artista",
+        "--album",
+        "Álbum",
+        "--year",
+        "2026",
+        "--genre",
+        "Rock",
+        "--track",
+        "7",
+        "--date",
+        "2026-10-13",
+    ]);
+    assert!(
+        edit.status.success(),
+        "`edit` sobre un .ogg debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Los valores se releen de forma independiente con `lofty` (vía la lectura
+    // concreta de la librería) para no verificar la escritura consigo misma.
+    let tag = id3cli::read_vorbis_tag(&path).expect("lofty debe releer el .ogg");
+    assert_eq!(tag.get("TITLE"), Some("Canción OGG"));
+    assert_eq!(tag.get("ARTIST"), Some("Artista"));
+    assert_eq!(tag.get("ALBUM"), Some("Álbum"));
+    assert_eq!(tag.get("YEAR"), Some("2026"));
+    assert_eq!(tag.get("GENRE"), Some("Rock"));
+    assert_eq!(tag.get("TRACKNUMBER"), Some("7"));
+    assert_eq!(tag.get("DATE"), Some("2026-10-13"));
+
+    // Y `show` los muestra en la salida estándar.
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    for value in ["Canción OGG", "Artista", "Álbum", "2026-10-13", "Rock", "7"] {
+        assert!(
+            stdout.contains(value),
+            "`show` debe mostrar {value:?}, stdout: {stdout}"
+        );
+    }
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_ogg_renamed_to_mp3_is_edited_by_content() {
+    // La extensión NO decide el formato: un `.ogg` **válido** renombrado a
+    // `.mp3` sigue detectándose por sus bytes como Ogg Vorbis y editándose con
+    // el backend OGG, igual que ya se prueba con el MP4.
+    let path = unique_temp_path("ogg_as_mp3", "mp3");
+    fs::copy(fixture_ogg_path(), &path).expect("Failed to copy OGG fixture");
+
+    let edit = run_cli(&["edit", path.to_str().unwrap(), "--title", "Renombrado"]);
+    assert!(
+        edit.status.success(),
+        "un .ogg con nombre .mp3 debe editarse por su contenido, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains("Renombrado"),
+        "el título escrito debe releerse, stdout: {}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+
+    // Y sigue siendo Ogg por contenido: el patrón de captura `OggS` intacto.
+    let bytes = fs::read(&path).expect("Failed to read temp file");
+    assert_eq!(
+        &bytes[..4],
+        b"OggS",
+        "el archivo debe seguir siendo Ogg por contenido"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_ogg_remove_field_keeps_rest() {
+    let path = create_temp_ogg();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit", file, "--title", "T", "--artist", "A", "--album", "Alb",
+    ]);
+    assert!(edit.status.success());
+
+    let remove = run_cli(&["remove", file, "title"]);
+    assert!(
+        remove.status.success(),
+        "`remove title` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let tag = id3cli::read_vorbis_tag(&path).expect("el .ogg debe seguir legible");
+    assert_eq!(tag.get("TITLE"), None, "el título debe desaparecer");
+    assert_eq!(
+        tag.get("ARTIST"),
+        Some("A"),
+        "el artista no mencionado sobrevive"
+    );
+    assert_eq!(
+        tag.get("ALBUM"),
+        Some("Alb"),
+        "el álbum no mencionado sobrevive"
+    );
+
+    // `show` deja de mostrarlo también.
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        !stdout.contains("🎵 Título:"),
+        "show no debe mostrar el título: {stdout}"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_ogg_remove_all_empties_comment_and_preserves_vendor() {
+    use lofty::ogg::OggPictureStorage;
+
+    let path = create_temp_ogg();
+
+    let edit = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "T",
+        "--artist",
+        "A",
+    ]);
+    assert!(edit.status.success());
+
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "--all"]);
+    assert!(
+        remove.status.success(),
+        "`remove --all` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&remove.stdout).contains("eliminados"),
+        "debe confirmar el borrado, stdout: {}",
+        String::from_utf8_lossy(&remove.stdout)
+    );
+
+    // No queda ningún campo de usuario ni carátula, pero el vendor se conserva.
+    let tag = id3cli::read_vorbis_tag(&path).expect("el .ogg debe seguir legible");
+    assert_eq!(
+        tag.items().count(),
+        0,
+        "no debe quedar ningún campo de usuario"
+    );
+    assert!(tag.pictures().is_empty(), "no debe quedar ninguna carátula");
+    assert_eq!(tag.vendor(), "ffmpeg", "el vendor debe conservarse");
+
+    // Y el archivo sigue siendo un Ogg Vorbis válido por contenido.
+    assert_eq!(
+        id3cli::detect_format(&path).expect("detect_format debe poder leer el archivo"),
+        id3cli::AudioFormat::OggVorbis,
+        "el archivo debe seguir siendo Ogg Vorbis"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched() {
+    // Un contenedor Ogg es un sobre: solo Vorbis está soportado. Opus y Speex
+    // se reconocen como contenido conocido pero fuera de alcance. El test NO
+    // usa `OggS` a secas (eso es una página sin primer paquete, que cae en
+    // «formato no determinado»): construye páginas Ogg **válidas** con el
+    // identificador de códec en el primer paquete para que el rechazo sea por
+    // códec y no por página incompleta.
+    let cases: [(&str, &[u8]); 2] = [("opus", b"OpusHead"), ("speex", b"Speex   ")];
+
+    for (label, codec) in cases {
+        let path = write_temp_bytes(label, "ogg", &synthetic_ogg_page(codec));
+        let before = fs::read(&path).expect("Failed to read temp file");
+
+        for (op, extra) in [
+            ("show", Vec::<&str>::new()),
+            ("edit", vec!["--title", "X"]),
+            ("remove", vec!["--all"]),
+        ] {
+            let mut args = vec![op, path.to_str().unwrap()];
+            args.extend_from_slice(&extra);
+            let output = Command::new("cargo")
+                .args(["run", "--quiet", "--"])
+                .args(&args)
+                .output()
+                .expect("Failed to execute command");
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success(),
+                "'{op}' sobre un Ogg con códec {label} debe fallar (stderr: {stderr})"
+            );
+            assert!(
+                stderr.contains("soportado"),
+                "'{op}' sobre un Ogg con códec {label} debe indicar formato no soportado, fue: {stderr}"
+            );
+            assert!(
+                stderr.contains("MP3") && stderr.contains("MP4") && stderr.contains("OGG"),
+                "el mensaje debe enumerar los formatos soportados (MP3, MP4 y OGG), fue: {stderr}"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "el error no debe ir a stdout, fue: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert_eq!(
+                fs::read(&path).expect("Failed to read temp file"),
+                before,
+                "'{op}' NO debe modificar el archivo con códec {label}"
+            );
+        }
+
+        cleanup_file(&path);
+    }
+}
+
+/// `show` sobre un Ogg recién creado (solo vendor y `encoder`) debe avisar de
+/// que no hay metadatos, salir con 0 y no imprimir ni el vendor ni `ENCODER`.
+///
+/// El test unitario homónimo no puede capturar stdout (el harness de `cargo
+/// test` no lo permite sin dependencias externas), así que la verificación real
+/// del escenario «Visualización de un Ogg sin campos de usuario» tiene que
+/// lanzar el binario y leer su salida.
+#[test]
+fn test_cli_ogg_show_without_user_fields_says_no_metadata() {
+    let path = create_temp_ogg();
+    let file = path.to_str().unwrap();
+
+    // El fixture solo lleva el comentario obligatorio (vendor `ffmpeg` y la
+    // clave `encoder=Lavc libvorbis`), sin ningún campo de usuario.
+    let show = run_cli(&["show", file]);
+    assert!(
+        show.status.success(),
+        "`show` sobre un .ogg sin campos de usuario debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("⚠️  No se encontraron metadatos."),
+        "debe avisar de que no hay metadatos, stdout: {stdout}"
+    );
+    for forbidden in ["ffmpeg", "Lavc", "encoder", "ENCODER"] {
+        assert!(
+            !stdout.contains(forbidden),
+            "`show` NO debe imprimir {forbidden:?} (vendor/ENCODER), stdout: {stdout}"
+        );
+    }
+
+    // Contraste: tras escribir un título, `show` sí lo muestra y sigue sin
+    // exponer el vendor ni el `encoder`. Sin este contraste el test anterior
+    // pasaría aunque `show` no imprimiera nunca nada.
+    let title = "Título con contraste";
+    let edit = run_cli(&["edit", file, "--title", title]);
+    assert!(
+        edit.status.success(),
+        "no se pudo escribir el título: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", file]);
+    assert!(
+        show.status.success(),
+        "`show` tras escribir el título debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains(title),
+        "`show` debe mostrar el título escrito, stdout: {stdout}"
+    );
+    for forbidden in ["ffmpeg", "Lavc", "encoder", "ENCODER"] {
+        assert!(
+            !stdout.contains(forbidden),
+            "aun con título, `show` NO debe imprimir {forbidden:?}, stdout: {stdout}"
+        );
+    }
 
     cleanup_file(&path);
 }
@@ -3211,7 +3625,7 @@ fn test_cli_m4a_remove_all_without_metadata_warns() {
 }
 
 #[test]
-fn test_cli_unsupported_format_message_lists_mp3_and_mp4() {
+fn test_cli_unsupported_format_message_lists_mp3_mp4_and_ogg() {
     let path = write_temp_bytes("flac_msg", "flac", b"fLaC\x00\x00\x00\x22");
 
     let output = run_cli(&["edit", path.to_str().unwrap(), "--title", "X"]);
@@ -3219,8 +3633,8 @@ fn test_cli_unsupported_format_message_lists_mp3_and_mp4() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("MP3") && stderr.contains("MP4"),
-        "el mensaje de formato no soportado debe enumerar MP3 y MP4, fue: {stderr}"
+        stderr.contains("MP3") && stderr.contains("MP4") && stderr.contains("OGG"),
+        "el mensaje de formato no soportado debe enumerar MP3, MP4 y OGG, fue: {stderr}"
     );
 
     cleanup_file(&path);
@@ -4070,6 +4484,75 @@ fn test_cli_pipe_cerrado_no_es_error_m4a() {
     cleanup_file(&m4a_path);
 }
 
+/// Mismo contrato que las versiones MP3 y M4A sobre un OGG.
+///
+/// Completa el escenario que exige que el cierre del pipe se comporte igual en
+/// las **tres** rutas de visualización. El archivo se prepara con metadatos
+/// reales por la misma razón que en sus hermanos: garantizar que stderr
+/// estaría vacío de no ser por el fallo que describe el contrato.
+#[test]
+fn test_cli_pipe_cerrado_no_es_error_ogg() {
+    let ogg_path = create_temp_ogg();
+
+    let edit = run_cli(&[
+        "edit",
+        ogg_path.to_str().unwrap(),
+        "--title",
+        "Título para pipe",
+        "--artist",
+        "Artista para pipe",
+        "--album",
+        "Álbum para pipe",
+        "--year",
+        "2026",
+        "--genre",
+        "Rock",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el OGG con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Igual que en los casos MP3 y M4A: se cierra el extremo de lectura antes de
+    // leer para que el EPIPE sea determinista y no dependa de una carrera.
+    let mut child = Command::new("cargo")
+        .args(["run", "--quiet", "--", "show", ogg_path.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+
+    drop(child.stdout.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`show` sobre OGG con stdout cerrado debe salir con 0, no {:?}. stderr: {}",
+        output.status.code(),
+        stderr
+    );
+    assert!(
+        stderr.is_empty(),
+        "stderr debe quedar vacío cuando el pipe está cerrado, fue: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("panicked")
+            && !stderr.contains("failed printing to stdout")
+            && !stderr.contains("RUST_BACKTRACE"),
+        "no debe aparecer un pánico al escribir en stdout: {}",
+        stderr
+    );
+
+    cleanup_file(&ogg_path);
+}
+
 /// Un error de escritura real en stdout debe fallar como error, no con pánico.
 ///
 /// Solo se ejecuta en Linux porque usa `/dev/full`: abrirlo funciona pero toda
@@ -4140,4 +4623,489 @@ fn test_cli_error_de_escritura_falla() {
     );
 
     cleanup_file(&mp3_path);
+}
+
+// ---------------------------------------------------------------------------
+// Totales de pista y temporada en los tres formatos (grupo 5, tarea 5.1 — RED)
+// ---------------------------------------------------------------------------
+//
+// Estos tests exigen el comportamiento que el grupo 5 del change
+// `ogg-support-and-track-totals` debe producir: `--track` y `--season` aceptan
+// la forma `N/T` en los tres formatos, rechazan las formas inválidas con un
+// mensaje en español que indica la forma admitida, conservan el total
+// preexistente y lo borran junto al número. Están escritos en fase RED: hoy
+// `--track` y `--season` son `Option<u32>` en `src/main.rs`, así que `clap`
+// rechaza `7/12` con un mensaje en inglés y la mayoría de estos tests fallan.
+// La mayoría debe ponerse en verde en las tareas 5.2 a 5.5, sin tocar estas
+// expectativas.
+
+/// Rótulo del campo de la pista en la salida de `show`, idéntico en los tres
+/// formatos (`#️⃣  Pista:     ` en `src/lib.rs`).
+const ROTULO_PISTA: &str = "Pista:";
+/// Rótulo del campo de la temporada en la salida de `show`, idéntico en los
+/// tres formatos (`📺 Temporada: ` en `src/lib.rs`).
+const ROTULO_TEMPORADA: &str = "Temporada:";
+/// Forma admitida que el mensaje de error debe nombrar. El GREEN (tarea 5.2)
+/// tiene que emitir un mensaje en español que contenga `7/12` junto a la
+/// palabra «número»; hoy `clap` responde en inglés («invalid digit found in
+/// string»), que es el rojo que estos tests capturan.
+const FORMA_ADMITIDA: &str = "7/12";
+
+/// Ejecuta `edit <archivo> <flags>` y, si termina con éxito, `show <archivo>`,
+/// devolviendo la salida del `show`.
+///
+/// Evita repetir el par `edit` + `show` en cada test. NO se usa en los tests de
+/// formas inválidas: allí el `edit` debe fallar.
+fn edit_then_show(file: &Path, edit_flags: &[&str]) -> std::process::Output {
+    let mut args = vec!["edit", file.to_str().unwrap()];
+    args.extend_from_slice(edit_flags);
+    let edit = run_cli(&args);
+    assert!(
+        edit.status.success(),
+        "`edit {edit_flags:?}` sobre {} debe salir con 0, stderr: {}",
+        file.display(),
+        String::from_utf8_lossy(&edit.stderr)
+    );
+    run_cli(&["show", file.to_str().unwrap()])
+}
+
+/// Devuelve la línea de la salida de `show` que contiene `rotulo`, o `None` si
+/// ese campo no aparece.
+fn show_line<'a>(stdout: &'a str, rotulo: &str) -> Option<&'a str> {
+    stdout.lines().find(|line| line.contains(rotulo))
+}
+
+/// Formas inválidas para `--track` y `--season` que el CLI debe rechazar sin
+/// tocar el archivo: barra sin total, barra sin número, más de una barra, valor
+/// no numérico y cadena vacía.
+const FORMAS_INVALIDAS: [&str; 5] = ["7/", "/12", "7/12/3", "7/x", ""];
+
+#[test]
+fn test_cli_track_rechaza_formas_invalidas_sin_tocar_el_archivo() {
+    for forma in FORMAS_INVALIDAS {
+        let mp3_path = create_temp_mp3();
+        let before = fs::read(&mp3_path).expect("leer el archivo antes del rechazo");
+
+        let output = run_cli(&["edit", mp3_path.to_str().unwrap(), "--track", forma]);
+
+        assert!(
+            !output.status.success(),
+            "`--track {forma:?}` debe terminar con código distinto de cero"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // El mensaje de error (GREEN, tarea 5.2) debe estar en español e indicar
+        // la forma admitida: contiene `7/12` y la palabra «número».
+        assert!(
+            stderr.contains(FORMA_ADMITIDA),
+            "stderr debe indicar la forma admitida {FORMA_ADMITIDA:?}, fue: {stderr}"
+        );
+        assert!(
+            stderr.contains("número"),
+            "stderr debe nombrar la palabra «número», fue: {stderr}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("✓ Pista"),
+            "un rechazo no debe anunciar éxito en stdout, fue: {stdout}"
+        );
+
+        assert_eq!(
+            fs::read(&mp3_path).expect("leer el archivo tras el rechazo"),
+            before,
+            "`--track {forma:?}` debe dejar el archivo idéntico byte a byte"
+        );
+
+        cleanup_file(&mp3_path);
+    }
+}
+
+#[test]
+fn test_cli_season_rechaza_formas_invalidas_sin_tocar_el_archivo() {
+    for forma in FORMAS_INVALIDAS {
+        let mp3_path = create_temp_mp3();
+        let before = fs::read(&mp3_path).expect("leer el archivo antes del rechazo");
+
+        let output = run_cli(&["edit", mp3_path.to_str().unwrap(), "--season", forma]);
+
+        assert!(
+            !output.status.success(),
+            "`--season {forma:?}` debe terminar con código distinto de cero"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(FORMA_ADMITIDA),
+            "stderr debe indicar la forma admitida {FORMA_ADMITIDA:?}, fue: {stderr}"
+        );
+        assert!(
+            stderr.contains("número"),
+            "stderr debe nombrar la palabra «número», fue: {stderr}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("✓ Temporada"),
+            "un rechazo no debe anunciar éxito en stdout, fue: {stdout}"
+        );
+
+        assert_eq!(
+            fs::read(&mp3_path).expect("leer el archivo tras el rechazo"),
+            before,
+            "`--season {forma:?}` debe dejar el archivo idéntico byte a byte"
+        );
+
+        cleanup_file(&mp3_path);
+    }
+}
+
+#[test]
+fn test_cli_track_con_total_en_los_tres_formatos() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("total_track");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let show = edit_then_show(path, &["--track", "7/12"]);
+        assert!(
+            show.status.success(),
+            "`show` debe salir con 0 en {}",
+            path.display()
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let linea = show_line(&stdout, ROTULO_PISTA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la pista en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            linea.trim_end().ends_with("7/12"),
+            "la pista debe mostrarse como 7/12 en {}, línea: {linea:?}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_temporada_con_total_en_los_tres_formatos() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("total_season");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let show = edit_then_show(path, &["--season", "1/2"]);
+        assert!(
+            show.status.success(),
+            "`show` debe salir con 0 en {}",
+            path.display()
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let linea = show_line(&stdout, ROTULO_TEMPORADA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la temporada en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            linea.trim_end().ends_with("1/2"),
+            "la temporada debe mostrarse como 1/2 en {}, línea: {linea:?}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_numero_sin_total_sigue_funcionando() {
+    // Caracterización: `--track 7` y `--season 2` (enteros sin total) deben
+    // seguir escribiéndose y mostrándose igual que antes de este cambio. Este
+    // caso pasa hoy; se conserva como red de seguridad de que la forma sin
+    // total no se degrada al introducir la forma `N/T`.
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("sin_total");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let show = edit_then_show(path, &["--track", "7", "--season", "2"]);
+        assert!(
+            show.status.success(),
+            "`show` debe salir con 0 en {}",
+            path.display()
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+
+        let pista = show_line(&stdout, ROTULO_PISTA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la pista en {}: {stdout}",
+                path.display()
+            )
+        });
+        let temporada = show_line(&stdout, ROTULO_TEMPORADA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la temporada en {}: {stdout}",
+                path.display()
+            )
+        });
+
+        assert!(
+            pista.trim_end().ends_with(" 7"),
+            "la pista sin total debe mostrarse como 7 en {}, línea: {pista:?}",
+            path.display()
+        );
+        assert!(
+            !pista.contains('/'),
+            "la pista sin total no debe llevar barra en {}, línea: {pista:?}",
+            path.display()
+        );
+        assert!(
+            temporada.trim_end().ends_with(" 2"),
+            "la temporada sin total debe mostrarse como 2 en {}, línea: {temporada:?}",
+            path.display()
+        );
+        assert!(
+            !temporada.contains('/'),
+            "la temporada sin total no debe llevar barra en {}, línea: {temporada:?}",
+            path.display()
+        );
+        // No se busca la palabra «Total» a secas: la propia salida de `show`
+        // incluye el pie «📦 Total de frames: N», que no es un campo de total.
+        // El contrato NO añade ningún campo nuevo: el par número/total vive en
+        // el mismo campo `Pista`/`Temporada`, de modo que la ausencia de barra
+        // en esas líneas es la comprobación exacta de «sin total».
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_show_no_muestra_total_cuando_no_existe() {
+    // Sin total: el campo de la pista ni lleva barra ni hay campo de total. El
+    // contrato no añade ningún campo nuevo —el par n/total vive en el mismo
+    // campo `Pista`—, así que la ausencia de barra en esa línea es la
+    // comprobación exacta. No se busca la palabra «Total» a secas porque el pie
+    // «📦 Total de frames: N» de `show` la contiene sin ser un campo de total.
+    let sin_total = create_temp_mp3();
+    let show_sin = edit_then_show(&sin_total, &["--track", "7"]);
+    assert!(show_sin.status.success());
+    let stdout_sin = String::from_utf8_lossy(&show_sin.stdout);
+    let pista_sin = show_line(&stdout_sin, ROTULO_PISTA)
+        .unwrap_or_else(|| panic!("`show` debe mostrar la pista: {stdout_sin}"));
+    assert!(
+        !pista_sin.contains('/'),
+        "sin total no debe haber barra en la pista, línea: {pista_sin:?}"
+    );
+
+    // Contraste en el mismo test: con total SÍ aparece la barra, de modo que el
+    // test no puede pasar por vacío (una salida en blanco también cumpliría la
+    // primera mitad).
+    let con_total = create_temp_mp3();
+    let show_con = edit_then_show(&con_total, &["--track", "7/12"]);
+    assert!(show_con.status.success());
+    let stdout_con = String::from_utf8_lossy(&show_con.stdout);
+    let pista_con = show_line(&stdout_con, ROTULO_PISTA)
+        .unwrap_or_else(|| panic!("`show` debe mostrar la pista: {stdout_con}"));
+    assert!(
+        pista_con.contains('/'),
+        "con total debe aparecer la barra en la pista, línea: {pista_con:?}"
+    );
+
+    cleanup_file(&sin_total);
+    cleanup_file(&con_total);
+}
+
+#[test]
+fn test_cli_conserva_el_total_preexistente_en_los_tres_formatos() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("conserva_total");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let file = path.to_str().unwrap();
+
+        // Pista: primero 3/12 y después 5 (sin total) → el total preexistente 12
+        // debe conservarse y mostrarse 5/12.
+        let first = run_cli(&["edit", file, "--track", "3/12"]);
+        assert!(
+            first.status.success(),
+            "edit --track 3/12 en {} debe salir con 0: {}",
+            path.display(),
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let show = edit_then_show(path, &["--track", "5"]);
+        assert!(show.status.success());
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let pista = show_line(&stdout, ROTULO_PISTA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la pista en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            pista.trim_end().ends_with("5/12"),
+            "el total de pista preexistente debe conservarse en {}, línea: {pista:?}",
+            path.display()
+        );
+
+        // Temporada: primero 1/2 y después 4 → debe conservarse y mostrarse 4/2.
+        let first = run_cli(&["edit", file, "--season", "1/2"]);
+        assert!(
+            first.status.success(),
+            "edit --season 1/2 en {} debe salir con 0: {}",
+            path.display(),
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let show = edit_then_show(path, &["--season", "4"]);
+        assert!(show.status.success());
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        let temporada = show_line(&stdout, ROTULO_TEMPORADA).unwrap_or_else(|| {
+            panic!(
+                "`show` debe mostrar la temporada en {}: {stdout}",
+                path.display()
+            )
+        });
+        assert!(
+            temporada.trim_end().ends_with("4/2"),
+            "el total de temporada preexistente debe conservarse en {}, línea: {temporada:?}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_remove_track_elimina_numero_y_total() {
+    let mp3_path = create_temp_mp3();
+    let m4a_path = create_temp_m4a("remove_total");
+    let ogg_path = create_temp_ogg();
+
+    for path in [mp3_path.as_path(), m4a_path.as_path(), ogg_path.as_path()] {
+        let file = path.to_str().unwrap();
+
+        // Número y total escritos en los dos pares: 7/12 (pista) y 1/2 (temporada).
+        let edit = run_cli(&["edit", file, "--track", "7/12", "--season", "1/2"]);
+        assert!(
+            edit.status.success(),
+            "edit con totales en {} debe salir con 0: {}",
+            path.display(),
+            String::from_utf8_lossy(&edit.stderr)
+        );
+
+        for campo in ["track", "season"] {
+            let remove = run_cli(&["remove", file, campo]);
+            assert!(
+                remove.status.success(),
+                "`remove {campo}` en {} debe salir con 0: {}",
+                path.display(),
+                String::from_utf8_lossy(&remove.stderr)
+            );
+        }
+
+        let show = run_cli(&["show", file]);
+        assert!(show.status.success());
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        assert!(
+            show_line(&stdout, ROTULO_PISTA).is_none(),
+            "tras `remove track` no debe quedar ni número ni total en {}: {stdout}",
+            path.display()
+        );
+        assert!(
+            show_line(&stdout, ROTULO_TEMPORADA).is_none(),
+            "tras `remove season` no debe quedar ni número ni total en {}: {stdout}",
+            path.display()
+        );
+        // El par se elimina como unidad: los valores concretos no deben aparecer.
+        assert!(
+            !stdout.contains('7') && !stdout.contains("12"),
+            "no deben sobrevivir el número ni el total en {}: {stdout}",
+            path.display()
+        );
+    }
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&m4a_path);
+    cleanup_file(&ogg_path);
+}
+
+// ---------------------------------------------------------------------------
+// La ayuda del CLI nombra los tres formatos (grupo 6, tarea 6.3)
+//
+// Fase RED del grupo 6 del cambio `ogg-support-and-track-totals`: hoy la ayuda
+// solo menciona MP3 y MP4, así que este test FALLA.
+// ---------------------------------------------------------------------------
+
+/// Texto combinado de stdout y stderr de una ejecución del CLI.
+fn salida_completa(output: &std::process::Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// Primera línea de `texto` que contiene `marca`.
+fn linea_de_flag<'a>(texto: &'a str, marca: &str) -> Option<&'a str> {
+    texto.lines().find(|linea| linea.contains(marca))
+}
+
+#[test]
+fn test_cli_help_nombra_los_tres_formatos() {
+    // (1) Los cuatro puntos de ayuda salen con código 0 y nombran MP3, MP4 y OGG.
+    let ayudas: [(&str, &[&str]); 4] = [
+        ("--help", &["--help"]),
+        ("show --help", &["show", "--help"]),
+        ("edit --help", &["edit", "--help"]),
+        ("remove --help", &["remove", "--help"]),
+    ];
+    for (etiqueta, args) in ayudas {
+        let output = run_cli(args);
+        assert!(
+            output.status.success(),
+            "`id3cli {etiqueta}` debe salir con código 0: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let texto = salida_completa(&output);
+        for formato in ["MP3", "MP4", "OGG"] {
+            assert!(
+                texto.contains(formato),
+                "la ayuda de `id3cli {etiqueta}` no nombra {formato}:\n{texto}"
+            );
+        }
+    }
+
+    // (2) `edit --help` documenta la forma con total en `--track` y `--season`:
+    //     la línea de cada flag contiene la grafía `N/TOTAL`.
+    let edit = salida_completa(&run_cli(&["edit", "--help"]));
+    let linea_track = linea_de_flag(&edit, "--track")
+        .unwrap_or_else(|| panic!("la ayuda de `edit` no documenta el flag `--track`:\n{edit}"));
+    assert!(
+        linea_track.contains("N/TOTAL"),
+        "la ayuda de `--track` debe documentar la forma con total (N/TOTAL): {linea_track}"
+    );
+    let linea_season = linea_de_flag(&edit, "--season")
+        .unwrap_or_else(|| panic!("la ayuda de `edit` no documenta el flag `--season`:\n{edit}"));
+    assert!(
+        linea_season.contains("N/TOTAL"),
+        "la ayuda de `--season` debe documentar la forma con total (N/TOTAL): {linea_season}"
+    );
+
+    // (3) `remove --help` conserva TODOS los nombres aceptados de
+    //     `id3cli::VALID_TAG_NAMES`, no solo una muestra.
+    let remove = salida_completa(&run_cli(&["remove", "--help"]));
+    for nombre in id3cli::VALID_TAG_NAMES.split(',').map(str::trim) {
+        assert!(
+            remove.contains(nombre),
+            "la ayuda de `remove` no lista el nombre de tag `{nombre}` de \
+             `id3cli::VALID_TAG_NAMES`:\n{remove}"
+        );
+    }
 }
