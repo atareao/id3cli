@@ -218,9 +218,7 @@ fn detect_supported_format(file: &Path) -> Backend {
 
 /// Informa de un fallo al procesar un contenedor MP4 y termina con código 1.
 ///
-/// El mensaje enumera los formatos soportados (MP3 y MP4) además de la causa,
-/// de modo que un archivo con cabecera MP4 pero estructura inválida se rechaza
-/// con un error legible y sin haberlo modificado.
+/// Muestra el error y un recordatorio de los formatos soportados.
 fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     eprintln!(
         "Error: No se pudo procesar el archivo MP4 '{}': {}",

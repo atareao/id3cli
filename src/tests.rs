@@ -2764,3 +2764,134 @@ fn test_manifiesto_include_definido() {
         esperados.len()
     );
 }
+
+#[test]
+fn test_mp4_metadata_only_file_reads_ok() {
+    // Un archivo MP4 con `moov` pero sin `trak` (solo metadatos, sin pistas de
+    // audio) debe leerse correctamente con `read_mp4_tag`, devolviendo `Ok(Some(tag))`
+    // con los metadatos del `ilst`. Antes se rechazaba este caso, pero ahora
+    // `read_mp4_tag` usa `ParseOptions::new().read_properties(false)` que no
+    // exige pistas de audio.
+    let path = std::env::temp_dir().join(format!(
+        "id3cli_unit_mp4_no_trak_{}_{}.m4a",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::process::id()
+    ));
+
+    let bytes = build_mp4_without_trak();
+    fs::write(&path, &bytes).expect("No se pudo escribir el MP4 de prueba");
+
+    let result = read_mp4_tag(&path);
+    let tag = result
+        .expect("el MP4 sin pistas de audio debe leerse correctamente")
+        .expect("debe contener el tag ilst con metadatos");
+    assert_eq!(
+        tag.get_string(ItemKey::TrackTitle),
+        Some("Test"),
+        "el título escrito en el ilst sintético debe leerse"
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_mp4_corrupt_file_rejected() {
+    // Un archivo que empieza por `ftyp` pero es demasiado pequeño (solo el
+    // encabezado `ftyp`) debe fallar con error porque `lofty` no puede
+    // interpretarlo como MP4 válido.
+    let path = std::env::temp_dir().join(format!(
+        "id3cli_unit_mp4_corrupt_{}_{}.m4a",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::process::id()
+    ));
+
+    // Solo el encabezado ftyp (28 bytes), sin moov, sin nada más.
+    let bytes = b"\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A mp42isom";
+    fs::write(&path, bytes).expect("No se pudo escribir el MP4 corrupto de prueba");
+
+    let result = read_mp4_tag(&path);
+    assert!(
+        result.is_err(),
+        "se esperaba un error para MP4 corrupto (solo ftyp)"
+    );
+
+    cleanup_file(&path);
+}
+
+/// Construye un archivo MP4 artificial con `ftyp`, `moov` (sin `trak`) y `mdat`.
+///
+/// Estructura:
+/// - `ftyp` (28 bytes): major brand "M4A ", compatible "M4A mp42isom"
+/// - `moov` con `mvhd` + `udta` → `meta` → `ilst` → `©nam` ("Test")
+/// - `mdat` (14 bytes): datos de relleno
+///
+/// El archivo no tiene ningún átomo `trak`, por lo que no es un archivo de
+/// audio reproducible, aunque tenga metadatos.
+fn build_mp4_without_trak() -> Vec<u8> {
+    let mut buf = Vec::new();
+
+    // ftyp atom: 8 header + 4 brand + 4 version + 12 compatible = 28 bytes
+    buf.extend(b"\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A mp42isom");
+
+    // --- moov body (sin trak) ---
+    let mut body = Vec::new();
+
+    // mvhd atom: 8 header + 100 padding = 108 bytes
+    body.extend(b"\x00\x00\x00\x6c");
+    body.extend(b"mvhd");
+    body.extend(&[0u8; 100]);
+
+    // data atom (dentro de ©nam): 8 header + 4 flags + 4 locale + 4 "Test" = 20 bytes
+    let mut data_atom = Vec::new();
+    data_atom.extend(b"\x00\x00\x00\x14"); // size = 20
+    data_atom.extend(b"data");
+    data_atom.extend(b"\x00\x00\x00\x01"); // type indicator = 1 (UTF-8 text)
+    data_atom.extend(b"\x00\x00\x00\x00"); // locale
+    data_atom.extend(b"Test"); // payload (4 bytes)
+
+    // ©nam atom: 8 header + data_atom = 28 bytes
+    let mut cnam = Vec::new();
+    cnam.extend(b"\x00\x00\x00\x1c"); // size = 28
+    cnam.extend(b"\xa9nam"); // type "©nam"
+    cnam.extend(&data_atom);
+
+    // ilst atom: 8 header + cnam = 36 bytes
+    let mut ilst = Vec::new();
+    ilst.extend(b"\x00\x00\x00\x24"); // size = 36
+    ilst.extend(b"ilst");
+    ilst.extend(&cnam);
+
+    // meta atom (FullBox): 8 header + 4 version/flags + ilst = 48 bytes
+    let mut meta = Vec::new();
+    meta.extend(b"\x00\x00\x00\x30"); // size = 48
+    meta.extend(b"meta");
+    meta.extend(b"\x00\x00\x00\x00"); // version + flags
+    meta.extend(&ilst);
+
+    // udta atom: 8 header + meta = 56 bytes
+    let mut udta = Vec::new();
+    udta.extend(b"\x00\x00\x00\x38"); // size = 56
+    udta.extend(b"udta");
+    udta.extend(&meta);
+
+    body.extend(&udta);
+
+    // moov atom: 8 header + body
+    let moov_size = 8u32 + body.len() as u32;
+    buf.extend(moov_size.to_be_bytes());
+    buf.extend(b"moov");
+    buf.extend(&body);
+
+    // mdat atom: 8 header + 6 bytes de relleno = 14 bytes
+    buf.extend(b"\x00\x00\x00\x0e");
+    buf.extend(b"mdat");
+    buf.extend(b"\x00\x01\x02\x03\x04\x05");
+
+    buf
+}

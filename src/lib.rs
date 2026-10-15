@@ -30,8 +30,8 @@
 pub mod output;
 
 use lofty::TextEncoding;
-use lofty::config::WriteOptions;
-use lofty::file::TaggedFileExt;
+use lofty::config::{ParseOptions, WriteOptions};
+use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::id3::v2::{
     Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
@@ -1300,18 +1300,22 @@ pub fn apply_metadata_mp4(tag: &mut Tag, options: &Mp4EditOptions<'_>) -> Mp4Edi
 /// Devuelve `Ok(None)` cuando el archivo es un MP4 válido pero no tiene átomo
 /// de metadatos.
 ///
-/// El formato se decide por el **contenido**, no por la extensión del nombre: se
-/// usa [`lofty::read_from`], que sondea los *magic bytes*, en lugar de
-/// `lofty::read_from_path`, que adivina el formato a partir del sufijo del
-/// archivo. Así un MP4 renombrado a `.mp3` se interpreta como MP4.
+/// El formato se decide por el **contenido**, no por la extensión del nombre.
+/// Usa [`TaggedFile::read_from`] con `read_properties(false)` para poder leer
+/// archivos MP4 que contienen solo metadatos (sin pistas de audio), como los
+/// que `atomicparsley` sí procesa pero `lofty::read_from()` rechazaría.
 ///
 /// # Errores
 ///
-/// Retorna un error si el archivo no se puede leer o no se puede interpretar
-/// como contenedor MP4.
+/// Retorna un error si el archivo no se puede leer o no es un contenedor MP4
+/// válido.
 pub fn read_mp4_tag(path: &Path) -> Result<Option<Tag>, Box<dyn std::error::Error>> {
     let mut file = File::open(path)?;
-    let tagged = lofty::read_from(&mut file)?;
+    // `read_properties(false)`: lee el tag `ilst` de contenedores MP4 sin exigir
+    // pistas de audio. Un MP4 con solo metadatos (sin el átomo `trak`) se lee
+    // igual que uno normal; los MP4 corruptos siguen fallando.
+    let tagged =
+        lofty::file::TaggedFile::read_from(&mut file, ParseOptions::new().read_properties(false))?;
     Ok(tagged.tag(TagType::Mp4Ilst).cloned())
 }
 
@@ -1326,7 +1330,12 @@ pub fn read_mp4_tag(path: &Path) -> Result<Option<Tag>, Box<dyn std::error::Erro
 /// Retorna un error si el archivo no existe, no es escribible o no se puede
 /// interpretar como contenedor MP4.
 pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::Error>> {
-    tag.save_to_path(path, WriteOptions::default())?;
+    // Mismas opciones de parseo que en la lectura: sin propiedades para que un
+    // MP4 sin pistas de audio también se pueda reescribir.
+    tag.save_to_path(
+        path,
+        WriteOptions::new().parse_options(ParseOptions::new().read_properties(false)),
+    )?;
     Ok(())
 }
 
@@ -1477,7 +1486,12 @@ pub fn remove_all_mp4(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
 
     if had_metadata {
         let mut handle = OpenOptions::new().read(true).write(true).open(file)?;
-        TagType::Mp4Ilst.remove_from(&mut handle, WriteOptions::default())?;
+        // Mismas opciones de parseo que en la lectura (`read_properties(false)`):
+        // permiten eliminar el `ilst` de un MP4 sin pistas de audio.
+        TagType::Mp4Ilst.remove_from(
+            &mut handle,
+            WriteOptions::new().parse_options(ParseOptions::new().read_properties(false)),
+        )?;
     }
 
     Ok(had_metadata)
