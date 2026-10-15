@@ -6,15 +6,16 @@ El cambio amplía el CLI a un tercer formato —OGG Vorbis, con `VorbisComments`
 
 Antes de tocar una línea de código de producción hay que dejar medido qué hace hoy el binario y cuántos tests hay de verdad con qué expectativas, porque el cambio mueve dos cosas que la suite actual afirma: que OGG es un formato no soportado y que `--track` y `--season` son enteros sin total. Sin esa foto previa no se puede atribuir ninguna regresión a una causa.
 
-- [ ] 1.1 Registrar el baseline real de la suite completa, sin filtros y sin detenerse en el primer fallo.
+- [x] 1.1 Registrar el baseline real de la suite completa, sin filtros y sin detenerse en el primer fallo.
       Verificación: `cargo test --no-fail-fast` MUST reportar **125 tests unitarios + 95 de integración = 220, 0 fallos**; anotar la salida literal, sin editar ni resumir, en `baseline.md` dentro del directorio de este change.
-- [ ] 1.2 Caracterizar el comportamiento **actual** de `--track` y `--season` como enteros sin total, sobre MP3 y sobre MP4, con tests que hoy pasan y sin cambiar código de producción.
+- [x] 1.2 Caracterizar el comportamiento **actual** de `--track` y `--season` como enteros sin total, sobre MP3 y sobre MP4, con tests que hoy pasan y sin cambiar código de producción.
       Verificación: los tests nuevos MUST quedar en verde contra el código actual y MUST fijar la ausencia de total (MP3 escribe `TRCK`/`TPOS` con el número a secas y MP4 escribe `trkn`/`disk` con el campo de total a cero); ninguno de ellos puede asumir la forma `N/T`, que se introduce en el grupo 5.
-- [ ] 1.3 Caracterizar el rechazo actual de OGG identificando los tests existentes que afirman que `OggS` es un formato no soportado, y anotar exactamente cuáles cambian de expectativa, uno a uno.
+- [x] 1.3 Caracterizar el rechazo actual de OGG identificando los tests existentes que afirman que `OggS` es un formato no soportado, y anotar exactamente cuáles cambian de expectativa, uno a uno.
       Verificación: lista nominal en `baseline.md` (fichero, nombre del test y línea) de cada test que hoy exige el rechazo de `OggS`, con la expectativa nueva que tendrá tras el grupo 2 (deja de ser rechazo y pasa a ser aceptación), uno por uno y sin agrupar.
-- [ ] 1.4 Documentar el desajuste ya existente entre la documentación y la suite.
+- [x] 1.4 Documentar el desajuste ya existente entre la documentación y la suite.
       Verificación: `README.md` y `AGENTS.md` declaran 219 tests (124 unitarios + 95 de integración) y la suite real tiene 220 (125 + 95); registrar el `grep` de `219` y de `124` como hallazgo del baseline y como corrección obligatoria del grupo 6 (tareas 6.1 y 6.4).
-- [ ] 1.5 Dejar constancia del baseline en el propio cambio.
+- [x] 1.5 Dejar constancia del baseline en el propio cambio.
+      Evidencia: la salida literal de los comandos, las líneas nominales de los tests y el desajuste de recuento están en `baseline.md`, en este mismo directorio.
       Verificación: el fichero `baseline.md`, dentro del directorio de este change, MUST contener la salida real de los comandos ejecutados (suite completa, `cargo test --lib`, `cargo test --test '*'`) y las listas deducidas en 1.2, 1.3 y 1.4.
 
 > [!warning] Las tareas del grupo 1 van en un commit propio antes de tocar código de producción: si el baseline y la implementación se mezclan, ninguna regresión es atribuible a una causa.

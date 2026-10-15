@@ -374,6 +374,21 @@ fn test_cli_track_number() {
     assert_eq!(tag.title(), Some("Track Test"));
     assert_eq!(tag.track(), Some(5));
 
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): `--track N` escribe el frame `TRCK` con el número a secas,
+    // SIN barra ni total. Se relee con `id3` (otra librería distinta de
+    // `lofty`, que es quien escribe) para que la verificación sea entre
+    // librerías. Cuando se introduzca la forma `N/T` esta expectativa cambiará.
+    let track_text = tag
+        .get("TRCK")
+        .and_then(|frame| frame.content().text())
+        .expect("`id3` debe encontrar el frame TRCK escrito por `lofty`");
+    assert_eq!(track_text, "5", "`--track 5` debe guardar TRCK=\"5\"");
+    assert!(
+        !track_text.contains('/'),
+        "TRCK no debe contener total (`/`): {track_text}"
+    );
+
     cleanup_file(&mp3_path);
 }
 
@@ -1586,6 +1601,21 @@ fn test_cli_add_season() {
     let tag = Tag::read_from_path(&mp3_path).expect("Failed to read tag");
     assert_eq!(tag.disc(), Some(3));
 
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): `--season N` escribe el frame `TPOS` con el número a secas,
+    // SIN barra ni total. Se relee con `id3` (diferente de `lofty`, que
+    // escribe) para verificar entre librerías. Cuando se introduzca `N/T`
+    // esta expectativa cambiará.
+    let season_text = tag
+        .get("TPOS")
+        .and_then(|frame| frame.content().text())
+        .expect("`id3` debe encontrar el frame TPOS escrito por `lofty`");
+    assert_eq!(season_text, "3", "`--season 3` debe guardar TPOS=\"3\"");
+    assert!(
+        !season_text.contains('/'),
+        "TPOS no debe contener total (`/`): {season_text}"
+    );
+
     cleanup_file(&mp3_path);
 }
 
@@ -1653,6 +1683,26 @@ fn test_cli_podcast_with_season() {
     assert_eq!(
         tag.get("TCOP").and_then(|f| f.content().text()),
         Some("© 2026 Podcast Network")
+    );
+
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): ni `TRCK` ni `TPOS` llevan total. `--track 5` y `--season 2`
+    // escriben el número a secas; se relee con `id3` (distinto de `lofty`,
+    // que escribe) y se comprueba que no aparece la barra. Cambiará al
+    // introducirse la forma `N/T`.
+    let track_text = tag
+        .get("TRCK")
+        .and_then(|f| f.content().text())
+        .expect("`id3` debe encontrar el frame TRCK");
+    let season_text = tag
+        .get("TPOS")
+        .and_then(|f| f.content().text())
+        .expect("`id3` debe encontrar el frame TPOS");
+    assert_eq!(track_text, "5", "TRCK debe llevar el número a secas");
+    assert_eq!(season_text, "2", "TPOS debe llevar el número a secas");
+    assert!(
+        !track_text.contains('/') && !season_text.contains('/'),
+        "ni TRCK ni TPOS deben contener total (`/`): {track_text} / {season_text}"
     );
 
     cleanup_file(&mp3_path);

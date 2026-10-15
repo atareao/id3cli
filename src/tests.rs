@@ -1704,7 +1704,27 @@ fn test_m4a_writes_track_atom() {
         "el átomo `trkn` debe guardar la pista 7"
     );
     // El átomo `trkn` existe en disco.
-    assert!(contains_bytes(&fs::read(&path).unwrap(), b"trkn"));
+    let bytes = fs::read(&path).unwrap();
+    assert!(contains_bytes(&bytes, b"trkn"));
+
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): `--track N` guarda el total de pista a CERO. El `data` de
+    // `trkn` son 8 bytes `[00 00][pista u16][total u16][00 00]`; aquí el
+    // campo de total (bytes 4..6) debe ser 0, no un total real. Se parsean los
+    // bytes del átomo directamente (sin `lofty`) y esta expectativa cambiará
+    // cuando se introduzca la forma `N/T`.
+    let (_, payload) = data_box_after(&bytes, b"trkn").expect("debe existir el átomo `trkn`");
+    assert_eq!(payload.len(), 8, "el `data` de `trkn` debe tener 8 bytes");
+    assert_eq!(
+        u16::from_be_bytes([payload[2], payload[3]]),
+        7,
+        "el campo de pista del átomo `trkn` debe ser 7"
+    );
+    assert_eq!(
+        u16::from_be_bytes([payload[4], payload[5]]),
+        0,
+        "el campo de total del átomo `trkn` debe ser 0 (sin `N/T`)"
+    );
     cleanup_file(&path);
 }
 
@@ -1723,7 +1743,27 @@ fn test_m4a_writes_disk_atom_for_season() {
         Some(2),
         "el átomo `disk` debe guardar la temporada 2"
     );
-    assert!(contains_bytes(&fs::read(&path).unwrap(), b"disk"));
+    let bytes = fs::read(&path).unwrap();
+    assert!(contains_bytes(&bytes, b"disk"));
+
+    // Caracterización del comportamiento previo (change de OGG + totales,
+    // grupo 5): `--season N` guarda el total de disco a CERO. El `data` de
+    // `disk` son 8 bytes `[00 00][temporada u16][total u16][00 00]`; aquí el
+    // campo de total (bytes 4..6) debe ser 0. Se parsean los bytes del átomo
+    // directamente (sin `lofty`) y esta expectativa cambiará cuando se
+    // introduzca la forma `N/T`.
+    let (_, payload) = data_box_after(&bytes, b"disk").expect("debe existir el átomo `disk`");
+    assert_eq!(payload.len(), 8, "el `data` de `disk` debe tener 8 bytes");
+    assert_eq!(
+        u16::from_be_bytes([payload[2], payload[3]]),
+        2,
+        "el campo de temporada del átomo `disk` debe ser 2"
+    );
+    assert_eq!(
+        u16::from_be_bytes([payload[4], payload[5]]),
+        0,
+        "el campo de total del átomo `disk` debe ser 0 (sin `N/T`)"
+    );
     cleanup_file(&path);
 }
 
