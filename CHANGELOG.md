@@ -1,4 +1,23 @@
 # Changelog
+## [0.5.2] - 2026-10-15
+
+### Documentation
+
+- *(openspec)* Propone el push atómico del tag y el paquete sin andamiaje
+- Documenta la recuperación de un release a medias y el contenido del paquete
+- *(openspec)* Ancla la lista blanca y archiva el change
+
+### Miscellaneous Tasks
+
+- Empuja la rama y el tag en un único push atómico
+
+### Other
+
+- Limita el paquete publicado con una lista blanca anclada
+
+### Testing
+
+- Fija la lista blanca del paquete publicado
 ## [0.5.1] - 2026-10-14
 
 ### Bug Fixes
@@ -16,6 +35,7 @@
 
 - Declara keywords y categories para crates.io
 - Valida el lock con --locked y lo refresca antes del commit de release
+- Release v0.5.1
 
 ### Testing
 
