@@ -1,4 +1,13 @@
 # Changelog
+## [0.10.0] - 2026-10-16
+
+### Features
+
+- Modo batch — <FILE>... en show/edit/remove (Fase 6) (#33)
+
+### Other
+
+- V0.10.0
 ## [0.9.0] - 2026-10-16
 
 ### Documentation
@@ -9,6 +18,10 @@
 ### Features
 
 - Completions para bash, zsh y fish (Fase 5) (#31)
+
+### Miscellaneous Tasks
+
+- Release v0.9.0
 
 ### Other
 
