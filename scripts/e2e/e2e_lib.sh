@@ -26,6 +26,10 @@
 #   grep_raw_contains <patrón> <archivo># el patrón aparece en los bytes crudos (vendor)
 #   check_duration_approx <seg> [tol]   # duración ffprobe ≈ esperada (reproducibilidad)
 #   check_no_id3v2_header               # MP3: el bloque ID3v2 desapareció del archivo
+#   check_json_valid                    # ejecuta show --json: JSON válido (jq -e .) y SIN bytes ANSI
+#   check_json_format <formato>         # el campo .formato coincide (mp3|mp4|ogg|opus|flac)
+#   check_json_field <ruta-jq> <valor>  # jq -r de la ruta + grep -aF del valor (subcadenas para la letra)
+#   check_json_null <ruta-jq>           # la ruta extrae null (p. ej. .tags en archivo sin tags)
 #   e2e_summary "<formato>" && exit 0 || exit 1
 #
 # FASE GREEN (2026-10-16): el runner queda completo. La capa 2 consulta ffprobe
@@ -37,6 +41,15 @@
 # con «ffmpeg -map 0:v:0 -c copy -frames:v 1» (sin -c copy ffmpeg re-codifica y
 # los bytes difieren, medido: 9039 frente a 9056). Todas las aserciones
 # alimentan el recuento de e2e_summary; ninguna aborta la ejecución.
+#
+# CAPA JSON (change json-output, tarea 5.1): las aserciones check_json_* validan
+# la salida de `show --json` con jq como parser independiente (disponible en el
+# entorno, v1.8.2), igual que ffprobe lo es para los tags; jq se suma a las
+# herramientas obligatorias que e2e_setup comprueba (ffmpeg, ffprobe y jq).
+# check_json_valid es AUTOCONTENIDA: ejecuta ella misma `show --json` sobre
+# $E2E_AUDIO, de modo que el resto de aserciones JSON leen $E2E_OUT/$E2E_RC/
+# $E2E_ERR de esa llamada (basta encadenarlas tras ella). El JSON viaja en una
+# única línea con salto final y sin ANSI (outln!, spec cli-output).
 
 set -euo pipefail
 
@@ -104,8 +117,9 @@ e2e_setup() {
     E2E_EXT="$ext"
 
     # Herramientas obligatorias (spec: ausencia → exit 1 con mensaje en español)
+    # jq se incorpora en el change json-output (parser independiente del JSON).
     local tool
-    for tool in ffmpeg ffprobe; do
+    for tool in ffmpeg ffprobe jq; do
         command -v "$tool" >/dev/null 2>&1 \
             || e2e_die "la herramienta obligatoria «${tool}» no está en el PATH"
     done
@@ -483,6 +497,84 @@ check_no_id3v2_header() {
     else
         E2E_PASS=$((E2E_PASS + 1))
         printf 'PASS: check_no_id3v2_header: el bloque ID3v2 desapareció del archivo (no empieza por «ID3»)\n'
+    fi
+    return 0
+}
+
+# ── Aserciones de la capa JSON (show --json + jq, parser independiente) ──
+# change json-output (tarea 5.1): validan el documento que construye el CLI con
+# jq como oráculo, igual que ffprobe lo es para la capa 2. Todas registran
+# PASS/FAIL en el recuento y devuelven 0: el fallo se mide por el contador de
+# e2e_summary, como el resto de aserciones (spec e2e-tooling).
+
+# check_json_valid: AUTOCONTENIDA, ejecuta ella misma `show --json "$E2E_AUDIO"`
+# y valida (a) que jq -e . parsea el documento (JSON inválido → FAIL) y (b) que
+# stdout NO contiene el byte ESC 0x1b (salida plana sin ANSI; spec cli-output).
+check_json_valid() {
+    e2e_run show --json "$E2E_AUDIO"
+    if ! jq -e . "$E2E_OUT" >/dev/null 2>&1; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_json_valid'\'': la salida de show --json no es un JSON válido (jq -e . falló)\n' >&2
+        return 0
+    fi
+    if grep -aq $'\x1b' "$E2E_OUT"; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_json_valid'\'': la salida de show --json contiene bytes ANSI (grep del byte ESC)\n' >&2
+        return 0
+    fi
+    E2E_PASS=$((E2E_PASS + 1))
+    printf 'PASS: check_json_valid: JSON válido (jq -e .) y sin bytes ANSI\n'
+    return 0
+}
+
+# check_json_format <formato>: el campo `.formato` del documento coincide con el
+# códec real esperado (mp3|mp4|ogg|opus|flac; ogg/opus por códec del contenedor).
+check_json_format() {
+    local esperado="${1:?check_json_format: falta el formato esperado}"
+    local formato
+    formato="$(jq -r '.formato' "$E2E_OUT" 2>/dev/null || true)"
+    if [[ "$formato" == "$esperado" ]]; then
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: check_json_format: el JSON declara el formato «%s»\n' "$formato"
+    else
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_json_format'\'': se esperaba el formato «%s» y el JSON declara «%s»\n' "$esperado" "$formato" >&2
+    fi
+    return 0
+}
+
+# check_json_field <ruta-jq> <valor>: extrae `jq -r '<ruta>'` y comprueba el
+# valor con `grep -aF` (subcadena, como la capa show). FAIL si la ruta devuelve
+# `null` (campo ausente) o no coincide. Para la letra multilínea la llamada usa
+# una SUBcadena de la primera línea: el JSON compacta los saltos como `\n`
+# literal en una sola línea y `jq -r` los devuelve como saltos REALES, de modo
+# que un patrón con salto de línea nunca coincidiría con grep -F.
+check_json_field() {
+    local ruta="${1:?check_json_field: falta la ruta jq}"
+    local esperado="${2:?check_json_field: falta el valor esperado}"
+    local valor
+    valor="$(jq -r "$ruta" "$E2E_OUT" 2>/dev/null || true)"
+    if [[ "$valor" == "null" ]] || ! grep -aqF -- "$esperado" <<<"$valor"; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_json_field'\'': la ruta %s devuelve «%s» y se esperaba «%s»\n' "$ruta" "$valor" "$esperado" >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: check_json_field: %s contiene «%s»\n' "$ruta" "$esperado"
+    fi
+    return 0
+}
+
+# check_json_null <ruta-jq>: la ruta extrae `null` (`jq -e '<ruta> == null'` con
+# exit 0). Cubre `tags:null` de un archivo sin tags y las claves null de las
+# degradaciones (url/original_artist en comentarios de Vorbis y MP4).
+check_json_null() {
+    local ruta="${1:?check_json_null: falta la ruta jq}"
+    if jq -e "$ruta == null" "$E2E_OUT" >/dev/null 2>&1; then
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: check_json_null: la ruta %s es null en el JSON\n' "$ruta"
+    else
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_json_null'\'': la ruta %s NO es null en el JSON\n' "$ruta" >&2
     fi
     return 0
 }

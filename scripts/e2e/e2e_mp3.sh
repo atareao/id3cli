@@ -80,6 +80,24 @@ main() {
     check_show_absent "$E2E_V_ARTIST_JOINED"
     check_show_absent "$E2E_V_URL"
 
+    # 1b) Etapa JSON (audio fresco): el MP3 recién generado por ffmpeg conserva
+    #     una cabecera ID3v2 VACÍA («ID3» en el byte 0 pese a -map_metadata -1,
+    #     medido 2026-10-16), así que `tags` es un OBJETO con todas las claves
+    #     null —no el `tags:null` del archivo sin bloque ID3, que se verifica
+    #     tras remove --all en el paso 6b—. En modo --json el aviso ⚠️ del modo
+    #     legible no se emite: stderr vacío con exit 0.
+    check_json_valid
+    check_json_null '.tags.title'
+    check_json_field '.tags.pictures | length' '0'
+    check_rc 0
+    if [[ -s "$E2E_ERR" ]]; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''stderr vacío'\'': el modo --json no debe escribir en stderr sin tags: «%s»\n' "$(tr -d '\n' <"$E2E_ERR")" >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: stderr vacío en el modo --json sin tags\n'
+    fi
+
     # 2) edit con los 20 tags en una invocación (MP3 sin degradaciones).
     e2e_run edit "$E2E_AUDIO" \
         --title "$E2E_V_TITLE" \
@@ -128,6 +146,23 @@ main() {
     check_show_contains "$E2E_V_ARTIST_SORT"
     check_show_contains "$E2E_V_TITLE_SORT"
 
+    # 3b) Etapa JSON (parser independiente jq): show --json sobre el MP3 ya
+    #     editado con los 20 tags. Los artistas viajan como ARRAY (split de la
+    #     unión "; "): se verifica el primer elemento. El track se compone como
+    #     objeto {number, total} (número 7, total 12). La letra se verifica con
+    #     la SUBcadena de su primera línea porque el JSON compacta los saltos
+    #     como `\n` literal en una sola línea y `jq -r` los devuelve como saltos
+    #     REALES: el patrón multilínea completo de $E2E_V_LYRICS nunca
+    #     coincidiría con grep -F (ver check_json_field en e2e_lib.sh).
+    check_json_valid
+    check_json_format 'mp3'
+    check_json_field '.tags.title' "$E2E_V_TITLE"
+    check_json_field '.tags.artists[0]' "$E2E_V_ARTIST1"     # multi-artista
+    check_json_field '.tags.album' "$E2E_V_ALBUM"
+    check_json_field '.tags.track.number' "$E2E_V_TRACK"     # = '7'
+    check_json_field '.tags.compilation' 'true'               # TCMP → bool
+    check_json_field '.tags.lyrics' 'LetraE2E'                # 1.ª línea (subcadena)
+
     # 4) ffprobe (capa 2, format_tags): las celdas de FF_TAGS con clave medida.
     #    year/date comparten la clave «date» y se verifican explícitamente
     #    abajo; lyrics lleva dos líneas y se comprueba línea a línea.
@@ -169,6 +204,20 @@ main() {
     e2e_run remove --all "$E2E_AUDIO"
     check_rc 0
     check_no_id3v2_header
+    # 6b) Etapa JSON sin tags: el archivo ya NO tiene bloque ID3v2 (verificado
+    #     arriba), el caso real de `tags:null` (spec: MP3 sin ID3 → tags null
+    #     con exit 0 y stderr VACÍO, porque el aviso ⚠️ se suprime en modo
+    #     --json; medido).
+    check_json_valid
+    check_json_null '.tags'
+    check_rc 0
+    if [[ -s "$E2E_ERR" ]]; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''stderr vacío'\'': el modo --json no debe escribir en stderr sin tags: «%s»\n' "$(tr -d '\n' <"$E2E_ERR")" >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: stderr vacío en el modo --json sin tags (tags:null)\n'
+    fi
     e2e_run show "$E2E_AUDIO"
     check_show_absent "$E2E_V_TITLE"
     check_show_absent "$E2E_V_ARTIST_JOINED"
@@ -216,6 +265,14 @@ main() {
     check_show_contains "Carátulas: 1 imagen(es)"
     check_cover_roundtrip "$E2E_COVER_PNG"
     check_cover_not_roundtrip "$E2E_COVER_JPG"
+
+    # 9b) Etapa JSON de la carátula: el fixture más completo de MP3 con imagen
+    #     (1 carátula, la PNG final). El tipo es el Debug del PictureType de
+    #     lofty («CoverFront»; medido) y el count se verifica con `jq | length`.
+    check_json_valid
+    check_json_format 'mp3'
+    check_json_field '.tags.pictures | length' '1'
+    check_json_field '.tags.pictures[0].type' 'CoverFront'
 
     if e2e_summary "mp3"; then
         exit 0
