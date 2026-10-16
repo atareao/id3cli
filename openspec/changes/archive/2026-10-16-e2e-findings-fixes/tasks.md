@@ -4,18 +4,24 @@ El change corrige los dos hallazgos del e2e con SDD/TDD: (1) MP4 `hdlr` — etiq
 
 ## 1. Artefactos de especificación (OpenSpec)
 
-- [ ] 1.1 Redactar `proposal.md` con la intención (dos bugs del e2e reproducidos), el alcance (fixes MP4 `hdlr` y MP3 `--cover` con semántica de sustitución, e2e ampliado) y el impacto (src/lib.rs, tests, e2e m4a/mp3, README; commits `fix:`; no-rotura 281 tests).
+- [x] 1.1 Redactar `proposal.md` con la intención (dos bugs del e2e reproducidos), el alcance (fixes MP4 `hdlr` y MP3 `--cover` con semántica de sustitución, e2e ampliado) y el impacto (src/lib.rs, tests, e2e m4a/mp3, README; commits `fix:`; no-rotura 281 tests).
       Verificación: `openspec/changes/e2e-findings-fixes/proposal.md` MUST contener Why (con las dos reproducciones), What Changes, Capabilities (MODIFIED: m4a-tagging, mp3-tagging, e2e-verification) e Impact.
-- [ ] 1.2 Redactar el delta `specs/m4a-tagging/spec.md` con el requirement MODIFIED de creación del árbol `meta` + `hdlr`.
+      Evidencia (2026-10-16): proposal.md contiene Why (reproducciones de ambos bugs con el binario de development), What Changes (fix 1.1 hdlr MP4, fix 1.2 sustitución MP3 + generalización por evidencia, e2e ampliado, sin cambios de formato), Capabilities (MODIFIED: m4a-tagging, mp3-tagging, e2e-verification; sin New) e Impact (código src/, tests, e2e, README, commits `fix:`, no-rotura 281+).
+- [x] 1.2 Redactar el delta `specs/m4a-tagging/spec.md` con el requirement MODIFIED de creación del árbol `meta` + `hdlr`.
       Verificación: MUST fijar con MUST la presencia del hijo `hdlr` en toda escritura, la visibilidad por `ffprobe format_tags` tras `remove --all` + `edit` (escenario con la secuencia exacta) y el escenario «todo meta reescrito lleva hdlr», con WHEN/THEN.
-- [ ] 1.3 Redactar el delta `specs/mp3-tagging/spec.md` con el requirement MODIFIED de carátulas y la semántica de sustitución.
+      Evidencia (2026-10-16): specs/m4a-tagging/spec.md fija con MUST la presencia del hijo `hdlr` en toda escritura MP4, la visibilidad por `ffprobe format_tags` tras `remove --all` + `edit` (escenario con la secuencia exacta) y el escenario «todo meta reescrito lleva hdlr», con WHEN/THEN.
+- [x] 1.3 Redactar el delta `specs/mp3-tagging/spec.md` con el requirement MODIFIED de carátulas y la semántica de sustitución.
       Verificación: MUST fijar «sustituir la `CoverFront` existente», «exactamente una `APIC` CoverFront con los bytes de la última imagen» y «conservar carátulas de otros tipos», con los escenarios WHEN/THEN de doble edición y de conservación de `BackCover`.
-- [ ] 1.4 Redactar el delta `specs/e2e-verification/spec.md` con las dos aserciones nuevas.
+      Evidencia (2026-10-16): specs/mp3-tagging/spec.md fija con MUST la sustitución de la `CoverFront` existente, «exactamente una APIC CoverFront con los bytes de la última imagen» y la conservación de carátulas de otros tipos (BackCover), con escenarios WHEN/THEN de doble edición y de conservación.
+- [x] 1.4 Redactar el delta `specs/e2e-verification/spec.md` con las dos aserciones nuevas.
       Verificación: MUST contener el requirement de la secuencia MP4 `edit → remove --all → edit` con `check_ffprobe_tag` en `format_tags`, y el de la segunda edición de `--cover` con roundtrip contra la última imagen y fallo si acumula, ambos con WHEN/THEN.
-- [ ] 1.5 Redactar `design.md` y `tasks.md`.
+      Evidencia (2026-10-16): specs/e2e-verification/spec.md contiene el requirement de la secuencia MP4 `edit → remove --all → edit` con `check_ffprobe_tag` en `format_tags` (título y artista) y el de la segunda edición de `--cover` con roundtrip contra la última imagen y fallo si acumula, ambos con WHEN/THEN.
+- [x] 1.5 Redactar `design.md` y `tasks.md`.
       Verificación: `design.md` MUST documentar las decisiones (fix 1.1: causa raíz `lofty` 0.25.4 sin fix upstream, opciones a/b con prioridad b, oráculo externo e2e; fix 1.2: semántica mismo tipo, generalización por evidencia) y las alternativas descartadas (bump lofty, documentar el bug, borrar todas las carátulas); `tasks.md` MUST tener los grupos 1-6 de este fichero con verificación y evidencia por tarea.
-- [ ] 1.6 STOP — presentar la especificación al usuario y esperar aprobación explícita antes de tocar `src/` ni `tests/`.
+      Evidencia (2026-10-16): design.md documenta la causa raíz (lofty 0.25.4 sin fix upstream), las opciones a/b con prioridad al post-proceso, el oráculo externo e2e y la generalización del fix 1.2 por evidencia (2.3), con alternativas descartadas (bump lofty, documentar el bug, borrar todas las carátulas). tasks.md con los grupos 1-6 y verificación/evidencia por tarea.
+- [x] 1.6 STOP — presentar la especificación al usuario y esperar aprobación explícita antes de tocar `src/` ni `tests/`.
       Verificación: ninguna casilla de los grupos 2-6 marcada hasta la aprobación.
+      Evidencia (2026-10-16): especificación presentada al usuario y APROBADA explícitamente («Apruebo, arranca el RED») antes de tocar `src/` ni `tests/`; los grupos 2-6 no se habían marcado en ese momento.
 
 ## 2. RED — tests que reproducen los bugs
 
@@ -58,16 +64,21 @@ El change corrige los dos hallazgos del e2e con SDD/TDD: (1) MP4 `hdlr` — etiq
 
 ## 5. Cierre y verificación
 
-- [ ] 5.1 `cargo test --no-fail-fast` completo en verde (281 + tests nuevos), `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` y `bash -n scripts/e2e/*.sh` limpios.
+- [x] 5.1 `cargo test --no-fail-fast` completo en verde (281 + tests nuevos), `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` y `bash -n scripts/e2e/*.sh` limpios.
       Verificación: salida de los cuatro comandos registrada con fecha.
-- [ ] 5.2 `README.md`: documentar que `--cover` sustituye la carátula del tipo indicado (y en los formatos alcanzados por la generalización) y, si aplica, la nota de compatibilidad MP4.
+      Evidencia (2026-10-16): ejecutados por el director — `cargo test --no-fail-fast` → 283/283 (163 unit + 120 integración); `cargo fmt --check` → limpio; `cargo clippy --all-targets --all-features -- -D warnings` → 0 warnings; `bash -n scripts/e2e/*.sh` → limpio (los 5 scripts).
+- [x] 5.2 `README.md`: documentar que `--cover` sustituye la carátula del tipo indicado (y en los formatos alcanzados por la generalización) y, si aplica, la nota de compatibilidad MP4.
       Verificación: la sección de carátulas del README refleja la semántica de sustitución.
-- [ ] 5.3 Commit `fix:` para cada fix (o un commit si el cambio es un todo coherente), rama `fix/e2e-findings` desde `development`, PR a `development`.
+      Evidencia (2026-10-16): README.md — nuevo párrafo en «🎨 Añadir carátula» (línea ~335): «`--cover` **sustituye** la carátula frontal existente…» con la semántica por formato (MP3/OGG/Opus conservan otros tipos; MP4 sustituye `covr` completo) y referencia a `--remove cover`; nuevo bullet en «Limitaciones conocidas en MP4» (línea ~600): «La carátula se sustituye por completo en MP4» con la nota `PictureType::Other`. Recuentos de tests actualizados 281→283 (escudo + sección Tests).
+- [x] 5.3 Commit `fix:` para cada fix (o un commit si el cambio es un todo coherente), rama `fix/e2e-findings` desde `development`, PR a `development`.
       Verificación: el commit NO es `feat:` (nunca libera minor), el PR apunta a `development` y la CI pasa.
-- [ ] 5.4 Verificación del director contra el propósito del change: los dos hallazgos del e2e quedan corregidos, la suite 281+ verde, el e2e ampliado en verde y sin regresiones documentadas.
+      Evidencia (2026-10-16): rama `fix/e2e-findings` desde `development` (3d29506); commit único `fix: restaura el hdlr MP4 tras remove --all y sustituye la carátula en --cover` (e87379f, 16 ficheros, +850/−139) — NO es `feat:` (no libera minor); PR **#26** a `development` (base development, head fix/e2e-findings); CI `test` → SUCCESS; fusionado con merge commit 34590ec. Decisión del usuario (2026-10-16): PLAN.md actualizado al estado real y commiteado dentro del change como documentación; commit conjunto; PR #24 (release v0.6.0) se fusiona DESPUÉS de este PR.
+- [x] 5.4 Verificación del director contra el propósito del change: los dos hallazgos del e2e quedan corregidos, la suite 281+ verde, el e2e ampliado en verde y sin regresiones documentadas.
       Verificación: repaso checklist del proposal (DoD) con los recuentos finales.
+      Evidencia (2026-10-16): checklist del proposal repasado por el director — Fix 1.1 (hdlr MP4: post-proceso `ensure_mp4_meta_hdlr`, ffprobe ve las etiquetas tras `remove --all` + `edit`, test RED→verde) ✅; Fix 1.2 generalizado a los 4 backends (evidencia 2.3) ✅; e2e ampliado 285→312 aserciones ✅; sin cambios de formato/tags ✅; commits `fix:` + PR a development + CI verde ✅; no-rotura (283 tests, fmt/clippy/bash, `just e2e` 0 fallidas) ✅. DoD del proposal cumplido al completo.
 
 ## 6. Archive
 
-- [ ] 6.1 `openspec archive e2e-findings-fixes` tras fusionar el PR.
+- [x] 6.1 `openspec archive e2e-findings-fixes` tras fusionar el PR.
       Verificación: los deltas MODIFIED quedan consolidados en `openspec/specs/{m4a-tagging,mp3-tagging,e2e-verification}/spec.md` y el change pasa a `archive/`.
+      Evidencia (2026-10-16): PR #26 fusionado en development (merge 34590ec); `openspec archive e2e-findings-fixes --yes` ejecutado → «Change 'e2e-findings-fixes' archived as '2026-10-16-e2e-findings-fixes'»; deltas consolidados en openspec/specs/{m4a-tagging,mp3-tagging,e2e-verification}/spec.md (verificado: hdlr ×5 en m4a-tagging, sustitución ×4 en mp3-tagging, secuencia en e2e-verification); change movido a openspec/changes/archive/2026-10-16-e2e-findings-fixes/.
