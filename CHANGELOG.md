@@ -1,4 +1,38 @@
 # Changelog
+## [0.6.0] - 2026-10-16
+
+### Bug Fixes
+
+- Permite leer y escribir metadatos MP4 sin pistas de audio
+- Permite leer y escribir metadatos MP4 sin pistas de audio
+- Cierra la llave del helper build_mp4_without_trak y ajusta el conteo de tests
+- Restaura el hdlr MP4 tras remove --all y sustituye la carátula en --cover
+
+### Documentation
+
+- *(openspec)* Cierra el seguimiento de los changes archivados
+- *(openspec)* Propone el soporte de OGG Vorbis y el total de pista
+- Documenta los tres formatos y convierte la coherencia en contrato
+- *(openspec)* Archiva los cambios de OGG y Opus en los specs base
+- *(openspec)* Archiva el change e2e-local-helpers en los specs base
+- *(openspec)* Archiva el change e2e-findings-fixes en los specs base
+
+### Features
+
+- Soporta OGG Vorbis como tercer formato
+- Acepta el total de pista y temporada en los tres formatos
+- Soporta OGG Vorbis y el total de pista/temporada
+- Soporta Ogg Opus como segundo códec del contenedor OGG
+
+### Miscellaneous Tasks
+
+- Release v0.5.3
+
+### Testing
+
+- Fija el baseline y caracteriza la numeración sin total
+- *(fixtures)* Añade un Ogg Vorbis de muestra y su script de regeneración
+- *(e2e)* Verifica la lectura y escritura de todos los tags y carátulas por extensión
 ## [0.5.2] - 2026-10-15
 
 ### Documentation
@@ -10,6 +44,7 @@
 ### Miscellaneous Tasks
 
 - Empuja la rama y el tag en un único push atómico
+- Release v0.5.2
 
 ### Other
 
