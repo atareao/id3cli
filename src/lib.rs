@@ -44,7 +44,7 @@ use lofty::tag::items::Timestamp;
 use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// Construye un [`FrameId`] a partir de un identificador conocido en tiempo de
@@ -3451,6 +3451,70 @@ pub fn generate_completions(shell: GenerationShell, cmd: &mut clap::Command) -> 
     let mut buffer = Vec::new();
     clap_complete::generate(clap_shell, cmd, "id3cli", &mut buffer);
     String::from_utf8(buffer).expect("el script de completions generado es UTF-8 válido")
+}
+
+// ---------------------------------------------------------------------------
+// Modo batch (múltiples archivos por invocación)
+// ---------------------------------------------------------------------------
+
+/// Cabecera de bloque del modo legible de `show` con más de un archivo.
+///
+/// Separa visualmente la salida de cada archivo con la ruta tal y como se pasó
+/// al CLI: `=== <ruta> ===`. Solo se usa cuando la invocación lleva N>1
+/// archivos; con uno solo la salida de `show` no lleva cabecera (no-rotura).
+pub fn batch_show_heading(path: &Path) -> String {
+    format!("=== {} ===", path.display())
+}
+
+/// Junta una línea JSON por archivo en un bloque NDJSON: las líneas se separan
+/// con `\n` y el bloque termina con `\n` final, de modo que es consumible con
+/// `jq -s`. El orden de entrada se preserva.
+pub fn batch_ndjson(lines: &[String]) -> String {
+    let mut bloque = lines.join("\n");
+    bloque.push('\n');
+    bloque
+}
+
+/// Resultado del despliegue batch por archivo.
+///
+/// Se procesan TODOS los archivos en orden: un fallo no aborta el resto. Los
+/// aciertos se acumulan en [`BatchOutcome::results`] y los fallos en
+/// [`BatchOutcome::errors`] como pares (ruta, motivo en español), de modo que
+/// el llamador puede informar de cada fallo sin perder los que ya se hicieron.
+pub struct BatchOutcome<T> {
+    /// Resultados de los archivos procesados con éxito, en orden de entrada.
+    pub results: Vec<T>,
+    /// Fallos acumulados: la ruta del archivo y el motivo en español.
+    pub errors: Vec<(PathBuf, String)>,
+}
+
+impl<T> BatchOutcome<T> {
+    /// Devuelve `true` si al menos un archivo falló durante el despliegue.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// Despliega `op` sobre cada ruta de `files`, en orden, acumulando los fallos.
+///
+/// `op` recibe la ruta y devuelve `Ok(resultado)` o `Err(motivo)`; un `Err` no
+/// aborta el resto de archivos: se acumula con su ruta y el despliegue continúa
+/// (ver [`BatchOutcome`]).
+pub fn batch_dispatch<T>(
+    files: &[PathBuf],
+    op: impl Fn(&Path) -> Result<T, String>,
+) -> BatchOutcome<T> {
+    let mut results = Vec::with_capacity(files.len());
+    let mut errors = Vec::new();
+
+    for file in files {
+        match op(file) {
+            Ok(result) => results.push(result),
+            Err(motivo) => errors.push((file.clone(), motivo)),
+        }
+    }
+
+    BatchOutcome { results, errors }
 }
 
 #[cfg(test)]

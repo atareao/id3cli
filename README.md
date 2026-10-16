@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`), **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg) y **FLAC** (comentarios Vorbis, `fLaC` nativo).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-318%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-331%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -82,16 +82,16 @@ cargo install id3cli
 ### Comandos disponibles
 
 ```bash
-# Mostrar todos los tags del archivo
-id3cli show <FILE>
+# Mostrar los tags de uno o más archivos
+id3cli show <FILE>...
 # Mostrar todos los tags del archivo en JSON (una línea, para scripts y jq)
 id3cli show <FILE> --json
 
 # Editar tags del archivo
-id3cli edit <FILE> [OPTIONS]
+id3cli edit <FILE>... [OPTIONS]
 
 # Eliminar todos los tags del archivo (ID3v1 e ID3v2 en MP3, átomos ilst en MP4 y campos de usuario en OGG: el comentario de Vorbis se vacía pero no se elimina)
-id3cli remove <FILE> --all
+id3cli remove <FILE>... --all
 
 # Eliminar tags específicos del archivo
 id3cli remove <FILE> [TAGS...]
@@ -171,6 +171,35 @@ el pipe la escritura termina como final normal (exit 0).
 | `--artist-sort <ARTIST_SORT>`         | Orden de clasificación del artista (Apple TSOP)              |
 | `--title-sort <TITLE_SORT>`           | Orden de clasificación del título (Apple TSOT)               |
 | `-h, --help`                          | Mostrar ayuda                                                |
+
+### Modo batch (varios archivos)
+
+`show`, `edit` y `remove` aceptan **uno o más archivos** en una sola invocación; la
+operación se aplica a todos en el orden dado. Con un único archivo el comportamiento
+es exactamente el de siempre (byte a byte).
+
+```bash
+# Editar varios archivos a la vez
+id3cli edit --artist "Artista" *.mp3
+# Mostrar varios archivos
+id3cli show track1.mp3 track2.mp3
+# Eliminar todos los tags de varios archivos
+id3cli remove --all *.mp3
+```
+
+Con `show` y más de un archivo, cada bloque se antecede de una cabecera `=== <ruta> ===`.
+Con `--json` y más de un archivo, la salida es **NDJSON**: una línea JSON por archivo,
+consumible con `jq -s` (devuelve el array de objetos):
+
+```bash
+id3cli show --json *.mp3 | jq -s '.[].tags.title'
+```
+
+El modo batch termina con exit 0 solo si **todos** los archivos se procesan; si alguno
+falla (ruta inexistente, formato no soportado), el resto se procesa igual, los fallos se
+informan por stderr en español y la salida final es distinta de cero. Sin archivos, clap
+responde con el error de argumento requerido (exit 2). Los avisos por archivo (sin tags,
+degradaciones MP4/OGG) conservan su contrato y no cuentan como fallo.
 
 ### 🖥️ Salida estándar, avisos y errores
 
@@ -804,12 +833,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **318 tests** (174 unitarios + 144 de integración):
+El proyecto tiene **cobertura completa** con **331 tests** (178 unitarios + 153 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (318)
-cargo test --lib        # Solo tests unitarios (174)
-cargo test --test '*'   # Solo tests de integración (144)
+cargo test              # Ejecutar todos los tests (331)
+cargo test --lib        # Solo tests unitarios (178)
+cargo test --test '*'   # Solo tests de integración (153)
 ```
 
 **Ejemplos de tests:**
@@ -851,8 +880,8 @@ Además de la suite de Rust, el repositorio incluye un tooling de **verificació
 **Cómo se ejecuta** (desde la raíz del repositorio):
 
 ```bash
-just e2e            # los 5 formatos + completions en serie; se detiene con el exit code del primero que falle
-just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus | e2e-flac | e2e-completions
+just e2e            # los 5 formatos, completions y batch en serie; se detiene con el exit code del primero que falle
+just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus | e2e-flac | e2e-completions | e2e-batch
 ```
 
 O directamente, sin `just`:
@@ -869,7 +898,7 @@ scripts/e2e/e2e_mp3.sh
 | `--keep`   | Conserva el directorio temporal al terminar, para depurar                                                                  |
 
 ```bash
-just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 5 formatos + completions
+just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 5 formatos + completions + batch
 just e2e --keep                                       # lo mismo conservando los temporales
 just e2e-opus --bin target/release/id3cli --keep      # opus con binario custom, conservando el temporal
 scripts/e2e/e2e_m4a.sh --keep
@@ -913,7 +942,7 @@ Desarrollado con 🦀 Rust
 - [x] Arquitectura modular (lib.rs separado del CLI)
 - [x] Salida JSON de `show` (`--json`, para scripts y consumidores tipo máquina)
 - [x] Compleciones para bash, zsh y fish (subcomando `completions`)
-- [ ] Modo batch para procesar múltiples archivos
+- [x] Modo batch (`<FILE>...` en `show`, `edit` y `remove`)
 - [ ] Binarios para Windows y macOS
 - [x] Soporte para MP4 / M4A (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`)
 - [x] Soporte para OGG Vorbis (comentarios de Vorbis: `TITLE`, `ARTIST`, `TRACKNUMBER`…)

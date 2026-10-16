@@ -6569,3 +6569,386 @@ fn test_cli_completions_pipe_cerrado_exit_0() {
         stderr
     );
 }
+
+// ---------------------------------------------------------------------------
+// Modo batch (múltiples archivos por invocación) — change batch-processing,
+// fase RED
+//
+// Fase RED: el CLI actual solo acepta UN archivo por subcomando (`file:
+// PathBuf`), así que clap rechaza las invocaciones con varios archivos (exit 2
+// por argumento inesperado) y estos tests fallan hasta que el GREEN pase a
+// `files: Vec<PathBuf>`. El contrato del modo batch: se procesan TODOS los
+// archivos (un fallo no aborta el resto), los errores se acumulan y `show`
+// añade una cabecera `=== <ruta> ===` por archivo (y NDJSON con `--json`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_show_batch_dos_archivos() {
+    // Dos MP3 con títulos distintos: `show` con ambos debe emitir la cabecera
+    // de cada ruta y los dos títulos.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "Uno"]);
+    assert!(
+        edit1.status.success(),
+        "no se pudo preparar el primer MP3: {}",
+        String::from_utf8_lossy(&edit1.stderr)
+    );
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "Dos"]);
+    assert!(
+        edit2.status.success(),
+        "no se pudo preparar el segundo MP3: {}",
+        String::from_utf8_lossy(&edit2.stderr)
+    );
+
+    let show = run_cli(&["show", f1.to_str().unwrap(), f2.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show` con dos archivos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains(&format!("=== {} ===", f1.display())),
+        "el stdout debe tener la cabecera del primer archivo, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("=== {} ===", f2.display())),
+        "el stdout debe tener la cabecera del segundo archivo, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("Uno") && stdout.contains("Dos"),
+        "el stdout debe mostrar los títulos de ambos archivos, fue: {stdout}"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_show_json_batch_ndjson() {
+    // Dos MP3 con tags: `show --json` con ambos debe emitir exactamente una
+    // línea JSON por archivo (NDJSON), sin nada más en stdout ni stderr.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "Batch JSON Uno"]);
+    assert!(edit1.status.success());
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "Batch JSON Dos"]);
+    assert!(edit2.status.success());
+
+    let show = run_cli(&["show", "--json", f1.to_str().unwrap(), f2.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` con dos archivos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    let lineas_no_vacias = stdout
+        .split('\n')
+        .filter(|linea| !linea.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lineas_no_vacias.len(),
+        2,
+        "el stdout debe tener exactamente 2 líneas JSON (una por archivo), fue: {stdout:?}"
+    );
+    for linea in &lineas_no_vacias {
+        assert!(
+            linea.contains("\"formato\":\"mp3\""),
+            "cada línea debe ser el JSON de un MP3, fue: {linea}"
+        );
+    }
+    assert!(
+        show.stderr.is_empty(),
+        "en modo --json el stderr debe quedar vacío, fue: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_edit_batch_edita_todos() {
+    // Un solo `edit` con dos MP3 sin tags debe escribir el título en AMBOS.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+
+    let edit = run_cli(&[
+        "edit",
+        "--title",
+        "Batch X",
+        f1.to_str().unwrap(),
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        edit.status.success(),
+        "`edit` con dos archivos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let tag1 = Tag::read_from_path(&f1).expect("Failed to read tag del primer MP3");
+    assert_eq!(
+        tag1.title(),
+        Some("Batch X"),
+        "el primer archivo debe tener el título batch"
+    );
+    let tag2 = Tag::read_from_path(&f2).expect("Failed to read tag del segundo MP3");
+    assert_eq!(
+        tag2.title(),
+        Some("Batch X"),
+        "el segundo archivo debe tener el título batch"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_edit_batch_archivo_inexistente_no_aborta() {
+    // Un archivo inexistente en medio de la lista NO debe abortar el resto: los
+    // archivos válidos se editan igualmente y el error (con su ruta) va por
+    // stderr con exit ≠ 0.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+    let inexistente = "/ruta/inexistente.mp3";
+
+    let edit = run_cli(&[
+        "edit",
+        "--title",
+        "Y",
+        f1.to_str().unwrap(),
+        inexistente,
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        !edit.status.success(),
+        "con un archivo inexistente el exit debe ser distinto de cero"
+    );
+    let stderr = String::from_utf8_lossy(&edit.stderr);
+    assert!(
+        stderr.contains(inexistente),
+        "el stderr debe mencionar la ruta inexistente, fue: {stderr}"
+    );
+
+    let tag1 = Tag::read_from_path(&f1).expect("Failed to read tag del primer MP3");
+    assert_eq!(
+        tag1.title(),
+        Some("Y"),
+        "el primer archivo debe editarse pese al fallo del inexistente"
+    );
+    let tag2 = Tag::read_from_path(&f2).expect("Failed to read tag del segundo MP3");
+    assert_eq!(
+        tag2.title(),
+        Some("Y"),
+        "el segundo archivo debe editarse pese al fallo del inexistente"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_remove_all_batch() {
+    // Un solo `remove --all` con dos MP3 con tags debe dejarlos a AMBOS sin
+    // tags: `Tag::read_from_path` debe fallar sobre los dos.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "A limpiar"]);
+    assert!(edit1.status.success());
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "A limpiar"]);
+    assert!(edit2.status.success());
+
+    let remove = run_cli(&[
+        "remove",
+        "--all",
+        f1.to_str().unwrap(),
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        remove.status.success(),
+        "`remove --all` con dos archivos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    assert!(
+        Tag::read_from_path(&f1).is_err(),
+        "el primer archivo debe quedar sin tags tras el borrado batch"
+    );
+    assert!(
+        Tag::read_from_path(&f2).is_err(),
+        "el segundo archivo debe quedar sin tags tras el borrado batch"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_edit_batch_formato_mixto() {
+    // Un MP3 y un M4A en la misma invocación: ambos deben recibir el título
+    // (cada uno releído con su librería).
+    let mp3 = create_temp_mp3();
+    let m4a = create_temp_m4a("mix");
+
+    let edit = run_cli(&[
+        "edit",
+        "--title",
+        "Mixto",
+        mp3.to_str().unwrap(),
+        m4a.to_str().unwrap(),
+    ]);
+    assert!(
+        edit.status.success(),
+        "`edit` con MP3 y M4A debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let tag_mp3 = Tag::read_from_path(&mp3).expect("Failed to read tag del MP3");
+    assert_eq!(
+        tag_mp3.title(),
+        Some("Mixto"),
+        "el MP3 debe tener el título batch"
+    );
+    let tag_m4a = read_m4a_tag(&m4a).expect("lofty debe leer el tag del M4A");
+    assert_eq!(
+        tag_m4a.get_string(ItemKey::TrackTitle),
+        Some("Mixto"),
+        "el M4A debe tener el título batch"
+    );
+
+    cleanup_file(&mp3);
+    cleanup_file(&m4a);
+}
+
+#[test]
+fn test_cli_show_sin_archivos_error() {
+    // `show` sin ningún archivo es un error de clap (argumento requerido):
+    // exit 2 y nada por stdout.
+    let output = run_cli(&["show"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "`show` sin archivos debe salir con 2 (clap), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "el stdout debe quedar vacío, fue: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fix MEDIO: `show` batch procesa TODOS los archivos pese a fallos — fase RED
+//
+// El spec del change exige que el batch procese todos los archivos aunque
+// alguno falle (ruta inexistente, formato no soportado) y que informe el fallo
+// al final con exit ≠ 0. Hoy `show` aborta al primer fallo: f2 nunca se
+// procesa y la cabecera del archivo fallido queda huérfana (en `--json` aborta
+// sin emitir NDJSON). Estos tests fijan el comportamiento correcto y FALLAN
+// hasta que el GREEN lo implemente.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_show_batch_archivo_inexistente_no_aborta() {
+    // Dos MP3 con tags en medio de un inexistente: `show` debe procesar TODOS
+    // los archivos válidos (cabecera + bloque de f1 y de f2), no dejar cabecera
+    // huérfana del que falla y terminar con exit ≠ 0 informando el motivo por
+    // stderr.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+    let inexistente = "/ruta/inexistente.mp3";
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "Uno"]);
+    assert!(edit1.status.success());
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "Dos"]);
+    assert!(edit2.status.success());
+
+    let show = run_cli(&[
+        "show",
+        f1.to_str().unwrap(),
+        inexistente,
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        !show.status.success(),
+        "`show` con un archivo inexistente en el lote debe salir con código distinto de cero"
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("Uno") && stdout.contains("Dos"),
+        "el lote debe procesar AMBOS archivos válidos pese al fallo, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("=== {} ===", f1.display()))
+            && stdout.contains(&format!("=== {} ===", f2.display())),
+        "las cabeceras de los archivos válidos deben emitirse, fue: {stdout}"
+    );
+    assert!(
+        !stdout.contains(&format!("=== {inexistente} ===")),
+        "el archivo que falla no debe dejar una cabecera huérfana, fue: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&show.stderr);
+    assert!(
+        stderr.contains(inexistente),
+        "el stderr debe mencionar la ruta inexistente en español, fue: {stderr}"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_show_json_batch_archivo_inexistente() {
+    // Mismo escenario en modo `--json`: el NDJSON debe tener UNA línea por
+    // archivo válido (f1 y f2; el inexistente no genera línea), el exit debe
+    // ser ≠ 0 y el motivo debe ir por stderr mencionando la ruta.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+    let inexistente = "/ruta/inexistente.mp3";
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "Uno"]);
+    assert!(edit1.status.success());
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "Dos"]);
+    assert!(edit2.status.success());
+
+    let show = run_cli(&[
+        "show",
+        "--json",
+        f1.to_str().unwrap(),
+        inexistente,
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        !show.status.success(),
+        "`show --json` con un archivo inexistente debe salir con código distinto de cero"
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    let lineas = stdout
+        .split('\n')
+        .filter(|linea| !linea.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lineas.len(),
+        2,
+        "el NDJSON debe tener exactamente una línea por archivo válido (f1 y f2), fue: {stdout:?}"
+    );
+    for linea in &lineas {
+        assert!(
+            linea.contains("\"formato\":\"mp3\""),
+            "cada línea debe ser el JSON de un MP3 válido, fue: {linea}"
+        );
+    }
+    let stderr = String::from_utf8_lossy(&show.stderr);
+    assert!(
+        stderr.contains(inexistente),
+        "el stderr debe mencionar la ruta inexistente en español, fue: {stderr}"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
