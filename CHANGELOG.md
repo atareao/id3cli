@@ -1,4 +1,17 @@
 # Changelog
+## [0.7.0] - 2026-10-16
+
+### Bug Fixes
+
+- Corrige la ayuda del flag --all en FLAC (el vendor no se preserva)
+
+### Documentation
+
+- *(openspec)* Archiva el change flac-support
+
+### Features
+
+- Soporta FLAC nativo (fLaC) con comentarios Vorbis, carátula PICTURE y remove --all
 ## [0.6.0] - 2026-10-16
 
 ### Bug Fixes
@@ -27,6 +40,7 @@
 ### Miscellaneous Tasks
 
 - Release v0.5.3
+- Release v0.6.0
 
 ### Testing
 
