@@ -2,7 +2,7 @@
 
 ## Estado y regla de oro
 
-> **ESTADO (2026-10-16): FASES 0-4 COMPLETADAS — releases v0.6.0, v0.7.0 (FLAC) y v0.8.0 (JSON) publicadas. Fase 5 EN EJECUCIÓN: feature completions para bash/zsh/fish (change OpenSpec `shell-completions` propuesto, en STOP a la espera de la aprobación del usuario para tocar `src/`). Release resultante prevista: v0.9.0 (minor por `feat:`).**
+> **✅ TODAS LAS FASES COMPLETADAS (2026-10-16): FASES 0-4 y FASE 5 CERRADAS. Releases v0.7.0 (FLAC), v0.8.0 (JSON) y v0.9.0 (completions bash/zsh/fish) publicadas en crates.io y GitHub Releases. Changes OpenSpec `json-output` y `shell-completions` archivados (2026-10-16). Plan director ejecutado en su totalidad.**
 
 Este plan consolida, en orden de ejecución:
 
@@ -114,7 +114,7 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 
 ## Fase 5 — Feature: completions para bash, zsh y fish (DESPUÉS de v0.8.0)
 
-> **ESTADO (2026-10-16): EN EJECUCIÓN — Fase de planificación.** Change OpenSpec `shell-completions` propuesto (proposal + design + tasks + deltas de spec: NEW `shell-completions`; MODIFIED `cli-output`, `e2e-tooling`, `e2e-verification`), en **STOP** a la espera de la aprobación del usuario. La release resultante será **v0.9.0** (minor por `feat:`), publicada con la cadena probada en v0.7.0/v0.8.0.
+> **✅ COMPLETADA (2026-10-16)** vía el change OpenSpec `shell-completions` (8 artefactos, aprobado por el usuario con «adelante»; TDD RED→GREEN). Subcomando `id3cli completions <SHELL>` (bash/zsh/fish exactos) que emite el script de completions por stdout, generado en runtime con `clap_complete ~4.5` (misma minor que clap 4.5.x) sobre el Command real del CLI vía `CommandFactory`; `GenerationShell` (FromStr con error en español) + `generate_completions()` en lib.rs; `print_block()` en output.rs (bloques multilínea con el mismo contrato de pipe cerrado → exit 0). El oráculo se alineó a la subcadena estable `complete -F _id3cli` (la salida es la NATIVA del generador: `complete -F _id3cli -o nosort -o bashdefault -o default id3cli`, validada con `bash -n`; desviación de post-procesado rechazada por el director). e2e dedicado `e2e_completions.sh` (20 aserciones) + `just e2e` ampliado a 6 scripts; falsabilidad re-demostrada (corrupción → exit 1). Suite 306→318 (174 unit + 144 int); e2e 479→499 aserciones; docs al día (README, AGENTS, copilot); test documental verde. PR #31 → squash `b2fb0d6` en `development`; change archivado `2026-10-16-shell-completions`; specs base 14→15 items. Release prevista: v0.9.0.
 
 ### 5.1 — Diseño (resumen para el checkpoint)
 
@@ -149,5 +149,5 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - [x] **Fase 2:** FLAC soportado (detección, backend `Backend::Flac` en el CLI, fixture `sample.flac`, tests integración, e2e_flac.sh, docs coherentes, hoja de ruta actualizada; change `flac-support` archivado; suite 292 tests; e2e 392 aserciones: 70+80+81+81+80).
 - [x] **Fase 3:** `show --json` implementado (change `json-output` archivado), serde+serde_json con lock commiteado, 306 tests (169 unit + 137 int), e2e JSON por formato con jq (479 aserciones), PR #29 fusionado.
 - [x] **Fase 4:** suite completa verde (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado, README/AGENTS/copilot al día, release **v0.8.0 única** publicada (PR #30, tag `v0.8.0`, GitHub Release + crates.io `max_version: 0.8.0`), `development` sincronizado con `main`.
-- [ ] **Fase 5:** completions para bash/zsh/fish (change `shell-completions`), suite con recuentos medidos, e2e con `bash -n` como oráculo, archive, PR y release única v0.9.0.
+- [x] **Fase 5:** completions para bash/zsh/fish (change `shell-completions` archivado), suite 318 (174+144), e2e 499 aserciones con `bash -n` como oráculo y falsabilidad, PR #31 fusionado, release única v0.9.0 publicada.
 - [ ] Ninguna de las fases 1-3 se toca sin aprobación explícita del usuario (este plan está **GUARDADO**, no en ejecución).
