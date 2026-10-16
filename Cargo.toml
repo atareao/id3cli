@@ -21,6 +21,8 @@ include = [
 [dependencies]
 lofty = "0.25"
 clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 # El backend anterior, solo para tests: la red de seguridad de integración

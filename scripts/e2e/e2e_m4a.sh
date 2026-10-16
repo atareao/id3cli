@@ -88,6 +88,22 @@ main() {
     check_show_absent "$E2E_V_ARTIST_JOINED"
     check_show_absent "$E2E_V_URL"
 
+    # 1b) Etapa JSON (audio fresco): el M4A recién generado por ffmpeg conserva
+    #     metadatos ilst VACÍOS (medido: `tags` es un OBJETO con todas las
+    #     claves null, no el `tags:null` tras remove --all del paso 6b). En
+    #     modo --json no hay aviso ⚠️: stderr vacío con exit 0.
+    check_json_valid
+    check_json_null '.tags.title'
+    check_json_field '.tags.pictures | length' '0'
+    check_rc 0
+    if [[ -s "$E2E_ERR" ]]; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''stderr vacío'\'': el modo --json no debe escribir en stderr sin tags: «%s»\n' "$(tr -d '\n' <"$E2E_ERR")" >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: stderr vacío en el modo --json sin tags\n'
+    fi
+
     # 2) edit con los 18 tags + --url/--original-artist (omitidos con aviso) +
     #    --year 2023 --date 2024-05-01 (colisión de ©day: gana la fecha).
     e2e_run edit "$E2E_AUDIO" \
@@ -139,6 +155,20 @@ main() {
     check_show_absent "$E2E_V_URL"                  # no se confirman (omitidos)
     check_show_absent "$E2E_V_ORIGINAL_ARTIST"
 
+    # 3b) Etapa JSON (parser independiente jq): show --json sobre el M4A ya
+    #     editado con los 18 tags. Igual que en MP3: artistas como ARRAY (se
+    #     verifica el primer elemento), track como objeto {number, total} y la
+    #     letra por SUBcadena de la primera línea (el JSON escapa los saltos
+    #     como `\n` literal; ver check_json_field en e2e_lib.sh).
+    check_json_valid
+    check_json_format 'mp4'
+    check_json_field '.tags.title' "$E2E_V_TITLE"
+    check_json_field '.tags.artists[0]' "$E2E_V_ARTIST1"     # multi-artista
+    check_json_field '.tags.album' "$E2E_V_ALBUM"
+    check_json_field '.tags.track.number' "$E2E_V_TRACK"     # = '7'
+    check_json_field '.tags.compilation' 'true'               # ©cmt/ilst → bool
+    check_json_field '.tags.lyrics' 'LetraE2E'                # 1.ª línea (subcadena)
+
     # 4) ffprobe (capa 2, format_tags): celdas de FF_TAGS con clave medida.
     #    year/date comparten ©day → verificadas explícitamente (gana la fecha).
     local tag key
@@ -175,6 +205,19 @@ main() {
     # 6) remove --all: ilst queda vacío; el audio sigue siendo reproducible.
     e2e_run remove --all "$E2E_AUDIO"
     check_rc 0
+    # 6b) Etapa JSON sin tags: tras remove --all el M4A queda sin ilst → el
+    #     caso real de `tags:null` (spec: MP4 sin ilst → tags null con exit 0 y
+    #     stderr VACÍO; el aviso ⚠️ se suprime en modo --json; medido).
+    check_json_valid
+    check_json_null '.tags'
+    check_rc 0
+    if [[ -s "$E2E_ERR" ]]; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''stderr vacío'\'': el modo --json no debe escribir en stderr sin tags: «%s»\n' "$(tr -d '\n' <"$E2E_ERR")" >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: stderr vacío en el modo --json sin tags (tags:null)\n'
+    fi
     e2e_run show "$E2E_AUDIO"
     check_show_absent "$E2E_V_TITLE"
     check_show_absent "$E2E_V_ARTIST_JOINED"
@@ -253,6 +296,15 @@ main() {
     check_show_contains "Carátulas: 1 imagen(es)"
     check_cover_roundtrip "$E2E_COVER_PNG"
     check_cover_not_roundtrip "$E2E_COVER_JPG"
+
+    # 10b) Etapa JSON de la carátula: fixture con 1 imagen (la PNG final). El
+    #      tipo del átomo covr es «Other» — NO «CoverFront» como MP3/OGG/FLAC:
+    #      lofty mapea el covr a PictureType::Other (medido 2026-10-16). El
+    #      count se verifica con `jq | length`.
+    check_json_valid
+    check_json_format 'mp4'
+    check_json_field '.tags.pictures | length' '1'
+    check_json_field '.tags.pictures[0].type' 'Other'
 
     if e2e_summary "m4a"; then
         exit 0
