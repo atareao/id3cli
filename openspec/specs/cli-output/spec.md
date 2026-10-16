@@ -7,7 +7,11 @@ El spec de `cli-output` no decía nada sobre qué debe pasar cuando la salida es
 
 ### Requirement: El cierre del pipe por el consumidor MUST NOT ser un error
 
-Si el consumidor de la salida estándar cierra el extremo de lectura antes de que el CLI termine de escribir, el CLI MUST terminar con código de salida **cero**, MUST NOT escribir ningún mensaje por stderr —ni de pánico, ni de aviso, ni la nota de `RUST_BACKTRACE`— y MUST NOT abortar el proceso con un pánico. Este contrato aplica por igual a las tres rutas de visualización (`show` sobre MP3, `show` sobre MP4/M4A y `show` sobre OGG).
+El contrato de BrokenPipe se confirma para el modo `--json`: el JSON se escribe con `outln!`, de modo que un consumidor que cierra el extremo de lectura MUST terminar con exit 0, sin pánico y sin mensajes por stderr, igual que el modo legible.
+
+#### Scenario: Pipe cerrado durante la salida JSON
+- **WHEN** el consumidor cierra el extremo de lectura mientras `show --json` escribe su línea
+- **THEN** el CLI MUST terminar con exit 0, MUST NOT emitir nada por stderr y MUST NOT generar un pánico
 
 #### Scenario: Pipe cerrado antes de leer nada sobre un MP3
 - **WHEN** el consumidor cierra el extremo de lectura antes de leer nada y se invoca `show` sobre un archivo MP3
@@ -51,7 +55,15 @@ Si la escritura en la salida estándar falla por una causa distinta del pipe cer
 
 ### Requirement: Los avisos y los errores MUST seguir saliendo por stderr
 
-Este cambio MUST NOT alterar el flujo de los mensajes de aviso y de error del CLI: siguen saliendo por stderr y los códigos de salida que ya tenían MUST NOT cambiar —cero para los avisos, distinto de cero para los errores—. La salida estándar MUST NOT recibir ningún aviso.
+En modo legible, los avisos (p. ej. «⚠️ No se encontraron tags ID3 en …») MUST seguir saliendo por stderr con exit 0, sin cambios. En modo JSON, ese aviso concreto de «sin tags» MUST NO emitirse: el caso se representa con `"tags": null` en el propio JSON y el stderr MUST quedar vacío (salvo errores reales, que siguen yendo por stderr con exit ≠ 0). Los avisos de degradación de `edit` (`--url`, `--original-artist`, etc.) no cambian: siguen por stderr en cualquier modo.
+
+#### Scenario: Aviso de sin tags en modo legible (sin cambios)
+- **WHEN** se ejecuta `id3cli show` (sin `--json`) sobre un MP3 sin tags
+- **THEN** el aviso en español MUST escribirse por stderr y el exit code MUST ser 0, exactamente como antes del change
+
+#### Scenario: Sin aviso de sin tags en modo JSON
+- **WHEN** se ejecuta `id3cli show --json` sobre un MP3 sin tags
+- **THEN** el stdout MUST contener el JSON con `"tags": null`, el stderr MUST estar vacío y el exit code MUST ser 0
 
 #### Scenario: Un campo omitido con aviso sobre un M4A
 - **WHEN** se invoca `edit --url` sobre un archivo M4A, campo que ese formato omite
