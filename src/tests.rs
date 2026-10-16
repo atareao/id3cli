@@ -5287,3 +5287,112 @@ fn test_generate_completions_fish() {
         "el script de fish debe emitir líneas complete -c id3cli, fue: {script}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Modo batch (múltiples archivos por invocación) — change batch-processing,
+// fase RED
+//
+// Fase RED: los símbolos de despacho (`batch_show_heading`, `batch_ndjson`,
+// `BatchOutcome` y `batch_dispatch`) NO existen todavía, así que estos tests no
+// compilan hasta el GREEN (E0425 «cannot find»). El contrato del despacho por
+// archivo: se procesan TODOS (un fallo no aborta el resto) y los errores se
+// acumulan como pares (ruta, motivo en español).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_show_heading_devuelve_cabecera() {
+    // La cabecera de `show` en modo batch separa visualmente la salida de cada
+    // archivo: `=== <ruta> ===`, con la ruta tal y como se pasó al CLI.
+    let cabecera = batch_show_heading(Path::new("/ruta/a.mp3"));
+
+    assert_eq!(
+        cabecera, "=== /ruta/a.mp3 ===",
+        "la cabecera debe ser la ruta entre tres signos igual, fue: {cabecera}"
+    );
+}
+
+#[test]
+fn test_batch_ndjson_una_linea_por_archivo() {
+    // El modo `--json` con varios archivos emite NDJSON: una línea JSON por
+    // archivo, en el orden de entrada, separadas por `\n` y con `\n` final
+    // (consumible con `jq -s`).
+    let lineas = ["{\"a\":1}".to_string(), "{\"b\":2}".to_string()];
+
+    let ndjson = batch_ndjson(&lineas);
+
+    assert_eq!(
+        ndjson, "{\"a\":1}\n{\"b\":2}\n",
+        "cada línea debe conservar su orden y el bloque debe terminar en \\n, fue: {ndjson:?}"
+    );
+}
+
+#[test]
+fn test_batch_dispatch_un_fallo_no_aborta_el_resto() {
+    // Con tres rutas (dos válidas y una que el closure rechaza), el despacho
+    // acumula el error con su ruta y su motivo, y sigue procesando el resto.
+    // (El closure rechaza las que terminan en "malo", de ahí el nombre del
+    // tercer token sin extensión.)
+    let rutas = vec![
+        PathBuf::from("uno.mp3"),
+        PathBuf::from("malo"),
+        PathBuf::from("dos.mp3"),
+    ];
+
+    let resultado = batch_dispatch(&rutas, |p| {
+        if p.to_string_lossy().ends_with("malo") {
+            Err("motivo en español".to_string())
+        } else {
+            Ok(p.to_string_lossy().to_string())
+        }
+    });
+
+    assert_eq!(
+        resultado.results,
+        vec!["uno.mp3".to_string(), "dos.mp3".to_string()],
+        "las rutas válidas deben procesarse en orden, sin el error"
+    );
+    assert_eq!(
+        resultado.errors.len(),
+        1,
+        "debe acumularse exactamente un error"
+    );
+    assert_eq!(
+        resultado.errors[0].0,
+        PathBuf::from("malo"),
+        "el error debe llevar la ruta del archivo que falló"
+    );
+    assert_eq!(
+        resultado.errors[0].1, "motivo en español",
+        "el error debe llevar el motivo devuelto por el closure"
+    );
+    assert!(
+        resultado.has_errors(),
+        "con un fallo, has_errors() debe ser true"
+    );
+}
+
+#[test]
+fn test_batch_dispatch_todos_ok_sin_errores() {
+    // Con todas las rutas aceptadas no hay errores y has_errors() es false.
+    let rutas = vec![
+        PathBuf::from("uno.mp3"),
+        PathBuf::from("dos.mp3"),
+        PathBuf::from("tres.mp3"),
+    ];
+
+    let resultado = batch_dispatch(&rutas, |p| Ok(p.to_string_lossy().to_string()));
+
+    assert_eq!(
+        resultado.results.len(),
+        3,
+        "las tres rutas deben procesarse"
+    );
+    assert!(
+        resultado.errors.is_empty(),
+        "sin fallos la lista de errores debe quedar vacía"
+    );
+    assert!(
+        !resultado.has_errors(),
+        "sin fallos, has_errors() debe ser false"
+    );
+}
