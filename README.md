@@ -685,6 +685,8 @@ id3cli/
 ├── tests/
 │   ├── integration_test.rs        # Tests de integración (5438 líneas)
 │   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a, sample.ogg y sample.opus) y sus scripts de regeneración, incluidos generate_sample_ogg.sh y generate_sample_opus.sh
+├── scripts/
+│   └── e2e/                       # Verificación e2e local: runner común (e2e_lib.sh) y un script por formato (e2e_mp3.sh, e2e_m4a.sh, e2e_ogg.sh, e2e_opus.sh)
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
@@ -784,6 +786,55 @@ cargo test --test '*'   # Solo tests de integración (118)
 - Opus: mismo backend de comentarios Vorbis que OGG, con detección por `OpusHead` y flujo completo `show`/`edit`/`remove` verificado contra el fixture real
 - Total de pista y temporada (`N/T`) en los tres formatos, incluida la conservación del total preexistente y el borrado del par número/total como una unidad
 - Coherencia documental: el recuento real de tests y los formatos de `Cargo.toml` (MP3, MP4 y OGG) figuran igual en `README.md` y `Cargo.toml`, y la coherencia del soporte de Opus se verifica contra el código
+
+---
+
+## Verificación e2e local
+
+Además de la suite de Rust, el repositorio incluye un tooling de **verificación e2e local** (`scripts/e2e/`) que ejercita el binario real de extremo a extremo: escribe y relee los **20 tags** de `VALID_TAG_NAMES` y las carátulas **JPG y PNG** sobre los **cuatro formatos soportados** (MP3, MP4/M4A, OGG y Opus). Es una verificación de regresión de lectura/escritura del flujo completo `edit → show → remove`, contrastada con un **lector independiente**; está pensada para no sobrecargar el repositorio, así que **todo el material se genera al vuelo y nada se versiona**.
+
+**Qué verifica** (dos capas por formato):
+
+- **Capa 1 — `id3cli show`:** cada uno de los 20 tags de `VALID_TAG_NAMES` (`title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`) se escribe con `edit` y se relee con `show` campo a campo.
+- **Capa 2 — `ffprobe` como lector independiente:** la metadata se consulta con `ffprobe` (`format_tags` en MP3/MP4, `stream_tags` en OGG/Opus); en OGG/Opus se comprueba además en los **bytes crudos** del comentario Vorbis (incluido el *vendor* preservado tras `remove --all`).
+- **Cobertura por formato:** MP3 verifica los **20/20** tags; MP4, OGG y Opus verifican los 18 relevantes y comprueban que `url` y `original_artist` **se omiten con aviso** (stderr) y no aparecen en `ffprobe`.
+- **Carátulas:** `cover.jpg` y `cover.png` (generadas con `testsrc`) se añaden **cada una sobre audio recién generado** y se comparan **byte a byte** contra la extracción de `ffmpeg` (`-map 0:v:0 -c copy`), es decir, *roundtrip* de bytes.
+- **Borrado:** `remove` de un campo con el resto intacto y `remove --all` (en MP3 el bloque ID3v2 **desaparece físicamente** del archivo; en OGG/Opus el comentario Vorbis se **vacía preservando el vendor**), con el audio final **reproducible** (duración conservada).
+
+**Cómo se ejecuta** (desde la raíz del repositorio):
+
+```bash
+just e2e            # los 4 formatos en serie; se detiene con el exit code del primero que falle
+just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus
+```
+
+O directamente, sin `just`:
+
+```bash
+scripts/e2e/e2e_mp3.sh
+```
+
+**Flags** (los aceptan los scripts directos y las recipes por extensión; en `just e2e` el binario lo fija la pre-construcción de la recipe — `--keep` y otros extras sí se reenvían):
+
+| Flag       | Efecto                                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `--bin RUTA` | Usa el binario indicado en lugar de construir. Por defecto se ejecuta `cargo build --locked` **una vez** y se usa `target/debug/id3cli`. `just e2e` pre-construye una vez y pasa `--bin target/debug/id3cli` a los scripts; los scripts invocados directamente construyen si no reciben `--bin` |
+| `--keep`   | Conserva el directorio temporal al terminar, para depurar                                                                  |
+
+```bash
+just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 4 formatos
+just e2e --keep                                       # lo mismo conservando los temporales
+just e2e-opus --bin target/release/id3cli --keep      # opus con binario custom, conservando el temporal
+scripts/e2e/e2e_m4a.sh --keep
+```
+
+**Localidad:** todo el material (audio de silencio `anullsrc` y carátulas `testsrc`) se genera bajo `/tmp/opencode/e2e/<ext>/` dentro del directorio temporal de la ejecución (`mktemp -d`) y se elimina con un `trap` al terminar; con `--keep` el temporal se conserva y el script indica dónde queda. El repositorio queda sin binarios ni imágenes generados.
+
+**Requisitos:** `ffmpeg` y `ffprobe` en el `PATH` (y `cargo` para el build por defecto). Si falta alguna, el script falla con exit 1 y un mensaje en español indicando la herramienta ausente.
+
+**Códigos de salida:** `0` = todas las aserciones pasan; `1` = fallo de alguna aserción, con un mensaje en español que identifica el **nombre de la aserción fallida** y el valor esperado frente al obtenido.
+
+> [!note] En `just` >= 1.58 las recipes reenvían sus argumentos con un parámetro variádico (`*args` + `{{args}}`), porque el shell de la recipe ya no recibe los argumentos vía `"$@"`. Por eso `just e2e --bin …` recibe `--bin` sin necesidad del separador `--`.
 
 ---
 
