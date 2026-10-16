@@ -36,7 +36,7 @@ use lofty::id3::v2::{
     Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
 use lofty::ogg::tag::VorbisComments;
-use lofty::ogg::{OggPictureStorage, VorbisFile};
+use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
 use lofty::picture::{MimeType, Picture, PictureInformation, PictureType};
 use lofty::prelude::AudioFile;
 use lofty::tag::items::Timestamp;
@@ -911,7 +911,7 @@ const FORMAT_PROBE_LEN: usize = 512;
 ///
 /// Ogg **no** figura aquí: el contenedor Ogg se decide por el códec de su primer
 /// paquete en [`detect_format_from_bytes`], no por la cabecera de página, porque
-/// Vorbis está soportado mientras que Opus, Speex, FLAC y Theora no.
+/// Vorbis y Opus están soportados mientras que Speex, FLAC y Theora no.
 const UNSUPPORTED_MAGIC: &[&[u8]] = &[
     b"fLaC", // FLAC nativo (fuera de Ogg)
     b"RIFF", // Contenedores RIFF (WAV, AVI, …)
@@ -934,8 +934,12 @@ pub enum AudioFormat {
     /// (`OggS`, versión `0`) y por el identificador `\x01vorbis` del primer
     /// paquete. Soportado.
     OggVorbis,
+    /// Contenedor Ogg con el códec Opus, reconocido por la cabecera de página
+    /// (`OggS`, versión `0`) y por el identificador `OpusHead` del primer
+    /// paquete. Soportado.
+    OggOpus,
     /// Formato de audio reconocible pero fuera de alcance (FLAC, WAV, AIFF, APE…,
-    /// o un contenedor Ogg con un códec distinto de Vorbis: Opus, Speex, FLAC,
+    /// o un contenedor Ogg con un códec distinto de Vorbis u Opus: Speex, FLAC,
     /// Theora…).
     Unsupported,
     /// Contenido no reconocible o archivo demasiado corto para decidirlo.
@@ -944,10 +948,11 @@ pub enum AudioFormat {
 
 /// Detecta el formato de audio de un archivo a partir de su contenido.
 ///
-/// Reconoce MP3, MP4 y Ogg Vorbis (véase [`detect_format_from_bytes`]). Recibe la
-/// ruta únicamente para **leer** sus primeros bytes: la extensión del nombre no
-/// interviene en la decisión. El archivo se abre solo en modo lectura, de modo
-/// que esta función nunca lo modifica.
+/// Reconoce MP3, MP4 y los contenedores Ogg con códec Vorbis u Opus (véase
+/// [`detect_format_from_bytes`]). Recibe la ruta únicamente para **leer** sus
+/// primeros bytes: la extensión del nombre no interviene en la decisión. El
+/// archivo se abre solo en modo lectura, de modo que esta función nunca lo
+/// modifica.
 ///
 /// # Errores
 ///
@@ -969,10 +974,11 @@ pub fn detect_format(path: &Path) -> io::Result<AudioFormat> {
 ///
 /// * MP3: cabecera ID3v2 (`ID3`) o cabecera de frame MPEG válida.
 /// * MP4: átomo `ftyp` en el offset 4, con independencia del brand declarado.
-/// * Ogg Vorbis: cabecera de página `OggS` completa, de versión `0`, cuyo primer
-///   paquete empieza por el identificador de códec `\x01vorbis`. La decisión es
-///   por **códec**, no por contenedor: un Ogg es un sobre, y Opus, Speex, FLAC o
-///   Theora siguen fuera de alcance.
+/// * Ogg (Vorbis u Opus): cabecera de página `OggS` completa, de versión `0`,
+///   cuyo primer paquete empieza por el identificador de códec `\x01vorbis`
+///   (Vorbis) u `OpusHead` (Opus). La decisión es por **códec**, no por
+///   contenedor: un Ogg es un sobre, y Speex, FLAC o Theora siguen fuera de
+///   alcance.
 /// * [`AudioFormat::Unsupported`]: magic bytes de un formato conocido pero fuera
 ///   de alcance, o un contenedor Ogg con un códec no soportado.
 /// * [`AudioFormat::Unknown`]: contenido no reconocible o demasiado corto para
@@ -994,7 +1000,8 @@ pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
     // página. La cabecera de página son 27 bytes y el primer paquete empieza en
     // `27 + n`, donde `n` es el número de segmentos declarado en el byte 26 (la
     // tabla de segmentos ocupa tantos bytes como segmentos hay). Un Ogg es solo
-    // un sobre: Opus, Speex, FLAC y Theora siguen fuera de alcance.
+    // un sobre: Vorbis y Opus están soportados, mientras que Speex, FLAC y
+    // Theora siguen fuera de alcance.
     if header.starts_with(b"OggS") {
         // Sin la cabecera de página completa no se puede siquiera situar el
         // primer paquete: el formato queda sin determinar.
@@ -1044,10 +1051,10 @@ pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
         }
 
         let identifier = &header[payload..payload + packet_len];
-        return if identifier.starts_with(b"\x01vorbis") {
-            AudioFormat::OggVorbis
-        } else {
-            AudioFormat::Unsupported
+        return match identifier {
+            id if id.starts_with(b"\x01vorbis") => AudioFormat::OggVorbis,
+            id if id.starts_with(b"OpusHead") => AudioFormat::OggOpus,
+            _ => AudioFormat::Unsupported,
         };
     }
 
@@ -2311,12 +2318,15 @@ fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
     let _ = tag.insert_picture(picture, Some(information));
 }
 
-/// Lee el comentario de Vorbis de un archivo Ogg Vorbis.
+/// Lee el comentario de Vorbis de un archivo Ogg.
 ///
-/// El formato se decide por el **contenido**, no por la extensión del nombre: se
-/// usa el lector concreto [`VorbisFile`], que sondea los *magic bytes*. El
-/// comentario es obligatorio en el contenedor, por lo que siempre existe: no se
-/// envuelve en `Option`.
+/// Sirve a cualquier contenedor Ogg con comentarios de Vorbis: el códec del
+/// primer paquete decide el lector concreto, [`VorbisFile`] para Vorbis y
+/// [`OpusFile`] para Opus, de modo que un `.opus` se lee con la misma función
+/// que un `.ogg`. El formato se decide por el **contenido**, no por la extensión
+/// del nombre: el despacho reutiliza la misma sonda de la primera página que
+/// [`detect_format`]. El comentario es obligatorio en el contenedor, por lo que
+/// siempre existe: no se envuelve en `Option`.
 ///
 /// Se devuelve el tipo concreto [`VorbisComments`] (no el `Tag` genérico)
 /// porque conserva las claves ajenas al mapeo con su **caja original** y el
@@ -2325,11 +2335,25 @@ fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
 /// # Errores
 ///
 /// Retorna un error si el archivo no se puede leer o no se puede interpretar
-/// como Ogg Vorbis.
+/// como un contenedor Ogg con comentarios de Vorbis (Vorbis u Opus).
 pub fn read_vorbis_tag(path: &Path) -> Result<VorbisComments, Box<dyn std::error::Error>> {
-    let mut file = File::open(path)?;
-    let vorbis_file = VorbisFile::read_from(&mut file, ParseOptions::default())?;
-    Ok(vorbis_file.vorbis_comments().clone())
+    match detect_format(path)? {
+        AudioFormat::OggVorbis => {
+            let mut file = File::open(path)?;
+            let vorbis_file = VorbisFile::read_from(&mut file, ParseOptions::default())?;
+            Ok(vorbis_file.vorbis_comments().clone())
+        }
+        AudioFormat::OggOpus => {
+            let mut file = File::open(path)?;
+            let opus_file = OpusFile::read_from(&mut file, ParseOptions::default())?;
+            Ok(opus_file.vorbis_comments().clone())
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "el archivo no es un contenedor Ogg con comentarios de Vorbis",
+        )
+        .into()),
+    }
 }
 
 /// Escribe el comentario de Vorbis en un archivo Ogg Vorbis.

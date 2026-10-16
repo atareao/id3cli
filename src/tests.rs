@@ -1446,9 +1446,11 @@ fn test_detect_format_ogg_vorbis() {
 #[test]
 fn test_detect_format_ogg_other_codecs() {
     // Contenedor Ogg con un códec reconocible pero fuera de alcance: son
-    // formatos no soportados (`Unsupported`), no contenido desconocido.
-    let codecs: [&[u8]; 4] = [
-        b"OpusHead",   // Opus
+    // formatos no soportados (`Unsupported`), no contenido desconocido. Opus
+    // deja de estar en esta lista: la detección pasa a reconocerlo con
+    // `AudioFormat::OggOpus`, pero Speex, FLAC dentro de Ogg y Theora siguen
+    // fuera de alcance.
+    let codecs: [&[u8]; 3] = [
         b"Speex   ",   // Speex (con los tres espacios finales)
         b"\x7fFLAC",   // FLAC dentro de Ogg
         b"\x80theora", // vídeo Theora
@@ -1462,6 +1464,39 @@ fn test_detect_format_ogg_other_codecs() {
             String::from_utf8_lossy(codec)
         );
     }
+}
+
+#[test]
+fn test_detect_format_ogg_opus() {
+    // FASE RED del grupo 1 del change `opus-support`: Opus pasa de
+    // «reconocible pero fuera de alcance» (`Unsupported`) a soportado. Como la
+    // variante `AudioFormat::OggOpus` no existe todavía, este test NO compila:
+    // rojo esperado = `error[E0599]: no variant, associated function, or
+    // constant named `OggOpus` found for enum `AudioFormat`` (anotado en
+    // `openspec/changes/opus-support/tasks.md`).
+    let page = synthetic_ogg_page(b"OpusHead");
+    assert_eq!(detect_format_from_bytes(&page), AudioFormat::OggOpus);
+
+    // La extensión del nombre no interviene: el mismo contenido renombrado
+    // como `.mp3` sigue reconociéndose por sus bytes como Opus.
+    let path = create_temp_file("detect_opus_as_mp3", "mp3", &page);
+    assert_eq!(
+        detect_format(&path).unwrap(),
+        AudioFormat::OggOpus,
+        "un contenedor Ogg Opus con nombre .mp3 debe reconocerse por contenido"
+    );
+    cleanup_file(&path);
+
+    // Por bytes: el identificador de códec vive en el offset 28, así que se
+    // pasan 64 bytes (no 16) para poder reconocerlo. La página sintética
+    // (28 + 8 bytes) es más corta que los 64 de la sonda, así que se rellena
+    // con ceros hasta esa longitud.
+    let mut padded = page.clone();
+    padded.resize(64, 0);
+    assert_eq!(
+        detect_format_from_bytes(&padded[..64]),
+        AudioFormat::OggOpus
+    );
 }
 
 #[test]
@@ -4603,7 +4638,7 @@ fn cifra_de_escudo(markdown: &str) -> Option<u64> {
 }
 
 #[test]
-fn test_documentacion_describe_los_tres_formatos() {
+fn test_documentacion_describe_los_formatos_soportados() {
     let readme = include_str!("../README.md");
     let manifiesto = include_str!("../Cargo.toml");
 
@@ -4615,15 +4650,16 @@ fn test_documentacion_describe_los_tres_formatos() {
 
     let mut fallos: Vec<String> = Vec::new();
 
-    // (1) Los tres formatos soportados en `## Formatos admitidos`: la sección
-    //     nombra MP3, MP4 y OGG; ninguna línea de «No soportado» menciona OGG; y
-    //     esas líneas siguen listando Opus, Speex, FLAC, WAV, AIFF y APE.
+    // (1) Los formatos soportados en `## Formatos admitidos`: la sección
+    //     nombra MP3, MP4, OGG y Opus; ninguna línea de «No soportado» menciona
+    //     OGG ni Opus; y esas líneas siguen listando Speex, FLAC, WAV, AIFF y
+    //     APE.
     match seccion_markdown(readme, "contenga «Formatos admitidos»", |h| {
         h.contains("Formatos admitidos")
     }) {
         Err(error) => fallos.push(format!("[1] {error}")),
         Ok(seccion) => {
-            for formato in ["MP3", "MP4", "OGG"] {
+            for formato in ["MP3", "MP4", "OGG", "Opus"] {
                 if !seccion.contains(formato) {
                     fallos.push(format!(
                         "[1] la sección «Formatos admitidos» no nombra {formato}"
@@ -4648,7 +4684,7 @@ fn test_documentacion_describe_los_tres_formatos() {
                 }
             }
             let texto_no_soportados = no_soportados.join("\n");
-            for pendiente in ["Opus", "Speex", "FLAC", "WAV", "AIFF", "APE"] {
+            for pendiente in ["Speex", "FLAC", "WAV", "AIFF", "APE"] {
                 if !texto_no_soportados.contains(pendiente) {
                     fallos.push(format!(
                         "[1] las líneas de «No soportado» ya no mencionan {pendiente}"
@@ -4731,7 +4767,8 @@ fn test_documentacion_describe_los_tres_formatos() {
         );
     }
 
-    // (4) Hoja de ruta: OGG como soportado y Opus, Speex y FLAC como pendientes.
+    // (4) Hoja de ruta: OGG y Opus como soportados y Speex y FLAC como
+    //     pendientes.
     match seccion_markdown(readme, "contenga «Roadmap»", |h| h.contains("Roadmap")) {
         Err(error) => fallos.push(format!("[4] {error}")),
         Ok(seccion) => {
@@ -4745,7 +4782,17 @@ fn test_documentacion_describe_los_tres_formatos() {
                         .to_string(),
                 );
             }
-            for pendiente in ["Opus", "Speex", "FLAC"] {
+            let opus_hecho = seccion.lines().any(|linea| {
+                let recortada = linea.trim_start();
+                recortada.starts_with("- [x]") && linea_contiene_palabra(recortada, "Opus")
+            });
+            if !opus_hecho {
+                fallos.push(
+                    "[4] la hoja de ruta no marca Opus como soportado (falta una línea `- [x]` que lo mencione)"
+                        .to_string(),
+                );
+            }
+            for pendiente in ["Speex", "FLAC"] {
                 let sigue_pendiente = seccion.lines().any(|linea| {
                     let recortada = linea.trim_start();
                     recortada.starts_with("- [ ]") && linea_contiene_palabra(recortada, pendiente)
@@ -4833,8 +4880,8 @@ fn test_documentacion_describe_los_tres_formatos() {
 
     assert!(
         fallos.is_empty(),
-        "La documentación no cumple el contrato de los tres formatos (OGG) y el total de \
-         pista/temporada. {} comprobación(es) fallida(s):\n- {}",
+        "La documentación no cumple el contrato de los formatos (MP3, MP4, OGG y Opus) y el total \
+         de pista/temporada. {} comprobación(es) fallida(s):\n- {}",
         fallos.len(),
         fallos.join("\n- ")
     );

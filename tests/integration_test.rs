@@ -3004,6 +3004,30 @@ fn create_temp_ogg() -> PathBuf {
     path
 }
 
+/// Ruta absoluta al fixture Ogg Opus real y sin campos de usuario.
+///
+/// Es un Ogg Opus genuino: patrón `OggS` en el offset 0, versión `0` en el
+/// byte 4, un segmento declarado en el byte 26 y el primer paquete `OpusHead`
+/// en el offset 28. Solo lleva el comentario obligatorio (vendor `ffmpeg` y la
+/// clave `ENCODER`), de modo que `edit` ejercita la creación de campos desde
+/// cero. Se regenera con `tests/fixtures/generate_sample_opus.sh`.
+fn fixture_opus_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.opus")
+}
+
+/// Copia el fixture Ogg Opus real a una ruta temporal única.
+///
+/// Réplica de `create_temp_ogg`: copia el fixture versionado a una ruta
+/// temporal única; nunca se opera sobre el fixture versionado directamente.
+fn create_temp_opus() -> PathBuf {
+    let path = unique_temp_path("audio", "opus");
+    fs::copy(fixture_opus_path(), &path).expect("Failed to copy OPUS fixture");
+    path
+}
+
 /// Construye una página Ogg de un solo paquete con el identificador de códec
 /// indicado como primer (y único) paquete.
 ///
@@ -3213,13 +3237,13 @@ fn test_cli_ogg_remove_all_empties_comment_and_preserves_vendor() {
 
 #[test]
 fn test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched() {
-    // Un contenedor Ogg es un sobre: solo Vorbis está soportado. Opus y Speex
-    // se reconocen como contenido conocido pero fuera de alcance. El test NO
-    // usa `OggS` a secas (eso es una página sin primer paquete, que cae en
-    // «formato no determinado»): construye páginas Ogg **válidas** con el
-    // identificador de códec en el primer paquete para que el rechazo sea por
-    // códec y no por página incompleta.
-    let cases: [(&str, &[u8]); 2] = [("opus", b"OpusHead"), ("speex", b"Speex   ")];
+    // Un contenedor Ogg es un sobre: Vorbis y Opus están soportados. Speex
+    // (y FLAC dentro de Ogg o Theora) se reconocen como contenido conocido
+    // pero fuera de alcance. El test NO usa `OggS` a secas (eso es una página
+    // sin primer paquete, que cae en «formato no determinado»): construye
+    // páginas Ogg **válidas** con el identificador de códec en el primer
+    // paquete para que el rechazo sea por códec y no por página incompleta.
+    let cases: [(&str, &[u8]); 1] = [("speex", b"Speex   ")];
 
     for (label, codec) in cases {
         let path = write_temp_bytes(label, "ogg", &synthetic_ogg_page(codec));
@@ -3248,8 +3272,11 @@ fn test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched() {
                 "'{op}' sobre un Ogg con códec {label} debe indicar formato no soportado, fue: {stderr}"
             );
             assert!(
-                stderr.contains("MP3") && stderr.contains("MP4") && stderr.contains("OGG"),
-                "el mensaje debe enumerar los formatos soportados (MP3, MP4 y OGG), fue: {stderr}"
+                stderr.contains("MP3")
+                    && stderr.contains("MP4")
+                    && stderr.contains("OGG")
+                    && stderr.contains("Opus"),
+                "el mensaje debe enumerar los formatos soportados (MP3, MP4, OGG y Opus), fue: {stderr}"
             );
             assert!(
                 output.stdout.is_empty(),
@@ -3265,6 +3292,309 @@ fn test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched() {
 
         cleanup_file(&path);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Opus (Ogg): enrutado del CLI y operaciones completas (grupo 3 del change
+// `opus-support`)
+// ---------------------------------------------------------------------------
+//
+// Fase RED: el binario actual rechaza `.opus` como «formato no soportado», así
+// que estos tests fallan en los asserts de `success()` hasta la fase GREEN
+// (grupo 4), que enruta `AudioFormat::OggOpus` al backend OGG. Los asserts de
+// estructura (patrón `OggS`, primer paquete `OpusHead`) son independientes del
+// enum `AudioFormat`, que todavía no tiene la variante `OggOpus`: los tests de
+// integración NO la nombran para que la suite existente siga compilando.
+
+/// `show` sobre un `.opus` que ya lleva un comentario escrito con un lector
+/// independiente (lofty) debe mostrarlo por stdout.
+#[test]
+fn test_cli_opus_show_existing_tag() {
+    use lofty::config::WriteOptions;
+    use lofty::ogg::tag::VorbisComments;
+    use lofty::tag::TagExt;
+
+    let path = create_temp_opus();
+
+    // Pre-escritura con `lofty` directamente: independiente del binario y de
+    // `id3cli`.
+    let mut tag = VorbisComments::new();
+    tag.insert("TITLE".to_string(), "Título Opus".to_string());
+    tag.insert("ARTIST".to_string(), "Artista".to_string());
+    TagExt::save_to_path(&tag, &path, WriteOptions::default())
+        .expect("lofty debe poder pre-escribir el .opus");
+
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show` sobre un .opus con tag debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("Título Opus"),
+        "`show` debe mostrar el título preexistente, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("Artista"),
+        "`show` debe mostrar el artista preexistente, stdout: {stdout}"
+    );
+
+    cleanup_file(&path);
+}
+
+/// `edit` con título, artista y álbum sobre un `.opus`, releído luego con un
+/// lector independiente; también `show` debe mostrarlos.
+#[test]
+fn test_cli_opus_edit_title_artist_album_then_read_back() {
+    let path = create_temp_opus();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit",
+        file,
+        "--title",
+        "Canción Opus",
+        "--artist",
+        "Artista Opus",
+        "--album",
+        "Álbum Opus",
+    ]);
+    assert!(
+        edit.status.success(),
+        "`edit` sobre un .opus debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Relectura independiente del binario con `lofty` (vía la lectura concreta
+    // de la librería), igual que hacen los tests OGG.
+    let tag = id3cli::read_vorbis_tag(&path).expect("lofty debe releer el .opus");
+    assert_eq!(tag.get("TITLE"), Some("Canción Opus"));
+    assert_eq!(tag.get("ARTIST"), Some("Artista Opus"));
+    assert_eq!(tag.get("ALBUM"), Some("Álbum Opus"));
+
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    for value in ["Canción Opus", "Artista Opus", "Álbum Opus"] {
+        assert!(
+            stdout.contains(value),
+            "`show` debe mostrar {value:?}, stdout: {stdout}"
+        );
+    }
+
+    cleanup_file(&path);
+}
+
+/// `edit --track 7/12 --season 1/2` sobre un `.opus` escribe el par
+/// número/total en las claves de Vorbis: `TRACKNUMBER`/`TRACKTOTAL` y
+/// `DISCNUMBER`/`DISCTOTAL` (el total como texto, como en OGG).
+#[test]
+fn test_cli_opus_edit_track_season_totals() {
+    let path = create_temp_opus();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&["edit", file, "--track", "7/12", "--season", "1/2"]);
+    assert!(
+        edit.status.success(),
+        "`edit --track 7/12 --season 1/2` sobre un .opus debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let tag = id3cli::read_vorbis_tag(&path).expect("lofty debe releer el .opus");
+    assert_eq!(tag.get("TRACKNUMBER"), Some("7"));
+    assert_eq!(tag.get("TRACKTOTAL"), Some("12"));
+    assert_eq!(tag.get("DISCNUMBER"), Some("1"));
+    assert_eq!(tag.get("DISCTOTAL"), Some("2"));
+
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    let pista = show_line(&stdout, ROTULO_PISTA)
+        .unwrap_or_else(|| panic!("`show` debe mostrar la pista: {stdout}"));
+    assert!(
+        pista.trim_end().ends_with("7/12"),
+        "la pista debe mostrarse como 7/12, línea: {pista:?}"
+    );
+    let temporada = show_line(&stdout, ROTULO_TEMPORADA)
+        .unwrap_or_else(|| panic!("`show` debe mostrar la temporada: {stdout}"));
+    assert!(
+        temporada.trim_end().ends_with("1/2"),
+        "la temporada debe mostrarse como 1/2, línea: {temporada:?}"
+    );
+
+    cleanup_file(&path);
+}
+
+/// `edit --cover` con las mismas imágenes que los tests OGG (JPEG y PNG),
+/// releída con un lector independiente: una carátula frontal con su MIME.
+#[test]
+fn test_cli_opus_edit_cover_then_read_back() {
+    use lofty::ogg::OggPictureStorage;
+
+    for (extension, bytes, mime) in [
+        ("jpg", JPEG_BYTES, "image/jpeg"),
+        ("png", PNG_BYTES, "image/png"),
+    ] {
+        let path = create_temp_opus();
+        let image = write_temp_image(&format!("opus_cover_{extension}"), extension, bytes);
+
+        let edit = run_cli(&[
+            "edit",
+            path.to_str().unwrap(),
+            "--cover",
+            image.to_str().unwrap(),
+        ]);
+        assert!(
+            edit.status.success(),
+            "`edit --cover .{extension}` sobre un .opus debe salir con 0, stderr: {}",
+            String::from_utf8_lossy(&edit.stderr)
+        );
+
+        let tag = id3cli::read_vorbis_tag(&path).expect("lofty debe releer el .opus");
+        assert_eq!(
+            tag.pictures().len(),
+            1,
+            "{extension}: debe haber una imagen"
+        );
+        assert_eq!(
+            tag.pictures()[0].0.mime_type().map(|m| m.as_str()),
+            Some(mime),
+            "{extension}: el MIME debe derivarse de la extensión"
+        );
+
+        cleanup_file(&path);
+        cleanup_file(&image);
+    }
+}
+
+/// `remove` de un campo concreto sobre un `.opus`: el campo desaparece y los no
+/// mencionados sobreviven.
+#[test]
+fn test_cli_opus_remove_field_keeps_rest() {
+    let path = create_temp_opus();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit", file, "--title", "T", "--artist", "A", "--album", "Alb",
+    ]);
+    assert!(edit.status.success());
+
+    let remove = run_cli(&["remove", file, "title"]);
+    assert!(
+        remove.status.success(),
+        "`remove title` sobre un .opus debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let tag = id3cli::read_vorbis_tag(&path).expect("el .opus debe seguir legible");
+    assert_eq!(tag.get("TITLE"), None, "el título debe desaparecer");
+    assert_eq!(
+        tag.get("ARTIST"),
+        Some("A"),
+        "el artista no mencionado sobrevive"
+    );
+    assert_eq!(
+        tag.get("ALBUM"),
+        Some("Alb"),
+        "el álbum no mencionado sobrevive"
+    );
+
+    cleanup_file(&path);
+}
+
+/// `remove --all` sobre un `.opus` vacía el comentario (vendor `ffmpeg`
+/// preservado) y deja el archivo siendo un Opus reproducible por contenido.
+#[test]
+fn test_cli_opus_remove_all_preserves_vendor() {
+    use lofty::ogg::OggPictureStorage;
+
+    let path = create_temp_opus();
+    let file = path.to_str().unwrap();
+    let bytes = fs::read(&path).expect("Failed to read temp file");
+    let first = 27 + bytes[26] as usize;
+    assert_eq!(
+        &bytes[first..first + 8],
+        b"OpusHead",
+        "el fixture debe ser un Ogg Opus por contenido"
+    );
+
+    let edit = run_cli(&["edit", file, "--title", "T", "--artist", "A"]);
+    assert!(edit.status.success());
+
+    let remove = run_cli(&["remove", file, "--all"]);
+    assert!(
+        remove.status.success(),
+        "`remove --all` sobre un .opus debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    // No queda ningún campo de usuario ni carátula, pero el vendor se conserva.
+    let tag = id3cli::read_vorbis_tag(&path).expect("el .opus debe seguir legible");
+    assert_eq!(
+        tag.items().count(),
+        0,
+        "no debe quedar ningún campo de usuario"
+    );
+    assert!(tag.pictures().is_empty(), "no debe quedar ninguna carátula");
+    assert_eq!(tag.vendor(), "ffmpeg", "el vendor debe conservarse");
+
+    // Y el archivo sigue siendo Ogg Opus por contenido.
+    let after = fs::read(&path).expect("Failed to read temp file");
+    assert_eq!(
+        &after[..4],
+        b"OggS",
+        "el patrón de captura debe seguir intacto"
+    );
+    let first_after = 27 + after[26] as usize;
+    assert_eq!(
+        &after[first_after..first_after + 8],
+        b"OpusHead",
+        "el primer paquete debe seguir siendo OpusHead"
+    );
+
+    cleanup_file(&path);
+}
+
+/// Flujo completo `show`/`edit`/`remove` sobre el mismo archivo `.opus`:
+/// aviso de vacío, escritura, relectura por `show` y borrado final.
+#[test]
+fn test_cli_opus_show_edit_remove_flow() {
+    let path = create_temp_opus();
+    let file = path.to_str().unwrap();
+
+    // `show` sobre un .opus sin campos de usuario: aviso, salida 0.
+    let show_empty = run_cli(&["show", file]);
+    assert!(
+        show_empty.status.success(),
+        "`show` sobre un .opus vacío debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show_empty.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&show_empty.stdout).contains("⚠️  No se encontraron metadatos."),
+        "debe avisar de que no hay metadatos, stdout: {}",
+        String::from_utf8_lossy(&show_empty.stdout)
+    );
+
+    // `edit`: escribe y no falla por formato.
+    let edit = run_cli(&["edit", file, "--title", "X"]);
+    assert!(edit.status.success());
+
+    // `show` de nuevo: ya hay metadatos.
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains('X'),
+        "`show` debe mostrar el título escrito"
+    );
+
+    // `remove` de un tag concreto: no falla por formato y el campo desaparece.
+    let remove = run_cli(&["remove", file, "title"]);
+    assert!(remove.status.success());
+    let tag = id3cli::read_vorbis_tag(&path).expect("el .opus debe seguir legible");
+    assert_eq!(tag.get("TITLE"), None, "el título debe desaparecer");
+
+    cleanup_file(&path);
 }
 
 /// `show` sobre un Ogg recién creado (solo vendor y `encoder`) debe avisar de
@@ -3633,8 +3963,11 @@ fn test_cli_unsupported_format_message_lists_mp3_mp4_and_ogg() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("MP3") && stderr.contains("MP4") && stderr.contains("OGG"),
-        "el mensaje de formato no soportado debe enumerar MP3, MP4 y OGG, fue: {stderr}"
+        stderr.contains("MP3")
+            && stderr.contains("MP4")
+            && stderr.contains("OGG")
+            && stderr.contains("Opus"),
+        "el mensaje de formato no soportado debe enumerar MP3, MP4, OGG y Opus, fue: {stderr}"
     );
 
     cleanup_file(&path);
@@ -5059,7 +5392,7 @@ fn linea_de_flag<'a>(texto: &'a str, marca: &str) -> Option<&'a str> {
 
 #[test]
 fn test_cli_help_nombra_los_tres_formatos() {
-    // (1) Los cuatro puntos de ayuda salen con código 0 y nombran MP3, MP4 y OGG.
+    // (1) Los cuatro puntos de ayuda salen con código 0 y nombran MP3, MP4, OGG y Opus.
     let ayudas: [(&str, &[&str]); 4] = [
         ("--help", &["--help"]),
         ("show --help", &["show", "--help"]),
@@ -5074,7 +5407,7 @@ fn test_cli_help_nombra_los_tres_formatos() {
             String::from_utf8_lossy(&output.stderr)
         );
         let texto = salida_completa(&output);
-        for formato in ["MP3", "MP4", "OGG"] {
+        for formato in ["MP3", "MP4", "OGG", "Opus"] {
             assert!(
                 texto.contains(formato),
                 "la ayuda de `id3cli {etiqueta}` no nombra {formato}:\n{texto}"
