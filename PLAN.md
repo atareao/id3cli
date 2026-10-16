@@ -2,7 +2,7 @@
 
 ## Estado y regla de oro
 
-> **ESTADO: FASES 0-3 COMPLETADAS (2026-10-16): RELEASE v0.7.0 PUBLICADA y FASE 3 (salida JSON) CERRADA vía change OpenSpec `json-output` (archivado como `2026-10-16-json-output`, PR #29 fusionado). Fase 4 EN EJECUCIÓN: verificación final DoD en curso y release única v0.8.0 por delante.**
+> **✅ TODAS LAS FASES COMPLETADAS (2026-10-16): FASES 0-3 y FASE 4 CERRADAS. Releases v0.7.0 (FLAC) y v0.8.0 (salida JSON de `show`) publicadas en crates.io y GitHub Releases. Change OpenSpec `json-output` archivado (`2026-10-16-json-output`). Plan director ejecutado en su totalidad.**
 
 Este plan consolida, en orden de ejecución:
 
@@ -110,7 +110,7 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - **Release:** la release v0.7.0 (soporte FLAC) ya se publicó (PR #28 + pipeline `release-prepare` + `release.yml`, 2026-10-16). La Fase 4 cierra la Fase 3 con una **liberación única v0.8.0** del JSON: PR development → main, bump minor automático por el `feat:` en CI (no tocar Cargo.toml local). Verbificar el checklist de la Fase 4 (barrido completo + archive del change `json-output`).
 - **Archive:** un change de OpenSpec por feature (`flac-support`, `json-output`) — ambos archivados (`2026-10-16-flac-support`, `2026-10-16-json-output`).
 - **Falsabilidad e2e:** re-demostrar tras ampliar (aserción corrompida → exit 1).
-- **Estado 2026-10-16:** barrido completo verde (306 tests, fmt, clippy -D warnings 0, bash -n, openspec validate --specs 14 items, e2e 479 aserciones con `cargo build --locked`), no-rotura del modo legible verificada contra el binario v0.7.0 (salida idéntica en los 5 fixtures; solo `show --json` difiere, rc 2 → 0 por el flag nuevo). Pendiente: PR development → main `release: v0.8.0` → bump minor automático → tag → crates.io (cadena probada en v0.7.0).
+- **Estado 2026-10-16:** ✅ FASE 4 CERRADA. Barrido completo verde (306 tests, fmt, clippy -D warnings 0, bash -n, openspec validate --specs 14 items, e2e 479 aserciones con `cargo build --locked`), no-rotura del modo legible verificada contra el binario v0.7.0 (salida idéntica en los 5 fixtures; solo `show --json` difiere, rc 2 → 0 por el flag nuevo). Release **v0.8.0** publicada: PR **#30** development → main (`0598c1a`), `release-prepare.yml` OK (commit `chore: release v0.8.0` `1af3013` + tag `v0.8.0`), `release.yml` OK (GitHub Release «id3cli v0.8.0» publicada 2026-10-16T18:21:18Z), crates.io **max_version 0.8.0** (2026-10-16). `development` sincronizado con `main` (ambos en `1af3013`). Último eslabón de la cadena de release probada en v0.7.0, sin desviaciones.
 
 ## Riesgos / notas
 
@@ -127,5 +127,5 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - [x] **Fase 1:** fixes 1.1 y 1.2 con tests RED→GREEN, e2e ampliado con las aserciones que hoy fallarían, sin regresiones (292 tests verdes = 164 unitarios + 128 integración; e2e 392 aserciones en los cinco formatos).
 - [x] **Fase 2:** FLAC soportado (detección, backend `Backend::Flac` en el CLI, fixture `sample.flac`, tests integración, e2e_flac.sh, docs coherentes, hoja de ruta actualizada; change `flac-support` archivado; suite 292 tests; e2e 392 aserciones: 70+80+81+81+80).
 - [x] **Fase 3:** `show --json` implementado (change `json-output` archivado), serde+serde_json con lock commiteado, 306 tests (169 unit + 137 int), e2e JSON por formato con jq (479 aserciones), PR #29 fusionado.
-- [ ] **Fase 4:** suite completa verde ✅ (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado ✅, README/AGENTS/copilot al día ✅ — pendiente solo la **release v0.8.0 única** (PR development → main, bump minor automático por el `feat:` en CI) y la verificación de la publicación (tag + crates.io + GitHub Release).
+- [x] **Fase 4:** suite completa verde (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado, README/AGENTS/copilot al día, release **v0.8.0 única** publicada (PR #30, tag `v0.8.0`, GitHub Release + crates.io `max_version: 0.8.0`), `development` sincronizado con `main`.
 - [ ] Ninguna de las fases 1-3 se toca sin aprobación explícita del usuario (este plan está **GUARDADO**, no en ejecución).
