@@ -1,16 +1,16 @@
 # id3cli
 
-CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`) y **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg).
+CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`), **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg) y **FLAC** (comentarios Vorbis, `fLaC` nativo).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-283%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-292%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
 
 ✨ **Completo y fácil de usar**
 
-- 🎧 **MP3, MP4, OGG y Opus:** escribe tags ID3v2.4 en MP3, átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`) y comentarios Vorbis en OGG (Vorbis y Opus)
+- 🎧 **MP3, MP4, OGG, Opus y FLAC:** escribe tags ID3v2.4 en MP3, átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`) y comentarios Vorbis en OGG (Vorbis y Opus) y en FLAC
 - 🔍 **Detección de formato por contenido:** el formato se decide por los *magic bytes* del archivo, nunca por su extensión; los formatos que no soporta se rechazan con un mensaje claro y sin tocar el archivo
 - 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, temporada, fecha, copyright
 - 🎙️ **Soporte completo para podcasts:** compositor, subtítulo, artista original, artista del álbum, temporada (TPOS)
@@ -33,19 +33,20 @@ El formato del archivo se determina **por su contenido** (sus *magic bytes* inic
 | **Soportado** | MP4 / M4A (`.m4a`, `.mp4`, `.m4b`): átomo `ftyp` en el offset 4, con cualquier brand | `show`, `edit` y `remove` operan sobre él; los metadatos se **leen y escriben** como átomos `ilst` estilo iTunes |
 | **Soportado** | OGG Vorbis (`OggS`, versión `0`, primer paquete `\x01vorbis`) | `show`, `edit` y `remove` operan sobre él; los metadatos se escriben como comentarios Vorbis (`CLAVE=valor`) |
 | **Soportado** | OGG Opus (`OggS`, versión `0`, primer paquete `OpusHead`) | `show`, `edit` y `remove` operan sobre él; los metadatos se escriben como comentarios Vorbis (`CLAVE=valor`), con el mismo mapeo que OGG Vorbis |
-| **No soportado** | Speex en contenedor Ogg; FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+| **Soportado** | FLAC nativo (`fLaC` en el offset 0) | `show`, `edit` y `remove` operan sobre él; los metadatos se escriben como comentarios Vorbis (`CLAVE=valor`), con el mismo mapeo que OGG y Opus |
+| **No soportado** | Speex en contenedor Ogg; WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 | **Indeterminado** | Contenido no reconocible o archivo demasiado corto | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 
 Un contenedor **Ogg** es solo un sobre, así que el formato se decide por el **códec de su primer paquete**, no por la cabecera de página. Solo se acepta si ese primer paquete empieza por `\x01vorbis` (Vorbis) o por `OpusHead` (Opus).
 
-Si el primer paquete empieza por `Speex`, por `\x7fFLAC` (FLAC dentro de un Ogg) o si es el de Theora, el archivo se rechaza como formato fuera de alcance. Una página Ogg **truncada**, **sin primer paquete** o con un paquete **vacío** queda como *formato sin determinar*, y en ese caso tampoco se toca el archivo.
+Si el primer paquete empieza por `Speex`, por `\x7fFLAC` (FLAC dentro de un Ogg) o si es el de Theora, el archivo se rechaza como formato fuera de alcance. Ese `\x7fFLAC` se sigue rechazando: el FLAC **nativo** (`fLaC` fuera de un Ogg) sí está soportado, pero como códec *dentro* del contenedor Ogg no entra en el alcance. Una página Ogg **truncada**, **sin primer paquete** o con un paquete **vacío** queda como *formato sin determinar*, y en ese caso tampoco se toca el archivo.
 
 En todos los casos de error el archivo queda **intacto**: la detección ocurre antes de abrir el archivo para escritura, de modo que un formato no soportado nunca se toca.
 
 **En resumen:**
 
-- **Soportados:** MP3 (ID3v2.4), MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes), OGG Vorbis y Opus (comentarios de Vorbis). Los cuatro admiten `show`, `edit` y `remove` completos.
-- **No soportados:** Speex (en contenedor Ogg), FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
+- **Soportados:** MP3 (ID3v2.4), MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes), OGG Vorbis, Opus y FLAC (comentarios de Vorbis). Los CINCO admiten `show`, `edit` y `remove` completos.
+- **No soportados:** Speex (en contenedor Ogg), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
 
 ## Instalación
 
@@ -601,9 +602,9 @@ Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan docume
 
 ---
 
-## Mapeo de tags en OGG (Vorbis y Opus)
+## Mapeo de tags en OGG y FLAC (comentarios Vorbis)
 
-En un `.ogg` (y en un `.opus`) los metadatos son **comentarios Vorbis** (`VORBIS_COMMENT`): pares `CLAVE=valor` en texto plano dentro del contenedor Ogg, no frames ID3 ni átomos `ilst`. El contenedor Ogg cubre Vorbis y Opus, y **ambos códecs comparten el mismo mapeo** y el mismo tipo de comentario. La siguiente tabla recoge el mapeo entre cada flag del CLI y la clave del comentario que se escribe:
+En un `.ogg`, un `.opus` y un `.flac` los metadatos son **comentarios Vorbis** (`VORBIS_COMMENT`): pares `CLAVE=valor` en texto plano. El contenedor Ogg cubre Vorbis y Opus, y el archivo FLAC nativo usa el mismo mecanismo: **los tres comparten el mismo mapeo** y el mismo tipo de comentario. La siguiente tabla recoge el mapeo entre cada flag del CLI y la clave del comentario que se escribe:
 
 | Flag CLI | Clave de comentario Vorbis |
 | --- | --- |
@@ -631,11 +632,12 @@ En un `.ogg` (y en un `.opus`) los metadatos son **comentarios Vorbis** (`VORBIS
 
 ### Limitaciones conocidas en OGG
 
-- **La carátula WebP no se degrada en OGG.** El bloque `METADATA_BLOCK_PICTURE` admite el tipo MIME tal cual se declara, así que un `.webp` se guarda con su tipo real y se muestra con normalidad: a diferencia del átomo `covr` de MP4, **no** queda con el tipo reservado (0) ni pierde visibilidad. En MP3 también funciona vía `APIC`.
+- **La carátula WebP no se degrada en OGG ni en FLAC.** El bloque `METADATA_BLOCK_PICTURE` admite el tipo MIME tal cual se declara, así que un `.webp` se guarda con su tipo real y se muestra con normalidad: a diferencia del átomo `covr` de MP4, **no** queda con el tipo reservado (0) ni pierde visibilidad. En MP3 también funciona vía `APIC`.
 - **La letra pierde el código de idioma.** `LYRICS` es un comentario de texto sin campo de idioma, así que la letra de un OGG se guarda sin el `spa` que sí lleva el frame `USLT` de MP3 (igual que ocurre con `©lyr` en MP4). El texto se conserva **íntegro**; lo único que se pierde es la marca de idioma.
 - **`--url` y `--original-artist` se omiten con aviso.** Ninguno de los dos tiene clave equivalente en los comentarios Vorbis. Sobre un OGG el CLI **no falla ni inventa** una clave de reemplazo: avisa por stderr, omite ese campo, escribe el resto con normalidad y termina con código de salida cero. Si son los únicos flags indicados, no hay cambio real que escribir y el archivo **no se reescribe**. En MP3 se comportan con normalidad (`--url` → `WOAR`, `--original-artist` → `TOPE`, sin aviso).
 - **El total de pista y temporada no tiene límite de tamaño.** `TRACKNUMBER`/`DISCNUMBER` con `TRACKTOTAL`/`DISCTOTAL` guardan el par como **texto**, así que admiten cualquier valor, incluido un total `0`, que se escribe y se muestra tal cual (`7/0`). Solo el átomo numérico de MP4 lo restringe a 16 bits (ver [Limitaciones conocidas en MP4](#limitaciones-conocidas-en-mp4)).
-- **Las tres degradaciones aplican igual a Opus.** El contenedor Ogg cubre Vorbis y Opus con el mismo comentario de Vorbis, así que todo lo anterior (carátula WebP con su MIME real, `LYRICS` sin código de idioma y `--url`/`--original-artist` omitidos con aviso) se comporta idéntico en los dos códecs.
+- **Las tres degradaciones aplican igual a Opus y a FLAC.** El contenedor Ogg cubre Vorbis y Opus, y el archivo FLAC nativo usa el mismo comentario de Vorbis, así que todo lo anterior (carátula WebP con su MIME real, `LYRICS` sin código de idioma y `--url`/`--original-artist` omitidos con aviso) se comporta idéntico en los tres.
+- **`remove --all` elimina el bloque VORBIS_COMMENT completo en FLAC.** A diferencia de OGG y Opus —donde el comentario es obligatorio en el contenedor y el vendor del codificador se conserva al vaciar—, en un archivo FLAC nativo `lofty` no escribe un comentario vacío, de modo que `remove --all` deja el archivo sin bloque de comentario: los campos, las carátulas y el vendor desaparecen. El archivo sigue siendo un FLAC válido y reproducible.
 
 ---
 
@@ -762,12 +764,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **283 tests** (163 unitarios + 120 de integración):
+El proyecto tiene **cobertura completa** con **292 tests** (164 unitarios + 128 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (283)
-cargo test --lib        # Solo tests unitarios (163)
-cargo test --test '*'   # Solo tests de integración (120)
+cargo test              # Ejecutar todos los tests (292)
+cargo test --lib        # Solo tests unitarios (164)
+cargo test --test '*'   # Solo tests de integración (128)
 ```
 
 **Ejemplos de tests:**
@@ -787,28 +789,29 @@ cargo test --test '*'   # Solo tests de integración (120)
 - Tests end-to-end del CLI completo con podcasts
 - OGG Vorbis u Opus: fixture real versionado (`sample.ogg` y `sample.opus`) y detección del contenedor por el códec de su primer paquete (Vorbis u Opus), no por la cabecera `OggS`
 - Opus: mismo backend de comentarios Vorbis que OGG, con detección por `OpusHead` y flujo completo `show`/`edit`/`remove` verificado contra el fixture real
+- FLAC: fixture real versionado (`sample.flac`), `show`/`edit`/`remove` completos con comentarios Vorbis, carátula como bloque PICTURE con roundtrip y sustitución, y `remove --all` sin vendor (degradación documentada)
 - Total de pista y temporada (`N/T`) en los tres formatos, incluida la conservación del total preexistente y el borrado del par número/total como una unidad
-- Coherencia documental: el recuento real de tests y los formatos de `Cargo.toml` (MP3, MP4 y OGG) figuran igual en `README.md` y `Cargo.toml`, y la coherencia del soporte de Opus se verifica contra el código
+- Coherencia documental: el recuento real de tests y los formatos de `Cargo.toml` (MP3, MP4, OGG y FLAC) figuran igual en `README.md` y `Cargo.toml`, y la coherencia del soporte de Opus se verifica contra el código
 
 ---
 
 ## Verificación e2e local
 
-Además de la suite de Rust, el repositorio incluye un tooling de **verificación e2e local** (`scripts/e2e/`) que ejercita el binario real de extremo a extremo: escribe y relee los **20 tags** de `VALID_TAG_NAMES` y las carátulas **JPG y PNG** sobre los **cuatro formatos soportados** (MP3, MP4/M4A, OGG y Opus). Es una verificación de regresión de lectura/escritura del flujo completo `edit → show → remove`, contrastada con un **lector independiente**; está pensada para no sobrecargar el repositorio, así que **todo el material se genera al vuelo y nada se versiona**.
+Además de la suite de Rust, el repositorio incluye un tooling de **verificación e2e local** (`scripts/e2e/`) que ejercita el binario real de extremo a extremo: escribe y relee los **20 tags** de `VALID_TAG_NAMES` y las carátulas **JPG y PNG** sobre los **cinco formatos soportados** (MP3, MP4/M4A, OGG, Opus y FLAC). Es una verificación de regresión de lectura/escritura del flujo completo `edit → show → remove`, contrastada con un **lector independiente**; está pensada para no sobrecargar el repositorio, así que **todo el material se genera al vuelo y nada se versiona**.
 
 **Qué verifica** (dos capas por formato):
 
 - **Capa 1 — `id3cli show`:** cada uno de los 20 tags de `VALID_TAG_NAMES` (`title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`) se escribe con `edit` y se relee con `show` campo a campo.
 - **Capa 2 — `ffprobe` como lector independiente:** la metadata se consulta con `ffprobe` (`format_tags` en MP3/MP4, `stream_tags` en OGG/Opus); en OGG/Opus se comprueba además en los **bytes crudos** del comentario Vorbis (incluido el *vendor* preservado tras `remove --all`).
-- **Cobertura por formato:** MP3 verifica los **20/20** tags; MP4, OGG y Opus verifican los 18 relevantes y comprueban que `url` y `original_artist` **se omiten con aviso** (stderr) y no aparecen en `ffprobe`.
+- **Cobertura por formato:** MP3 verifica los **20/20** tags; MP4, OGG, Opus y FLAC verifican los 18 relevantes y comprueban que `url` y `original_artist` **se omiten con aviso** (stderr) y no aparecen en `ffprobe`. En FLAC, además, `remove --all` elimina el bloque VORBIS_COMMENT completo y el vendor **no** se conserva (a diferencia de OGG/Opus, donde el vendor es obligatorio; degradación documentada en la sección de degradaciones).
 - **Carátulas:** `cover.jpg` y `cover.png` (generadas con `testsrc`) se añaden **cada una sobre audio recién generado** y se comparan **byte a byte** contra la extracción de `ffmpeg` (`-map 0:v:0 -c copy`), es decir, *roundtrip* de bytes.
 - **Borrado:** `remove` de un campo con el resto intacto y `remove --all` (en MP3 el bloque ID3v2 **desaparece físicamente** del archivo; en OGG/Opus el comentario Vorbis se **vacía preservando el vendor**), con el audio final **reproducible** (duración conservada).
 
 **Cómo se ejecuta** (desde la raíz del repositorio):
 
 ```bash
-just e2e            # los 4 formatos en serie; se detiene con el exit code del primero que falle
-just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus
+just e2e            # los 5 formatos en serie; se detiene con el exit code del primero que falle
+just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus | e2e-flac
 ```
 
 O directamente, sin `just`:
@@ -825,7 +828,7 @@ scripts/e2e/e2e_mp3.sh
 | `--keep`   | Conserva el directorio temporal al terminar, para depurar                                                                  |
 
 ```bash
-just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 4 formatos
+just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 5 formatos
 just e2e --keep                                       # lo mismo conservando los temporales
 just e2e-opus --bin target/release/id3cli --keep      # opus con binario custom, conservando el temporal
 scripts/e2e/e2e_m4a.sh --keep
@@ -873,7 +876,8 @@ Desarrollado con 🦀 Rust
 - [x] Soporte para OGG Vorbis (comentarios de Vorbis: `TITLE`, `ARTIST`, `TRACKNUMBER`…)
 - [x] Soporte para Opus (contenedor Ogg con el códec Opus; mismas claves de comentario Vorbis que OGG)
 - [ ] Soporte para Speex (contenedor Ogg con el códec Speex)
-- [ ] Soporte para FLAC (nativo y dentro del contenedor Ogg)
+- [x] Soporte para FLAC (nativo: `fLaC`, comentarios Vorbis)
+- [ ] Soporte para FLAC dentro del contenedor Ogg (códec `\x7fFLAC`)
 - [ ] Soporte para otros formatos de audio (WAV, AIFF, APE)
 - [ ] Leer lyrics desde archivo externo (.lrc, .txt)
 - [ ] GUI opcional con egui o similar
