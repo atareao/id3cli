@@ -2,14 +2,14 @@
 
 ## Estado y regla de oro
 
-> **ESTADO: FASE 1 COMPLETADA, FASE 2 COMPLETADA (FLAC, PR #27 fusionado, change archivado). Pendiente: Fase 3 (salida JSON) y Fase 4 (verificación final + release v0.7.0).**
+> **ESTADO: FASES 0-3 COMPLETADAS (2026-10-16): RELEASE v0.7.0 PUBLICADA y FASE 3 (salida JSON) CERRADA vía change OpenSpec `json-output` (archivado como `2026-10-16-json-output`, PR #29 fusionado). Fase 4 EN EJECUCIÓN: verificación final DoD en curso y release única v0.8.0 por delante.**
 
 Este plan consolida, en orden de ejecución:
 
 1. **(0)** la release v0.6.0 — **✅ COMPLETADA** (v0.6.0 publicada: PR #24 fusionado, tag y crates.io)
 2. **(1)** los dos bugs que el tooling e2e destapó — **✅ COMPLETADOS** (change OpenSpec `e2e-findings-fixes`, fixes 1.1 y 1.2)
 3. **(2)** la feature de soporte de FLAC (nuevo formato) — **✅ COMPLETADA (2026-10-16)** vía el change OpenSpec `flac-support` (archivado como `2026-10-16-flac-support`; PR #27 fusionado en `development`) — precedió al JSON porque la salida JSON tiene que cubrir FLAC
-4. **(3)** la feature de volcado de tags en JSON — **PENDIENTE** (Fase 3, por arrancar con el flujo OpenSpec: proposal → stop para aprobación del usuario)
+4. **(3)** la feature de volcado de tags en JSON — **✅ COMPLETADA (2026-10-16)** vía el change OpenSpec `json-output` (archivado como `2026-10-16-json-output`): flag `show --json` aditivo, serde+serde_json con Cargo.lock commiteado, 306 tests (169 unit + 137 int), e2e con jq 479 aserciones (91/101/96/96/95), PR #29 → `development` (`d45621a`) + archive (`fb6b928`). La release v0.7.0 (solo FLAC) ya salió; el JSON será **v0.8.0** (minor por `feat:`).
 
 El usuario ha pedido explícitamente que este plan se guarde **SIN implementar nada**.
 
@@ -82,6 +82,8 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 
 > **Nota (2026-10-16):** con FLAC ya soportado (Fase 2 completada), la cobertura JSON debe incluir los **CINCO formatos: MP3, MP4/M4A, OGG, Opus y FLAC nativo**. El resto del diseño de esta fase queda como está.
 
+> **✅ COMPLETADA (2026-10-16)** vía el change OpenSpec `json-output` (archivado como `2026-10-16-json-output`). TDD completo: RED (9 tests JSON de integración fallando + E0425 en unitarios por símbolos inexistentes) → GREEN (serde/serde_json en `[dependencies]`, structs `ShowJson`/`TagsJson`/`TrackJson`/`PictureJson` + `json_from_mp3`/`json_from_mp4`/`json_from_vorbis`/`json_empty`/`format_json_name` en src/lib.rs, flag `-j, --json` y enrutado por backend en src/main.rs con el nombre real del códec ogg/opus vía `AudioFormat`). Decisiones 1-8 del design cumplidas: flag aditivo (modo legible byte a byte idéntico, verificado contra el binario v0.7.0), esquema `{formato, tags}` con claves siempre presentes, `tags:null` con exit 0 y stderr vacío, formato del códec real, lyrics completo, pictures solo metadatos, e2e con jq v1.8.2 como parser independiente, test documental intacto (recuentos medidos: 306 = 169+137). Suite 292 → **306 tests**; e2e 392 → **479 aserciones** (mp3 91, m4a 101, ogg 96, opus 96, flac 95) con falsabilidad JSON demostrada (corrupción 'flac'→'mp3' → exit 1). Docs: README (escudo, desglose, contrato del JSON, capa 3 del e2e, roadmap), AGENTS.md y copilot-instructions con 306 tests. Git: rama `feature/json-output` → PR **#29** → fusionado en `development` (**d45621a**, CI verde 31 s) → archive + commit `chore(openspec)` (**fb6b928**). Release resultante: **v0.8.0** (minor por `feat:`) en la Fase 4.
+
 ### 3.1 — Diseño de la salida (decidir en el spec, propuesta aquí)
 
 - **Ubicación:** proponer un nuevo flag en `show` (p. ej. `id3cli show --json FILE`) o subcomando dedicado; el spec fija la elección (el director tiende a `show --json`: la salida JSON es la misma información que ya muestra show, en formato máquina).
@@ -105,9 +107,10 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 
 - **Barrido completo:** `cargo test --no-fail-fast` (recuento final), `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`, `bash -n scripts/e2e/*.sh`, `just e2e` (cinco formatos ahora) en verde, `openspec status` 4/4 por change.
 - **Flujo git:** ramas `feature/*` desde development por change (`fixes-mp4-mp3`, `flac-support`, `json-output`); commits convencionales: `fix:` para los bugs (1.1 y 1.2 — fix NO libera minor, pero sube patch: decidir si los dos fixes viajan en la misma release que FLAC/JSON o en una patch v0.6.1 antes — el director propone: un PR de fixes a development y que viajen en la release grande; el spec de release decide), `feat:` para FLAC y JSON (minor).
-- **Release:** FLAC + JSON + fixes en una **ÚNICA** release (precedente del repo: release única para OGG+Opus): bump minor → **v0.7.0** (v0.6.0 salió en la Fase 0). PR development → main. El bump lo gestiona **CI en la rama de release** al completarse la Fase 4 — **no tocar Cargo.toml local** —, igual que se hizo con v0.6.0.
-- **Archive:** un change de OpenSpec por feature (`flac-support`, `json-output`) + uno por los fixes (o un change «e2e-findings-fixes» con dos capabilities según el criterio del director al aprobar); todos archivados al fusionar.
+- **Release:** la release v0.7.0 (soporte FLAC) ya se publicó (PR #28 + pipeline `release-prepare` + `release.yml`, 2026-10-16). La Fase 4 cierra la Fase 3 con una **liberación única v0.8.0** del JSON: PR development → main, bump minor automático por el `feat:` en CI (no tocar Cargo.toml local). Verbificar el checklist de la Fase 4 (barrido completo + archive del change `json-output`).
+- **Archive:** un change de OpenSpec por feature (`flac-support`, `json-output`) — ambos archivados (`2026-10-16-flac-support`, `2026-10-16-json-output`).
 - **Falsabilidad e2e:** re-demostrar tras ampliar (aserción corrompida → exit 1).
+- **Estado 2026-10-16:** barrido completo verde (306 tests, fmt, clippy -D warnings 0, bash -n, openspec validate --specs 14 items, e2e 479 aserciones con `cargo build --locked`), no-rotura del modo legible verificada contra el binario v0.7.0 (salida idéntica en los 5 fixtures; solo `show --json` difiere, rc 2 → 0 por el flag nuevo). Pendiente: PR development → main `release: v0.8.0` → bump minor automático → tag → crates.io (cadena probada en v0.7.0).
 
 ## Riesgos / notas
 
@@ -116,12 +119,13 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - El JSON con carátula: si el spec decidiera incluir bytes (base64), el tamaño puede crecer mucho (una carátula JPG ~9 KB aquí, pero en general MB); por defecto **NO** incluir bytes, solo metadatos de presencia/formato (dar la ruta de cómo extraer con el cliente).
 - El fix 1.1 (hdlr) puede requerir actualizar lofty o post-proceso manual: si lofty ya lo arregló en una versión > 0.25.4, evaluar el bump (implica Cargo.lock + regresión completa de los 292 tests + e2e) — el spec de fixes lo decide con evidencia.
 - El fix 1.2 (cover sustituye) puede tener matices por formato: en MP4/OGG/Opus/FLAC lofty puede ya comportarse distinto (insert vs replace): el e2e ampliará la aserción en **TODOS** los formatos, no solo MP3 — decidir si el fix 1.2 se generaliza a los 5 (propuesta: sí, semántica «sustituir la carátula del tipo indicado» en todos los backends).
+- El JSON NO incluye los bytes de las carátulas (solo type/mime/size_bytes). `lyrics` sí va completo (no el preview de 3 líneas). El orden de claves del JSON lo fija el orden de campos del struct Serialize (estable y documentado).
 
 ## Definition of Done (todo el plan)
 
 - [x] **Fase 0:** v0.6.0 publicada (PR #24 fusionado, tag y crates.io).
 - [x] **Fase 1:** fixes 1.1 y 1.2 con tests RED→GREEN, e2e ampliado con las aserciones que hoy fallarían, sin regresiones (292 tests verdes = 164 unitarios + 128 integración; e2e 392 aserciones en los cinco formatos).
 - [x] **Fase 2:** FLAC soportado (detección, backend `Backend::Flac` en el CLI, fixture `sample.flac`, tests integración, e2e_flac.sh, docs coherentes, hoja de ruta actualizada; change `flac-support` archivado; suite 292 tests; e2e 392 aserciones: 70+80+81+81+80).
-- [ ] **Fase 3:** `show --json` (o la ubicación que fije el spec) con estructura estable versionada, serde+serde_json con lock commiteado, tests unitarios + integración + cobertura e2e en los 5 formatos (incluido FLAC).
-- [ ] **Fase 4:** suite completa verde, fmt/clippy/bash -n/just e2e (5 formatos) limpios, changes archivados, release v0.7.0 única, README/AGENTS/copilot al día.
+- [x] **Fase 3:** `show --json` implementado (change `json-output` archivado), serde+serde_json con lock commiteado, 306 tests (169 unit + 137 int), e2e JSON por formato con jq (479 aserciones), PR #29 fusionado.
+- [ ] **Fase 4:** suite completa verde ✅ (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado ✅, README/AGENTS/copilot al día ✅ — pendiente solo la **release v0.8.0 única** (PR development → main, bump minor automático por el `feat:` en CI) y la verificación de la publicación (tag + crates.io + GitHub Release).
 - [ ] Ninguna de las fases 1-3 se toca sin aprobación explícita del usuario (este plan está **GUARDADO**, no en ejecución).

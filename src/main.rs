@@ -4,6 +4,7 @@ use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::id3::v2::Id3v2Tag;
 use lofty::mpeg::MpegFile;
+use lofty::ogg::OggPictureStorage;
 use lofty::tag::TagExt;
 use std::error::Error;
 use std::fs;
@@ -55,6 +56,10 @@ enum Command {
     Show {
         /// Ruta del archivo de audio (MP3, MP4, OGG, Opus y FLAC)
         file: PathBuf,
+
+        /// Emitir los metadatos como un único objeto JSON compacto en una línea
+        #[arg(short, long)]
+        json: bool,
     },
     /// Editar metadatos del archivo MP3, MP4, OGG, Opus y FLAC
     Edit {
@@ -309,30 +314,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match &args.command {
-        Command::Show { file } => match detect_supported_format(file) {
+        Command::Show { file, json } => match detect_supported_format(file) {
             Backend::Mp3 => {
                 // Leer tag
                 let tag = match read_id3v2_tag(file) {
                     Some(tag) => tag,
                     None => {
-                        eprintln!("⚠️  No se encontraron tags ID3 en '{}'", file.display());
+                        if *json {
+                            // Decisión 3: sin tag, el modo JSON emite
+                            // `{"formato": "mp3", "tags": null}` con exit 0 y
+                            // stderr limpio; el aviso ⚠️ es del modo legible.
+                            outln!("{}", json_empty("mp3"));
+                        } else {
+                            eprintln!("⚠️  No se encontraron tags ID3 en '{}'", file.display());
+                        }
                         std::process::exit(0);
                     }
                 };
 
-                display_tags(&tag);
+                if *json {
+                    outln!("{}", json_from_mp3(&tag));
+                } else {
+                    display_tags(&tag);
+                }
             }
             Backend::Mp4 => {
                 let tag = match read_mp4_tag(file) {
                     Ok(Some(tag)) => tag,
                     Ok(None) => {
-                        eprintln!("⚠️  No se encontraron metadatos en '{}'", file.display());
+                        if *json {
+                            // Mismo contrato que el MP3 sin tags: objeto con
+                            // `tags: null`, exit 0 y stderr limpio.
+                            outln!("{}", json_empty("mp4"));
+                        } else {
+                            eprintln!("⚠️  No se encontraron metadatos en '{}'", file.display());
+                        }
                         std::process::exit(0);
                     }
                     Err(error) => report_mp4_error(file, error),
                 };
 
-                display_tags_mp4(&tag);
+                if *json {
+                    outln!("{}", json_from_mp4(&tag));
+                } else {
+                    display_tags_mp4(&tag);
+                }
             }
             Backend::Ogg => {
                 // El comentario de Vorbis siempre se materializa: en Ogg/Opus es
@@ -347,7 +373,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(error) => report_vorbis_error(file, error),
                 };
 
-                display_tags_ogg(&tag);
+                if *json {
+                    // Decisión 4: el JSON nombra el códec REAL del contenedor
+                    // ("ogg" u "opus"), que el `Backend` fusiona; el nombre se
+                    // resuelve por contenido, nunca del backend.
+                    let formato = match detect_format(file) {
+                        Ok(formato) => format_json_name(formato),
+                        Err(error) => report_vorbis_error(file, error),
+                    };
+                    outln!("{}", json_from_vorbis(formato, &tag, tag.pictures()));
+                } else {
+                    display_tags_ogg(&tag);
+                }
             }
             Backend::Flac => {
                 // Como en Ogg, el comentario se materializa siempre (vacío si el
@@ -365,7 +402,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(error) => report_vorbis_error(file, error),
                 };
 
-                display_tags_flac(&pictures, &tag);
+                if *json {
+                    // En FLAC las carátulas son los bloques `PICTURE` del
+                    // archivo (mismos que muestra el modo legible).
+                    outln!("{}", json_from_vorbis("flac", &tag, &pictures));
+                } else {
+                    display_tags_flac(&pictures, &tag);
+                }
             }
         },
         Command::Edit {

@@ -138,6 +138,24 @@ main() {
     check_show_absent "$E2E_V_URL"                  # no se confirman (omitidos)
     check_show_absent "$E2E_V_ORIGINAL_ARTIST"
 
+    # 3b) Etapa JSON (parser independiente jq): show --json sobre el OGG ya
+    #     editado. En el comentario de Vorbis, --url y --original-artist se
+    #     omiten: el JSON las emite como null (misma degradación que el modo
+    #     legible, verificada también por ffprobe y los bytes crudos arriba).
+    #     La letra se verifica por SUBcadena de la primera línea (el JSON
+    #     escapa los saltos como `\n` literal; ver check_json_field).
+    check_json_valid
+    check_json_format 'ogg'
+    check_json_field '.tags.title' "$E2E_V_TITLE"
+    check_json_field '.tags.artists[0]' "$E2E_V_ARTIST1"     # multi-artista
+    check_json_field '.tags.album' "$E2E_V_ALBUM"
+    check_json_field '.tags.track.number' "$E2E_V_TRACK"     # = '7'
+    check_json_field '.tags.compilation' 'true'               # COMPILATION → bool
+    check_json_field '.tags.lyrics' 'LetraE2E'                # 1.ª línea (subcadena)
+    check_json_null '.tags.url'                 # degradación: omitido en Vorbis
+    check_json_null '.tags.original_artist'     # degradación: omitido en Vorbis
+    check_json_field '.tags.pictures | length' '0'   # sin carátula en este punto
+
     # 4) ffprobe (capa 2, stream_tags): celdas de FF_TAGS, totals incluidos.
     #    En OGG year y date son claves SEPARADAS (YEAR/DATE): el valor «2024»
     #    es subcadena de «2024-05-01», así que el YEAR se fija por el par
@@ -238,6 +256,14 @@ main() {
     check_show_contains "Carátulas: 1 imagen(es)"
     check_cover_roundtrip "$E2E_COVER_PNG"
     check_cover_not_roundtrip "$E2E_COVER_JPG"
+
+    # 9b) Etapa JSON de la carátula: fixture con 1 imagen (la PNG final). El
+    #     tipo es el Debug del PictureType de lofty («CoverFront»; medido) y el
+    #     count se verifica con `jq | length`.
+    check_json_valid
+    check_json_format 'ogg'
+    check_json_field '.tags.pictures | length' '1'
+    check_json_field '.tags.pictures[0].type' 'CoverFront'
 
     if e2e_summary "ogg"; then
         exit 0
