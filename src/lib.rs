@@ -3043,5 +3043,339 @@ pub fn display_tags_flac(pictures: &[(Picture, PictureInformation)], tag: &Vorbi
     display_vorbis_content(tag, pictures);
 }
 
+// ---------------------------------------------------------------------------
+// Salida JSON de `show` (`--json`) — change json-output
+// ---------------------------------------------------------------------------
+
+/// Objeto raíz de la salida JSON de `show --json`.
+///
+/// Serializa en una única línea compacta como `{"formato": "...", "tags": ...}`:
+/// `tag` es `Some(TagsJson)` cuando el contenedor tiene tag y `None` (que se
+/// serializa como `null`) cuando no lo tiene (MP3 sin ID3, MP4 sin `ilst`).
+#[derive(serde::Serialize)]
+pub struct ShowJson {
+    /// Nombre del códec real detectado por contenido: `mp3`, `mp4`, `ogg`,
+    /// `opus` o `flac`. Nunca se infiere del `Backend` (que fusiona Ogg).
+    formato: String,
+    /// Metadatos del tag, o `null` cuando el contenedor no tiene tag.
+    tags: Option<TagsJson>,
+}
+
+/// Metadatos canónicos de un tag, con **todas** las claves siempre presentes
+/// (`null` si el campo no existe, arrays vacíos y `compilation` a `false`).
+///
+/// El orden de los campos es el orden estable de claves del spec `json-output`:
+/// serde respeta el orden de declaración, de modo que un consumidor no tiene que
+/// defender la ausencia de una clave ni un orden concreto.
+#[derive(serde::Serialize)]
+pub struct TagsJson {
+    /// Título de la canción.
+    title: Option<String>,
+    /// Artistas; el tag los guarda unidos por `"; "` y aquí se dividen con
+    /// `split("; ")` + `trim()` (misma convención de unión del CLI).
+    artists: Vec<String>,
+    /// Álbum.
+    album: Option<String>,
+    /// Año como número, o `null` (no se inventa un número si no es numérico).
+    year: Option<i32>,
+    /// Fecha como texto (`YYYY-MM-DD`, `YYYY-MM` o `YYYY`).
+    date: Option<String>,
+    /// Género.
+    genre: Option<String>,
+    /// Número de pista con su total opcional, o `null`.
+    track: Option<TrackJson>,
+    /// Temporada / disco con su total opcional, o `null`.
+    season: Option<TrackJson>,
+    /// Copyright.
+    copyright: Option<String>,
+    /// Compositor.
+    composer: Option<String>,
+    /// Subtítulo / descripción.
+    subtitle: Option<String>,
+    /// Artista original (los formatos que no lo soportan emiten `null`).
+    original_artist: Option<String>,
+    /// Artista del álbum.
+    album_artist: Option<String>,
+    /// URL asociada (los formatos que no la soportan emiten `null`).
+    url: Option<String>,
+    /// Letra COMPLETA, sin el preview de 3 líneas del modo legible.
+    lyrics: Option<String>,
+    /// Marca de compilación (Apple), nunca `null`.
+    compilation: bool,
+    /// Orden de clasificación del álbum (Apple).
+    album_sort: Option<String>,
+    /// Orden de clasificación del artista (Apple).
+    artist_sort: Option<String>,
+    /// Orden de clasificación del título (Apple).
+    title_sort: Option<String>,
+    /// Carátulas solo como metadatos (type/mime/tamaño), nunca sus bytes.
+    pictures: Vec<PictureJson>,
+}
+
+/// Número de pista o de temporada con su total opcional.
+#[derive(serde::Serialize)]
+pub struct TrackJson {
+    /// Número (campo izquierdo del par).
+    number: u32,
+    /// Total (campo derecho del par), o `null` si no se indicó.
+    total: Option<u32>,
+}
+
+/// Metadatos de una carátula, sin los bytes de la imagen (el JSON debe ser
+/// ligero; el cliente extrae la imagen por los cauces existentes).
+#[derive(serde::Serialize)]
+pub struct PictureJson {
+    /// Tipo de la carátula, con el `Debug` del [`PictureType`]
+    /// (p. ej. `"CoverFront"`).
+    #[serde(rename = "type")]
+    tipo: String,
+    /// Tipo MIME de la imagen (p. ej. `image/jpeg`), o `null`.
+    mime: Option<String>,
+    /// Tamaño de la imagen en bytes.
+    size_bytes: usize,
+}
+
+/// Convierte una [`Picture`] de `lofty` en su representación JSON.
+fn picture_json(pic: &Picture) -> PictureJson {
+    PictureJson {
+        tipo: format!("{:?}", pic.pic_type()),
+        mime: pic.mime_type().map(|mime| mime.as_str().to_owned()),
+        size_bytes: pic.data().len(),
+    }
+}
+
+/// Divide el artista unido por `"; "` (convención de escritura del CLI) en la
+/// lista de artistas del JSON, recortando cada parte. Sin artista, lista vacía.
+fn split_artists(artist: Option<&str>) -> Vec<String> {
+    artist
+        .map(|joined| {
+            joined
+                .split("; ")
+                .map(|part| part.trim().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Serializa un [`ShowJson`] a una línea compacta de JSON.
+///
+/// La serialización de este struct no puede fallar (todos sus campos son
+/// escalares, cadenas o vectores serializables), así que el `expect` es una
+/// red de seguridad documentada, no una rama alcanzable.
+fn serialize_show_json(show: &ShowJson) -> String {
+    serde_json::to_string(show)
+        .expect("la serialización de ShowJson no puede fallar: solo contiene escalares y cadenas")
+}
+
+/// Construye el JSON completo de un tag ID3v2 de MP3, con los mismos datos que
+/// [`display_tags`] muestra (mismos accessors de `lofty` y mismos frames).
+pub fn json_from_mp3(tag: &Id3v2Tag) -> String {
+    let tags = TagsJson {
+        title: tag.title().map(|titulo| titulo.to_string()),
+        artists: split_artists(tag.artist().as_deref()),
+        album: tag.album().map(|album| album.to_string()),
+        year: year_frame(tag),
+        date: tag.date().map(|fecha| fecha.to_string()),
+        genre: tag.genre().map(|genero| genero.to_string()),
+        track: tag.track().map(|number| TrackJson {
+            number,
+            total: tag.track_total(),
+        }),
+        season: tag.disk().map(|number| TrackJson {
+            number,
+            total: tag.disk_total(),
+        }),
+        copyright: tag.get_text(&frame_id("TCOP")).map(str::to_owned),
+        composer: tag.get_text(&frame_id("TCOM")).map(str::to_owned),
+        subtitle: tag.get_text(&frame_id("TIT3")).map(str::to_owned),
+        original_artist: tag.get_text(&frame_id("TOPE")).map(str::to_owned),
+        album_artist: tag.get_text(&frame_id("TPE2")).map(str::to_owned),
+        url: match tag.get(&frame_id("WOAR")) {
+            Some(Frame::Url(url_frame)) => Some(url_frame.url().to_owned()),
+            _ => None,
+        },
+        lyrics: tag
+            .iter()
+            .find(|frame| matches!(frame, Frame::UnsynchronizedText(_)))
+            .and_then(|frame| match frame {
+                Frame::UnsynchronizedText(lyrics) => Some(lyrics.content.to_string()),
+                _ => None,
+            }),
+        compilation: tag.get_text(&frame_id("TCMP")) == Some("1"),
+        album_sort: tag.get_text(&frame_id("TSOA")).map(str::to_owned),
+        artist_sort: tag.get_text(&frame_id("TSOP")).map(str::to_owned),
+        title_sort: tag.get_text(&frame_id("TSOT")).map(str::to_owned),
+        pictures: tag
+            .iter()
+            .filter_map(|frame| match frame {
+                Frame::Picture(apic) => Some(picture_json(&apic.picture)),
+                _ => None,
+            })
+            .collect(),
+    };
+
+    serialize_show_json(&ShowJson {
+        formato: "mp3".to_owned(),
+        tags: Some(tags),
+    })
+}
+
+/// Construye el JSON completo de un tag `ilst` de MP4, con los mismos datos que
+/// [`display_tags_mp4`] muestra (mismos `ItemKey` y misma heurística de fecha).
+///
+/// `original_artist` y `url` son siempre `null`: el backend MP4 no los escribe
+/// (no tienen átomo equivalente) y el JSON refleja la verdad del archivo.
+pub fn json_from_mp4(tag: &Tag) -> String {
+    // `©day` lo comparten `--year` (año suelto, `YYYY`) y `--date`: la misma
+    // heurística `is_year_only` que usa el modo legible decide la etiqueta.
+    let (year, date) = match tag.get_string(ItemKey::RecordingDate) {
+        Some(day) if is_year_only(day) => (day.parse::<i32>().ok(), None),
+        Some(day) => (None, Some(day.to_owned())),
+        None => (None, None),
+    };
+
+    let tags = TagsJson {
+        title: tag.get_string(ItemKey::TrackTitle).map(str::to_owned),
+        artists: split_artists(tag.get_string(ItemKey::TrackArtist)),
+        album: tag.get_string(ItemKey::AlbumTitle).map(str::to_owned),
+        year,
+        date,
+        genre: tag.get_string(ItemKey::Genre).map(str::to_owned),
+        track: tag.track().map(|number| TrackJson {
+            number,
+            total: tag.track_total(),
+        }),
+        season: tag.disk().map(|number| TrackJson {
+            number,
+            total: tag.disk_total(),
+        }),
+        copyright: tag.get_string(ItemKey::CopyrightMessage).map(str::to_owned),
+        composer: tag.get_string(ItemKey::Composer).map(str::to_owned),
+        subtitle: tag.get_string(ItemKey::TrackSubtitle).map(str::to_owned),
+        original_artist: None,
+        album_artist: tag.get_string(ItemKey::AlbumArtist).map(str::to_owned),
+        url: None,
+        lyrics: tag
+            .get_string(ItemKey::UnsyncLyrics)
+            .or_else(|| tag.get_string(ItemKey::Lyrics))
+            .map(str::to_owned),
+        compilation: tag.get_string(ItemKey::FlagCompilation) == Some("1"),
+        album_sort: tag
+            .get_string(ItemKey::AlbumTitleSortOrder)
+            .map(str::to_owned),
+        artist_sort: tag
+            .get_string(ItemKey::TrackArtistSortOrder)
+            .map(str::to_owned),
+        title_sort: tag
+            .get_string(ItemKey::TrackTitleSortOrder)
+            .map(str::to_owned),
+        pictures: tag.pictures().iter().map(picture_json).collect(),
+    };
+
+    serialize_show_json(&ShowJson {
+        formato: "mp4".to_owned(),
+        tags: Some(tags),
+    })
+}
+
+/// Construye el JSON completo de un comentario de Vorbis (Ogg Vorbis, Opus o
+/// FLAC nativo), con los mismos datos que [`display_vorbis_content`] muestra.
+///
+/// `pictures` es el slice de carátulas ya leído: en Ogg/Opus el del propio
+/// comentario (`tag.pictures()`) y en FLAC los bloques `PICTURE` del archivo
+/// ([`read_flac_pictures`]). `format` es el nombre real del códec (`"ogg"`,
+/// `"opus"` o `"flac"`).
+pub fn json_from_vorbis(
+    format: &str,
+    tag: &VorbisComments,
+    pictures: &[(Picture, PictureInformation)],
+) -> String {
+    let tags = TagsJson {
+        title: tag.get(vorbis_key("--title")).map(str::to_owned),
+        artists: split_artists(tag.get(vorbis_key("--artist"))),
+        album: tag.get(vorbis_key("--album")).map(str::to_owned),
+        // `YEAR` es texto en el comentario: si no parsea como entero (archivo
+        // ajeno), el año es `null` y `date` conserva el string (Decisión de
+        // diseño del change json-output).
+        year: tag
+            .get(vorbis_key("--year"))
+            .and_then(|anio| anio.parse::<i32>().ok()),
+        date: tag.get(vorbis_key("--date")).map(str::to_owned),
+        genre: tag.get(vorbis_key("--genre")).map(str::to_owned),
+        track: tag
+            .get(vorbis_key("--track"))
+            .and_then(|numero| numero.parse::<u32>().ok())
+            .map(|number| TrackJson {
+                number,
+                total: tag
+                    .get("TRACKTOTAL")
+                    .and_then(|total| total.parse::<u32>().ok()),
+            }),
+        season: tag
+            .get(vorbis_key("--season"))
+            .and_then(|numero| numero.parse::<u32>().ok())
+            .map(|number| TrackJson {
+                number,
+                total: tag
+                    .get("DISCTOTAL")
+                    .and_then(|total| total.parse::<u32>().ok()),
+            }),
+        copyright: tag.get(vorbis_key("--copyright")).map(str::to_owned),
+        composer: tag.get(vorbis_key("--composer")).map(str::to_owned),
+        subtitle: tag.get(vorbis_key("--subtitle")).map(str::to_owned),
+        original_artist: None,
+        album_artist: tag.get(vorbis_key("--album-artist")).map(str::to_owned),
+        url: None,
+        lyrics: tag
+            .get(vorbis_key("--lyrics"))
+            .or_else(|| tag.get("UNSYNCEDLYRICS"))
+            .map(str::to_owned),
+        compilation: tag.get(vorbis_key("--compilation")) == Some("1"),
+        album_sort: tag.get(vorbis_key("--album-sort")).map(str::to_owned),
+        artist_sort: tag.get(vorbis_key("--artist-sort")).map(str::to_owned),
+        title_sort: tag.get(vorbis_key("--title-sort")).map(str::to_owned),
+        pictures: pictures.iter().map(|(pic, _)| picture_json(pic)).collect(),
+    };
+
+    serialize_show_json(&ShowJson {
+        formato: format.to_owned(),
+        tags: Some(tags),
+    })
+}
+
+/// Construye el JSON de un contenedor **sin** tag: `{"formato": ..., "tags": null}`.
+///
+/// Es la salida del modo `--json` para un MP3 sin ID3 o un MP4 sin `ilst`
+/// (Decisión 3 del design): exit 0 y stderr limpio, sin el aviso ⚠️ del modo
+/// legible.
+pub fn json_empty(format: &str) -> String {
+    serialize_show_json(&ShowJson {
+        formato: format.to_owned(),
+        tags: None,
+    })
+}
+
+/// Devuelve el nombre del códec que el JSON usa para [`AudioFormat`].
+///
+/// El mapeo es total para los cinco formatos soportados y distingue el códec
+/// real del contenedor Ogg (`OggVorbis` → `"ogg"`, `OggOpus` → `"opus"`).
+/// [`AudioFormat::Unsupported`] y [`AudioFormat::Unknown`] nunca llegan aquí:
+/// el CLI solo enruta a `--json` formatos ya aceptados por
+/// `detect_supported_format`, así que su ausencia es inalcanzable.
+pub fn format_json_name(format: AudioFormat) -> &'static str {
+    match format {
+        AudioFormat::Mp3 => "mp3",
+        AudioFormat::Mp4 => "mp4",
+        AudioFormat::OggVorbis => "ogg",
+        AudioFormat::OggOpus => "opus",
+        AudioFormat::Flac => "flac",
+        AudioFormat::Unsupported | AudioFormat::Unknown => {
+            unreachable!(
+                "`--json` solo se ejecuta sobre formatos soportados (Mp3, Mp4, OggVorbis, OggOpus o Flac)"
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -6015,3 +6015,388 @@ fn test_cli_help_nombra_los_tres_formatos() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Salida JSON de `show` (`--json`) — change json-output, grupos 3.1 y 3.2
+//
+// Fase RED: el flag `--json` NO existe todavía, así que clap rechaza la
+// invocación (exit ≠ 0) y estos tests fallan en ejecución. SÍ compilan porque
+// solo usan `Command` y aserciones de cadenas. El GREEN los pondrá verdes.
+// ---------------------------------------------------------------------------
+
+/// Comprueba que el stdout contiene la pareja `"formato"` → `formato` del JSON.
+///
+/// Acepta tanto la forma compacta de `serde_json::to_string`
+/// (`"formato":"mp3"`) como la espaciada del ejemplo del spec
+/// (`"formato": "mp3"`), de modo que el test no dependa de ese detalle.
+fn contiene_formato_json(stdout: &str, formato: &str) -> bool {
+    stdout.contains(&format!("\"formato\":\"{formato}\""))
+        || stdout.contains(&format!("\"formato\": \"{formato}\""))
+}
+
+#[test]
+fn test_cli_show_json_mp3() {
+    let mp3_path = create_temp_mp3();
+
+    let edit = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--title",
+        "Canción de Prueba",
+        "--artist",
+        "Artista Uno",
+        "--album",
+        "Álbum de Prueba",
+        "--track",
+        "7/12",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el MP3 con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", "--json", mp3_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un MP3 con tags debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.trim_start().starts_with('{'),
+        "el stdout debe ser un objeto JSON, fue: {stdout}"
+    );
+    assert!(
+        contiene_formato_json(&stdout, "mp3"),
+        "el formato del JSON debe ser mp3, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"title\":\"Canción de Prueba\""),
+        "el JSON debe contener el título escrito, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"track\":{\"number\":7,\"total\":12}"),
+        "el JSON debe contener la pista 7/12, fue: {stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&show.stderr).is_empty(),
+        "en modo JSON el stderr debe quedar vacío, fue: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_json_m4a() {
+    let m4a_path = create_temp_m4a("show_json");
+
+    let edit = run_cli(&[
+        "edit",
+        m4a_path.to_str().unwrap(),
+        "--title",
+        "Canción M4A",
+        "--artist",
+        "Artista M4A",
+        "--album",
+        "Álbum M4A",
+        "--date",
+        "2026-10-16",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el M4A con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", "--json", m4a_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un M4A con metadatos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.trim_start().starts_with('{'),
+        "el stdout debe ser un objeto JSON, fue: {stdout}"
+    );
+    assert!(
+        contiene_formato_json(&stdout, "mp4"),
+        "el formato del JSON de un M4A debe ser mp4 (nunca m4a), fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"title\":\"Canción M4A\""),
+        "el JSON debe contener el título escrito, fue: {stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&show.stderr).is_empty(),
+        "en modo JSON el stderr debe quedar vacío, fue: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+
+    cleanup_file(&m4a_path);
+}
+
+#[test]
+fn test_cli_show_json_ogg() {
+    let ogg_path = create_temp_ogg();
+
+    let edit = run_cli(&[
+        "edit",
+        ogg_path.to_str().unwrap(),
+        "--title",
+        "Canción OGG",
+        "--artist",
+        "Artista OGG",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el OGG con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", "--json", ogg_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un OGG con metadatos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        contiene_formato_json(&stdout, "ogg"),
+        "el formato del JSON de un Ogg Vorbis debe ser ogg, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"title\":\"Canción OGG\""),
+        "el JSON debe contener el título escrito, fue: {stdout}"
+    );
+
+    cleanup_file(&ogg_path);
+}
+
+#[test]
+fn test_cli_show_json_opus() {
+    let opus_path = create_temp_opus();
+
+    let edit = run_cli(&[
+        "edit",
+        opus_path.to_str().unwrap(),
+        "--title",
+        "Canción Opus",
+        "--artist",
+        "Artista Opus",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el Opus con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", "--json", opus_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un Opus con metadatos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        contiene_formato_json(&stdout, "opus"),
+        "el formato del JSON de un contenedor Ogg Opus debe ser opus, no ogg, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"title\":\"Canción Opus\""),
+        "el JSON debe contener el título escrito, fue: {stdout}"
+    );
+
+    cleanup_file(&opus_path);
+}
+
+#[test]
+fn test_cli_show_json_flac() {
+    let flac_path = create_temp_flac();
+
+    let edit = run_cli(&[
+        "edit",
+        flac_path.to_str().unwrap(),
+        "--title",
+        "Canción FLAC",
+        "--artist",
+        "Artista FLAC",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el FLAC con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let show = run_cli(&["show", "--json", flac_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un FLAC con metadatos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        contiene_formato_json(&stdout, "flac"),
+        "el formato del JSON de un FLAC nativo debe ser flac, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"title\":\"Canción FLAC\""),
+        "el JSON debe contener el título escrito, fue: {stdout}"
+    );
+
+    cleanup_file(&flac_path);
+}
+
+#[test]
+fn test_cli_show_json_sin_tags_mp3() {
+    // El fixture MP3 NO tiene ningún tag ID3: en modo JSON debe emitirse
+    // `{"formato": "mp3", "tags": null}` con exit 0 y stderr limpio — el aviso
+    // ⚠️ del modo legible queda suprimido para el consumidor máquina.
+    let mp3_path = create_temp_mp3();
+
+    let show = run_cli(&["show", "--json", mp3_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un MP3 sin tags debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        contiene_formato_json(&stdout, "mp3"),
+        "sin tags el JSON debe mantener el formato, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"tags\":null"),
+        "sin tags el JSON debe ser exactamente tags null, fue: {stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&show.stderr).is_empty(),
+        "en modo JSON el aviso ⚠️ del caso sin tags debe suprimirse, fue: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+
+    cleanup_file(&mp3_path);
+}
+
+#[test]
+fn test_cli_show_json_sin_tags_m4a() {
+    // El fixture M4A no tiene átomo `ilst`: mismo contrato que el MP3 sin tags.
+    let m4a_path = create_temp_m4a("sin_tags_json");
+
+    let show = run_cli(&["show", "--json", m4a_path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show --json` sobre un M4A sin metadatos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        contiene_formato_json(&stdout, "mp4"),
+        "sin tags el JSON debe mantener el formato, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"tags\":null"),
+        "sin ilst el JSON debe ser exactamente tags null, fue: {stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&show.stderr).is_empty(),
+        "en modo JSON el aviso ⚠️ del caso sin metadatos debe suprimirse, fue: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+
+    cleanup_file(&m4a_path);
+}
+
+#[test]
+fn test_cli_show_json_formato_no_soportado() {
+    // Un WAV (magic `RIFF` + `WAVE`) debe rechazarse igual que en el modo
+    // legible: exit ≠ 0, mensaje en español por stderr y NADA de JSON en stdout.
+    let mut bytes = b"RIFF\x00\x00\x00\x00WAVE".to_vec();
+    bytes.extend_from_slice(&[0u8; 32]);
+    let path = write_temp_bytes("wav_json", "wav", &bytes);
+
+    let output = run_cli(&["show", "--json", path.to_str().unwrap()]);
+    assert!(
+        !output.status.success(),
+        "`show --json` sobre un WAV debe salir con código distinto de cero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("soportado"),
+        "el error debe indicar formato no soportado en español, fue: {stderr}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).is_empty(),
+        "el stdout NO debe contener JSON ni texto, fue: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_show_json_pipe_cerrado() {
+    // El contrato de BrokenPipe del modo legible aplica igual al modo JSON: con
+    // el extremo de lectura del pipe cerrado, `show --json` termina con exit 0
+    // sin pánico y sin nada por stderr.
+    let mp3_path = create_temp_mp3();
+
+    let edit = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--title",
+        "Título para pipe JSON",
+        "--artist",
+        "Artista para pipe JSON",
+    ]);
+    assert!(
+        edit.status.success(),
+        "no se pudo preparar el MP3 con metadatos: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let mut child = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "show",
+            "--json",
+            mp3_path.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+
+    drop(child.stdout.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`show --json` con stdout cerrado debe salir con 0, no {:?}. stderr: {}",
+        output.status.code(),
+        stderr
+    );
+    assert!(
+        stderr.is_empty(),
+        "stderr debe quedar vacío cuando el pipe está cerrado, fue: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("panicked")
+            && !stderr.contains("failed printing to stdout")
+            && !stderr.contains("RUST_BACKTRACE"),
+        "no debe aparecer un pánico al escribir en stdout: {}",
+        stderr
+    );
+
+    cleanup_file(&mp3_path);
+}

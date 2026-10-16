@@ -4934,3 +4934,222 @@ fn test_documentacion_describe_los_formatos_soportados() {
         fallos.join("\n- ")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Salida JSON de `show` (`--json`) — change json-output, grupo 2 (fase RED)
+//
+// Fase RED: los símbolos de serialización (`json_from_mp3`, `json_from_mp4`,
+// `json_from_vorbis`, `json_empty` y `format_json_name`) NO existen todavía, así
+// que estos tests no compilan hasta el GREEN. La verificación es por
+// subcadenas del JSON compacto de serde (`serde_json::to_string` no escribe
+// espacios); el GREEN puede reforzarlos parseando con `serde_json::Value`.
+// ---------------------------------------------------------------------------
+
+/// Las 20 claves canónicas del objeto `tags`, todas presentes siempre (null si
+/// el campo no existe). Es el contrato de claves del spec `json-output`.
+const CLAVES_CANONICAS: [&str; 20] = [
+    "title",
+    "artists",
+    "album",
+    "year",
+    "date",
+    "genre",
+    "track",
+    "season",
+    "copyright",
+    "composer",
+    "subtitle",
+    "original_artist",
+    "album_artist",
+    "url",
+    "lyrics",
+    "compilation",
+    "album_sort",
+    "artist_sort",
+    "title_sort",
+    "pictures",
+];
+
+/// Verifica que `json` contenga las 20 claves canónicas del objeto `tags`.
+///
+/// Cada clave se busca como `"clave":` (con su dos puntos), la forma compacta
+/// de `serde_json::to_string`, de modo que no colisione con valores que
+/// contengan el mismo texto.
+fn contiene_todas_las_claves(json: &str) -> Vec<String> {
+    CLAVES_CANONICAS
+        .iter()
+        .filter(|clave| !json.contains(&format!("\"{clave}\":")))
+        .map(|clave| format!("falta la clave {clave:?} en: {json}"))
+        .collect()
+}
+
+#[test]
+fn test_json_mp3_serializacion_completa() {
+    // Tag ID3v2 sintético con título, dos artistas (unidos por `"; "`, la
+    // convención del CLI), álbum, año (TYER), pista 7/12 y carátula JPEG.
+    let mut tag = Id3v2Tag::new();
+    tag.set_title("Canción de Prueba".to_string());
+    tag.set_artist("Artista Uno; Artista Dos".to_string());
+    tag.set_album("Álbum de Prueba".to_string());
+    set_year_frame(&mut tag, 2026);
+    tag.set_track(7);
+    tag.set_track_total(12);
+    let picture = create_picture_frame(
+        vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46],
+        "image/jpeg",
+    );
+    let _ = tag.insert_picture(picture);
+
+    // TODO(GREEN): verificar parseando con serde_json::Value cuando esté
+    // disponible; ahora se comprueba la serialización por subcadenas.
+    let json = crate::json_from_mp3(&tag);
+
+    assert!(
+        json.starts_with("{\"formato\":\"mp3\""),
+        "el JSON debe abrir el objeto con el formato mp3, fue: {json}"
+    );
+    assert!(
+        json.contains("\"title\":\"Canción de Prueba\""),
+        "el JSON debe contener el título, fue: {json}"
+    );
+    assert!(
+        json.contains("\"album\":\"Álbum de Prueba\""),
+        "el JSON debe contener el álbum, fue: {json}"
+    );
+    assert!(
+        json.contains("\"year\":2026"),
+        "el JSON debe contener el año como número, fue: {json}"
+    );
+    assert!(
+        json.contains("\"artists\":[\"Artista Uno\",\"Artista Dos\"]"),
+        "los artistas deben dividirse por \"; \" en un array, fue: {json}"
+    );
+    assert!(
+        json.contains("\"track\":{\"number\":7,\"total\":12}"),
+        "la pista debe serializarse como objeto number/total, fue: {json}"
+    );
+    assert!(
+        json.contains("\"compilation\":false"),
+        "sin TCMP la compilación debe ser false, fue: {json}"
+    );
+    assert!(
+        json.contains(
+            "\"pictures\":[{\"type\":\"CoverFront\",\"mime\":\"image/jpeg\",\"size_bytes\":8}]"
+        ),
+        "la carátula debe serializarse como type/mime/size_bytes sin bytes, fue: {json}"
+    );
+    assert!(
+        json.trim_end().ends_with('}'),
+        "el JSON debe terminar en el cierre del objeto, fue: {json}"
+    );
+
+    let fallos = contiene_todas_las_claves(&json);
+    assert!(
+        fallos.is_empty(),
+        "el objeto `tags` debe tener todas las claves canónicas: {}",
+        fallos.join("\n- ")
+    );
+}
+
+#[test]
+fn test_json_tags_claves_ausentes_son_null() {
+    // Tag sintético con SOLO álbum: el resto de campos no existen y deben
+    // emitirse como null, arrays vacíos o booleana false — nunca omitidos.
+    let mut tag = Id3v2Tag::new();
+    tag.set_album("Solo Álbum".to_string());
+
+    let json = crate::json_from_mp3(&tag);
+
+    assert!(
+        json.contains("\"album\":\"Solo Álbum\""),
+        "el álbum presente debe serializarse con su valor, fue: {json}"
+    );
+    for (clave, valor) in [
+        ("title", "null"),
+        ("year", "null"),
+        ("date", "null"),
+        ("genre", "null"),
+        ("track", "null"),
+        ("season", "null"),
+        ("url", "null"),
+        ("lyrics", "null"),
+    ] {
+        assert!(
+            json.contains(&format!("\"{clave}\":{valor}")),
+            "el campo ausente {clave:?} debe emitirse como {valor}, fue: {json}"
+        );
+    }
+    assert!(
+        json.contains("\"artists\":[]"),
+        "sin artistas el array debe estar vacío, fue: {json}"
+    );
+    assert!(
+        json.contains("\"pictures\":[]"),
+        "sin carátulas el array debe estar vacío, fue: {json}"
+    );
+    assert!(
+        json.contains("\"compilation\":false"),
+        "sin TCMP la compilación debe ser false, fue: {json}"
+    );
+
+    let fallos = contiene_todas_las_claves(&json);
+    assert!(
+        fallos.is_empty(),
+        "aunque los campos estén ausentes, todas las claves deben estar presentes: {}",
+        fallos.join("\n- ")
+    );
+}
+
+#[test]
+fn test_json_empty_tags_null() {
+    // Sin tag (MP3 sin ID3, MP4 sin ilst) el objeto es `{"formato", "tags": null}`.
+    // El helper devuelve el objeto SIN `\n`; `outln!` lo añade al imprimir, por
+    // eso se compara con `trim()` para no depender de ese detalle.
+    let json = crate::json_empty("mp3");
+
+    assert_eq!(
+        json.trim(),
+        "{\"formato\":\"mp3\",\"tags\":null}",
+        "json_empty debe devolver exactamente el objeto con tags null, fue: {json:?}"
+    );
+}
+
+#[test]
+fn test_format_json_name_cinco_formatos() {
+    // El mapeo AudioFormat → formato es total y distingue el códec real del
+    // contenedor Ogg: Vorbis es "ogg" y Opus es "opus".
+    assert_eq!(crate::format_json_name(AudioFormat::Mp3), "mp3");
+    assert_eq!(crate::format_json_name(AudioFormat::Mp4), "mp4");
+    assert_eq!(crate::format_json_name(AudioFormat::OggVorbis), "ogg");
+    assert_eq!(crate::format_json_name(AudioFormat::OggOpus), "opus");
+    assert_eq!(crate::format_json_name(AudioFormat::Flac), "flac");
+}
+
+#[test]
+fn test_json_vorbis_track_total_y_lyrics_completos() {
+    // Comentario Vorbis sintético con pista 7/12 y una letra de más de 3
+    // líneas: el JSON debe componer el objeto track desde TRACKNUMBER/TRACKTOTAL
+    // y emitir la letra COMPLETA (el preview de 3 líneas es del modo legible).
+    let mut tag = VorbisComments::new();
+    tag.insert("TRACKNUMBER".to_string(), "7".to_string());
+    tag.insert("TRACKTOTAL".to_string(), "12".to_string());
+    let letra = "Primera línea\nSegunda línea\nTercera línea\nCuarta línea";
+    tag.insert("LYRICS".to_string(), letra.to_string());
+
+    let json = crate::json_from_vorbis("ogg", &tag, &[]);
+
+    assert!(
+        json.contains("\"track\":{\"number\":7,\"total\":12}"),
+        "el track debe componerse de TRACKNUMBER/TRACKTOTAL, fue: {json}"
+    );
+    assert!(
+        json.contains(
+            "\"lyrics\":\"Primera línea\\nSegunda línea\\nTercera línea\\nCuarta línea\""
+        ),
+        "la letra debe emitirse COMPLETA con sus saltos de línea escapados, fue: {json}"
+    );
+    assert!(
+        json.contains("Cuarta línea"),
+        "la última línea de la letra no debe truncarse como en el preview, fue: {json}"
+    );
+}
