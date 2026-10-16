@@ -31,11 +31,14 @@ pub mod output;
 
 use lofty::TextEncoding;
 use lofty::config::{ParseOptions, WriteOptions};
-use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::file::TaggedFileExt;
 use lofty::id3::v2::{
     Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
-use lofty::picture::{MimeType, Picture, PictureType};
+use lofty::ogg::tag::VorbisComments;
+use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
+use lofty::picture::{MimeType, Picture, PictureInformation, PictureType};
+use lofty::prelude::AudioFile;
 use lofty::tag::items::Timestamp;
 use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use std::fs::{File, OpenOptions};
@@ -77,6 +80,128 @@ fn year_frame(tag: &Id3v2Tag) -> Option<i32> {
         .and_then(|value| value.parse::<i32>().ok())
 }
 
+/// Número de pista o de temporada, con su total opcional.
+///
+/// Lo usan tanto `--track` como `--season`, que aceptan un número suelto o un
+/// par de número y total separados por una barra. El parseo ([`FromStr`]) valida
+/// la forma dentro de `clap`, de modo que una forma inválida falla **antes de
+/// abrir el archivo**. La sintaxis admitida es **uno o dos grupos de dígitos
+/// decimales ASCII separados por una barra**:
+///
+/// ```text
+/// 7       -> número 7, sin total
+/// 7/12    -> número 7, total 12
+/// ```
+///
+/// Cualquier otra forma (`7/`, `/12`, `7/12/3`, `7/x`, `+7`, la cadena vacía, un
+/// número negativo o con espacios, `7\n` o cualquier dígito no ASCII) se rechaza
+/// con un mensaje en español. Los ceros a la izquierda se aceptan y se
+/// normalizan (`007` → `7`), y el cero se admite (`0` y `0/0`).
+///
+/// # Asimetría del cero entre contenedores
+///
+/// El tipo **no prohíbe** el cero, pero los contenedores no lo representan
+/// igual: MP3 (frame de texto) y OGG (comentario Vorbis) escriben `0` tal cual y
+/// lo muestran al releer, mientras que el átomo numérico de MP4 (`trkn`/`disk`)
+/// lo descarta y el backend avisa de la degradación (ver [`Mp4EditOptions`]).
+///
+/// [`FromStr`]: std::str::FromStr
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NumberWithTotal {
+    /// Número (campo izquierdo del par).
+    number: u32,
+    /// Total (campo derecho del par), si se indicó.
+    total: Option<u32>,
+}
+
+impl NumberWithTotal {
+    /// Crea un [`NumberWithTotal`] a partir de su número y su total opcional.
+    pub fn new(number: u32, total: Option<u32>) -> Self {
+        Self { number, total }
+    }
+
+    /// Devuelve el número (campo izquierdo del par).
+    pub fn number(&self) -> u32 {
+        self.number
+    }
+
+    /// Devuelve el total (campo derecho del par), si se indicó.
+    pub fn total(&self) -> Option<u32> {
+        self.total
+    }
+}
+
+impl std::str::FromStr for NumberWithTotal {
+    type Err = String;
+
+    /// Acepta `7`, `7/12` o un número con ceros a la izquierda (`007`);
+    /// cualquier otra forma devuelve un error en español que nombra la sintaxis
+    /// admitida.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let invalid = || {
+            format!(
+                "forma inválida «{value}»: se admite un número (7) o un número con total (7/12)"
+            )
+        };
+
+        // Una sola barra como máximo: `7`, `7/12`. Con dos barras (`7/12/3`) o
+        // con una barra de más (`7//12`) el tercer trozo existe y se rechaza.
+        let mut parts = value.split('/');
+        let number = parts.next().unwrap_or_default();
+        let total = parts.next();
+        if parts.next().is_some() {
+            return Err(invalid());
+        }
+
+        // `parse::<u32>` **no** basta para exigir «enteros sin signo»: acepta el
+        // signo `+` (`"+7".parse::<u32>()` es `Ok(7)`), los ceros a la izquierda
+        // (que aquí sí se admiten y normalizan: `007` → `7`) y, por supuesto,
+        // cualquier dígito ASCII. Para que `+7`, `-7`, ` 7`, `7\n` y los dígitos
+        // no ASCII caigan, cada parte debe ser **no vacía y de solo dígitos
+        // ASCII** antes de parsearse.
+        let parse_part = |part: &str| -> Result<u32, String> {
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(invalid());
+            }
+            part.parse::<u32>().map_err(|_| invalid())
+        };
+
+        let number = parse_part(number)?;
+        let total = match total {
+            Some(total) => Some(parse_part(total)?),
+            None => None,
+        };
+
+        Ok(Self { number, total })
+    }
+}
+
+impl std::fmt::Display for NumberWithTotal {
+    /// Escribe `7` cuando no hay total y `7/12` cuando lo hay.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.total {
+            Some(total) => write!(f, "{}/{}", self.number, total),
+            None => write!(f, "{}", self.number),
+        }
+    }
+}
+
+/// Compone el texto de un número con su total para los tres visualizadores.
+///
+/// Devuelve `7` cuando no hay total y `7/12` cuando lo hay, de modo que MP3,
+/// MP4 y OGG muestren el par igual sin repetir la lógica. El número se acepta
+/// como texto para que la visualización de OGG, que lee una clave de comentario,
+/// no tenga que convertirla.
+fn format_number_with_total(
+    number: impl std::fmt::Display,
+    total: Option<impl std::fmt::Display>,
+) -> String {
+    match total {
+        Some(total) => format!("{number}/{total}"),
+        None => number.to_string(),
+    }
+}
+
 /// Aplica los metadatos especificados al tag ID3
 ///
 /// # Argumentos
@@ -87,8 +212,8 @@ fn year_frame(tag: &Id3v2Tag) -> Option<i32> {
 /// * `album` - Nombre del álbum
 /// * `year` - Año de publicación (frame `TYER`)
 /// * `genre` - Género musical
-/// * `track` - Número de pista
-/// * `season` - Temporada (TPOS - útil para podcasts)
+/// * `track` - Número de pista, con su total opcional (`TRCK`)
+/// * `season` - Temporada, con su total opcional (`TPOS` - útil para podcasts)
 /// * `date` - Fecha de grabación (formato YYYY-MM-DD o YYYY; frame `TDRC`)
 /// * `copyright` - Información de copyright
 /// * `composer` - Compositor (TCOM)
@@ -107,8 +232,8 @@ pub fn apply_metadata(
     album: Option<&str>,
     year: Option<i32>,
     genre: Option<&str>,
-    track: Option<u32>,
-    season: Option<u32>,
+    track: Option<NumberWithTotal>,
+    season: Option<NumberWithTotal>,
     date: Option<&str>,
     copyright: Option<&str>,
     composer: Option<&str>,
@@ -144,12 +269,21 @@ pub fn apply_metadata(
     }
 
     if let Some(track) = track {
-        tag.set_track(track);
+        // `set_track` conserva el total del frame `TRCK`; el total solo se
+        // sobrescribe si `--track` lo indica explícitamente.
+        tag.set_track(track.number());
+        if let Some(total) = track.total() {
+            tag.set_track_total(total);
+        }
         changed = true;
     }
 
-    if let Some(season_num) = season {
-        tag.set_disk(season_num);
+    if let Some(season) = season {
+        // Igual que la pista: `set_disk` conserva el total de `TPOS`.
+        tag.set_disk(season.number());
+        if let Some(total) = season.total() {
+            tag.set_disk_total(total);
+        }
         changed = true;
     }
 
@@ -323,6 +457,13 @@ pub fn detect_cover_mime_type(path: &Path) -> Result<&'static str, String> {
 ///
 /// El tipo MIME se detecta automáticamente desde la extensión del archivo.
 ///
+/// La carátula que se inserta es siempre `CoverFront`, de modo que una nueva
+/// edición **sustituye** la carátula frontal existente en lugar de acumularse:
+/// `lofty` no deduplica (su [`insert_picture`](lofty::id3::v2::tag::Id3v2Tag)
+/// solo reemplaza los tipos `Icon`/`OtherIcon`), así que la carátula anterior
+/// se elimina explícitamente antes de insertar la nueva. Las carátulas de otros
+/// tipos (`BackCover`, etc.) se conservan.
+///
 /// # Errores
 ///
 /// Retorna un error si:
@@ -335,6 +476,9 @@ pub fn add_cover_art(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mime_type = detect_cover_mime_type(cover_path)?;
     let picture = create_picture_frame(cover_data, mime_type);
+    // Sustituye la `CoverFront` previa (si existe) en vez de acumular. Sin
+    // carátula previa es un no-op.
+    tag.remove_picture_type(PictureType::CoverFront);
     let _ = tag.insert_picture(picture);
     Ok(())
 }
@@ -659,11 +803,17 @@ pub fn display_tags(tag: &Id3v2Tag) {
     }
 
     if let Some(track) = tag.track() {
-        outln!("#️⃣  Pista:     {}", track);
+        outln!(
+            "#️⃣  Pista:     {}",
+            format_number_with_total(track, tag.track_total())
+        );
     }
 
     if let Some(season) = tag.disk() {
-        outln!("📺 Temporada: {}", season);
+        outln!(
+            "📺 Temporada: {}",
+            format_number_with_total(season, tag.disk_total())
+        );
     }
 
     if let Some(copyright) = tag.get_text(&frame_id("TCOP")) {
@@ -760,13 +910,20 @@ pub fn display_tags(tag: &Id3v2Tag) {
 /// Número máximo de bytes iniciales que se inspeccionan para decidir el formato.
 ///
 /// Bastan para leer la cabecera ID3v2 (`ID3`), el átomo `ftyp` del offset 4 y una
-/// cabecera de frame MPEG completa (4 bytes).
-const FORMAT_PROBE_LEN: usize = 16;
+/// cabecera de frame MPEG completa (4 bytes). Ogg exige llegar más lejos: la
+/// cabecera de página ocupa 27 bytes, su tabla de segmentos hasta 255 más, y el
+/// primer paquete puede empezar en el offset 282, así que hacen falta hasta 289
+/// bytes para poder leer su identificador de códec (`\x01vorbis`). Se toma un
+/// valor redondeado por encima de ese máximo.
+const FORMAT_PROBE_LEN: usize = 512;
 
 /// Magic bytes de formatos de audio reconocibles pero **fuera de alcance**.
+///
+/// Ogg **no** figura aquí: el contenedor Ogg se decide por el códec de su primer
+/// paquete en [`detect_format_from_bytes`], no por la cabecera de página, porque
+/// Vorbis y Opus están soportados mientras que Speex, FLAC y Theora no.
 const UNSUPPORTED_MAGIC: &[&[u8]] = &[
-    b"fLaC", // FLAC
-    b"OggS", // Ogg (Vorbis, Opus, …)
+    b"fLaC", // FLAC nativo (fuera de Ogg)
     b"RIFF", // Contenedores RIFF (WAV, AVI, …)
     b"FORM", // AIFF / AIFC
     b"MAC ", // Monkey's Audio (APE)
@@ -783,8 +940,17 @@ pub enum AudioFormat {
     Mp3,
     /// Contenedor ISO-BMFF/MP4 (`.m4a`, `.mp4`, `.m4b`), reconocido por `ftyp`.
     Mp4,
-    /// Formato de audio reconocible pero fuera de alcance (FLAC, OGG, WAV,
-    /// AIFF, APE…).
+    /// Contenedor Ogg con el códec Vorbis, reconocido por la cabecera de página
+    /// (`OggS`, versión `0`) y por el identificador `\x01vorbis` del primer
+    /// paquete. Soportado.
+    OggVorbis,
+    /// Contenedor Ogg con el códec Opus, reconocido por la cabecera de página
+    /// (`OggS`, versión `0`) y por el identificador `OpusHead` del primer
+    /// paquete. Soportado.
+    OggOpus,
+    /// Formato de audio reconocible pero fuera de alcance (FLAC, WAV, AIFF, APE…,
+    /// o un contenedor Ogg con un códec distinto de Vorbis u Opus: Speex, FLAC,
+    /// Theora…).
     Unsupported,
     /// Contenido no reconocible o archivo demasiado corto para decidirlo.
     Unknown,
@@ -792,9 +958,11 @@ pub enum AudioFormat {
 
 /// Detecta el formato de audio de un archivo a partir de su contenido.
 ///
-/// Recibe la ruta únicamente para **leer** sus primeros bytes: la extensión del
-/// nombre no interviene en la decisión. El archivo se abre solo en modo lectura,
-/// de modo que esta función nunca lo modifica.
+/// Reconoce MP3, MP4 y los contenedores Ogg con códec Vorbis u Opus (véase
+/// [`detect_format_from_bytes`]). Recibe la ruta únicamente para **leer** sus
+/// primeros bytes: la extensión del nombre no interviene en la decisión. El
+/// archivo se abre solo en modo lectura, de modo que esta función nunca lo
+/// modifica.
 ///
 /// # Errores
 ///
@@ -816,9 +984,15 @@ pub fn detect_format(path: &Path) -> io::Result<AudioFormat> {
 ///
 /// * MP3: cabecera ID3v2 (`ID3`) o cabecera de frame MPEG válida.
 /// * MP4: átomo `ftyp` en el offset 4, con independencia del brand declarado.
+/// * Ogg (Vorbis u Opus): cabecera de página `OggS` completa, de versión `0`,
+///   cuyo primer paquete empieza por el identificador de códec `\x01vorbis`
+///   (Vorbis) u `OpusHead` (Opus). La decisión es por **códec**, no por
+///   contenedor: un Ogg es un sobre, y Speex, FLAC o Theora siguen fuera de
+///   alcance.
 /// * [`AudioFormat::Unsupported`]: magic bytes de un formato conocido pero fuera
-///   de alcance.
-/// * [`AudioFormat::Unknown`]: contenido no reconocible o demasiado corto.
+///   de alcance, o un contenedor Ogg con un códec no soportado.
+/// * [`AudioFormat::Unknown`]: contenido no reconocible o demasiado corto para
+///   decidirlo (incluida una página Ogg incompleta).
 pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
     if header.starts_with(b"ID3") {
         return AudioFormat::Mp3;
@@ -830,6 +1004,68 @@ pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
 
     if is_valid_mpeg_frame_header(header) {
         return AudioFormat::Mp3;
+    }
+
+    // Ogg: se decide por el códec del primer paquete, no por la cabecera de
+    // página. La cabecera de página son 27 bytes y el primer paquete empieza en
+    // `27 + n`, donde `n` es el número de segmentos declarado en el byte 26 (la
+    // tabla de segmentos ocupa tantos bytes como segmentos hay). Un Ogg es solo
+    // un sobre: Vorbis y Opus están soportados, mientras que Speex, FLAC y
+    // Theora siguen fuera de alcance.
+    if header.starts_with(b"OggS") {
+        // Sin la cabecera de página completa no se puede siquiera situar el
+        // primer paquete: el formato queda sin determinar.
+        if header.len() < 27 {
+            return AudioFormat::Unknown;
+        }
+        // Versión del flujo (byte 4): solo la `0` es válida.
+        if header[4] != 0 {
+            return AudioFormat::Unknown;
+        }
+
+        let segments = header[26] as usize;
+        // La tabla de segmentos va de `27` a `27 + segments`.
+        if header.len() < 27 + segments {
+            return AudioFormat::Unknown;
+        }
+
+        // Longitud declarada del primer paquete: se suman los valores de *lacing*
+        // (`255` = el paquete continúa) hasta el primero que lo cierra (`< 255`).
+        // Así un identificador corto (p. ej. `\x7fFLAC`, de 5 bytes) se reconoce
+        // como paquete completo sin exigir 7 bytes fijos.
+        let mut packet_len = 0usize;
+        let mut closed = false;
+        for &lace in &header[27..27 + segments] {
+            packet_len += lace as usize;
+            if lace < 255 {
+                closed = true;
+                break;
+            }
+        }
+        // El primer paquete no termina en esta página: no se puede leer entero.
+        if !closed {
+            return AudioFormat::Unknown;
+        }
+        // Un primer paquete de longitud cero (el primer valor de *lacing* es `0`)
+        // es «sin primer paquete»: la página no entrega ningún byte, así que no
+        // hay identificador de códec que leer y el formato queda sin determinar.
+        // No es un formato reconocible pero fuera de alcance (`Unsupported`).
+        if packet_len == 0 {
+            return AudioFormat::Unknown;
+        }
+
+        let payload = 27 + segments;
+        // El primer paquete debe estar entero dentro del bloque inspeccionado.
+        if header.len() < payload + packet_len {
+            return AudioFormat::Unknown;
+        }
+
+        let identifier = &header[payload..payload + packet_len];
+        return match identifier {
+            id if id.starts_with(b"\x01vorbis") => AudioFormat::OggVorbis,
+            id if id.starts_with(b"OpusHead") => AudioFormat::OggOpus,
+            _ => AudioFormat::Unsupported,
+        };
     }
 
     if UNSUPPORTED_MAGIC
@@ -1036,10 +1272,15 @@ pub struct Mp4EditOptions<'a> {
     pub year: Option<i32>,
     /// Género (`©gen`).
     pub genre: Option<&'a str>,
-    /// Número de pista (`trkn`).
-    pub track: Option<u32>,
-    /// Temporada / número de disco (`disk`).
-    pub season: Option<u32>,
+    /// Número de pista y su total (`trkn`).
+    ///
+    /// El átomo guarda el par en 16 bits: un número o un total fuera de
+    /// `1..=65535` no es representable y el backend avisa (ver [`edit_mp4`]).
+    pub track: Option<NumberWithTotal>,
+    /// Temporada / número de disco y su total (`disk`).
+    ///
+    /// Misma limitación de 16 bits que [`Self::track`].
+    pub season: Option<NumberWithTotal>,
     /// Fecha de grabación (`©day`, compartido con `year`).
     pub date: Option<&'a str>,
     /// Copyright (`cprt`).
@@ -1111,6 +1352,64 @@ pub fn mp4_field_omitted_warning(flag: &str) -> String {
     format!("⚠️  El campo '{flag}' no tiene átomo equivalente en MP4; se omite.")
 }
 
+/// Máximo que cabe en el átomo numérico de MP4 (`trkn`/`disk`), que guarda el
+/// número y el total en 16 bits sin signo. `lofty` 0.25.4 descarta en silencio
+/// todo valor fuera de `1..=65535` (y el cero).
+const MP4_NUMBER_MAX: u32 = u16::MAX as u32;
+
+/// Construye el warning (en español) de un **número** de `--track`/`--season`
+/// que no cabe en el átomo numérico de MP4.
+///
+/// El átomo `trkn` (pista) y `disk` (temporada) guardan el par en 16 bits y, al
+/// no ser representable el número, `lofty` lo descartaría en silencio. Para no
+/// reportar un éxito falso se omite el **par completo** (número y total), de
+/// modo que no quede un total huérfano, y se emite este aviso.
+pub fn mp4_number_unrepresentable_warning(field: &str, value: u32) -> String {
+    format!(
+        "⚠️  Aviso: el número de {field} ({value}) no cabe en el átomo numérico de MP4 \
+         (admite 1..=65535); se omiten el número y su total."
+    )
+}
+
+/// Construye el warning (en español) de un **total** de `--track`/`--season` que
+/// no cabe en el átomo numérico de MP4.
+///
+/// A diferencia del número, aquí sí se escribe el número: solo se omite el
+/// total, que `lofty` descartaría en silencio.
+pub fn mp4_total_unrepresentable_warning(field: &str, value: u32) -> String {
+    format!(
+        "⚠️  Aviso: el total de {field} ({value}) no cabe en el átomo numérico de MP4 \
+         (admite 1..=65535); se escribe el número y se omite el total."
+    )
+}
+
+/// Resuelve el par número/total de MP4 a lo que el átomo admite, avisando (una
+/// sola vez por campo) de lo que no se puede representar.
+///
+/// Devuelve `None` cuando el número no es representable: se omite el par
+/// completo para no dejar un total huérfano. Cuando solo falla el total,
+/// devuelve el número con total `None`. El cero cae en ambos casos, porque el
+/// átomo no lo distingue de «sin valor».
+fn resolve_mp4_number_pair(
+    field: &str,
+    value: NumberWithTotal,
+    warnings: &mut Vec<String>,
+) -> Option<(u32, Option<u32>)> {
+    let number = value.number();
+    if !(1..=MP4_NUMBER_MAX).contains(&number) {
+        warnings.push(mp4_number_unrepresentable_warning(field, number));
+        return None;
+    }
+
+    match value.total() {
+        Some(total) if !(1..=MP4_NUMBER_MAX).contains(&total) => {
+            warnings.push(mp4_total_unrepresentable_warning(field, total));
+            Some((number, None))
+        }
+        total => Some((number, total)),
+    }
+}
+
 /// Construye el warning (en español) que acompaña a una carátula WebP escrita en
 /// el átomo `covr` de un MP4.
 ///
@@ -1132,6 +1431,19 @@ pub fn mp4_webp_cover_warning() -> String {
 /// así que la carátula se escribe dejando el MIME deliberadamente **sin
 /// establecer** (lo que la librería mapea al tipo de dato reservado, 0) y es
 /// responsabilidad del llamador avisar de que no se mostrará.
+///
+/// La carátula se inserta siempre como `CoverFront`; antes de insertarla se
+/// vacía la lista de imágenes, de modo que una segunda edición **sustituye** a
+/// la primera en lugar de acumular: `Tag::push_picture` no deduplica.
+///
+/// A diferencia de MP3 y OGG, aquí **no** se usa `remove_picture_type`:
+/// `lofty` 0.25.4 escribe el átomo `covr` atendiendo solo al MIME
+/// (`mp4/ilst/write.rs`) y al leer lo reconstruye siempre como
+/// `PictureType::Other` (`mp4/ilst/read.rs`), de modo que el tipo no sobrevive
+/// al round-trip disco→memoria y `remove_picture_type(CoverFront)` jamás
+/// encontraría la carátula de una edición anterior. Como el contenedor no puede
+/// distinguir tipos de carátula, «sustituir la carátula» consiste en vaciar
+/// `covr` antes de insertar la nueva (misma operación que `remove_mp4_kind`).
 ///
 /// # Retorna
 ///
@@ -1155,6 +1467,12 @@ fn push_mp4_cover(tag: &mut Tag, data: &[u8], mime: &str) -> bool {
         create_picture_frame(data.to_vec(), mime)
     };
 
+    // Sustituye la carátula previa en vez de acumular (ver doc de la función:
+    // `remove_picture_type` no sirve aquí por el round-trip de `lofty`). Sin
+    // carátula previa es un no-op.
+    for index in (0..tag.pictures().len()).rev() {
+        tag.remove_picture(index);
+    }
     tag.push_picture(picture);
     reserved_type
 }
@@ -1215,13 +1533,30 @@ pub fn apply_metadata_mp4(tag: &mut Tag, options: &Mp4EditOptions<'_>) -> Mp4Edi
         report.changed = true;
     }
 
-    if let Some(track) = options.track {
-        set_mp4_text(tag, "--track", &track.to_string());
+    if let Some(track) = options.track
+        && let Some((number, total)) =
+            resolve_mp4_number_pair("--track", track, &mut report.warnings)
+    {
+        set_mp4_text(tag, "--track", &number.to_string());
+        if let Some(total) = total {
+            // El total vive en el mismo átomo `trkn` que el número, como
+            // `TrackTotal`; se inserta por la misma vía de bajo nivel que usa
+            // `set_mp4_text`. Si no se indica total, la clave que ya estuviera
+            // en el archivo se conserva.
+            tag.insert_text(ItemKey::TrackTotal, total.to_string());
+        }
         report.changed = true;
     }
 
-    if let Some(season) = options.season {
-        set_mp4_text(tag, "--season", &season.to_string());
+    if let Some(season) = options.season
+        && let Some((number, total)) =
+            resolve_mp4_number_pair("--season", season, &mut report.warnings)
+    {
+        set_mp4_text(tag, "--season", &number.to_string());
+        if let Some(total) = total {
+            // Igual que la pista, con el átomo `disk` y `DiscTotal`.
+            tag.insert_text(ItemKey::DiscTotal, total.to_string());
+        }
         report.changed = true;
     }
 
@@ -1325,6 +1660,10 @@ pub fn read_mp4_tag(path: &Path) -> Result<Option<Tag>, Box<dyn std::error::Erro
 /// tamaños de `moov`/`udta` preservando el resto de átomos (en especial las
 /// pistas de audio).
 ///
+/// Tras la escritura se ejecuta [`ensure_mp4_meta_hdlr`], el post-proceso que
+/// repara el bug de `lofty` 0.25.4 por el que un `meta` heredado se reescribe
+/// sin su hijo `hdlr` (ver la documentación de esa función).
+///
 /// # Errores
 ///
 /// Retorna un error si el archivo no existe, no es escribible o no se puede
@@ -1336,6 +1675,151 @@ pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::E
         path,
         WriteOptions::new().parse_options(ParseOptions::new().read_properties(false)),
     )?;
+    // Post-proceso: `lofty` descarta el hijo `hdlr` del `meta` al reescribir
+    // sobre un `meta` heredado; se reinserta aquí si hace falta.
+    ensure_mp4_meta_hdlr(path)?;
+    Ok(())
+}
+
+/// Átomo `hdlr` de 33 bytes que [`ensure_mp4_meta_hdlr`] inserta como hijo del
+/// `meta`, reproducido byte a byte del que `lofty` genera en un `meta` sano
+/// (size `0x21` = 33).
+///
+/// ```text
+/// 00 00 00 21 | 68 64 6c 72 | 00 00 00 00 | 00 00 00 00 |
+/// size=33       type=hdlr     version+flags  pre_defined
+/// 6d 64 69 72 | 61 70 70 6c | 00 00 00 00 00 00 00 00 00
+/// handler=mdir  =appl         9 bytes a cero
+/// ```
+const MP4_META_HDLR: [u8; 33] = [
+    0x00, 0x00, 0x00, 0x21, // size = 33
+    b'h', b'd', b'l', b'r', // type = "hdlr"
+    0x00, 0x00, 0x00, 0x00, // version + flags
+    0x00, 0x00, 0x00, 0x00, // pre_defined
+    b'm', b'd', b'i', b'r', // handler_type = "mdir"
+    b'a', b'p', b'p', b'l', // name = "appl"
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 9 bytes a cero
+];
+
+/// Busca el offset del campo `size` del primer átomo de tipo `buscado` dentro
+/// del rango `[desde, hasta)` de un contenedor MP4.
+///
+/// Recorre los átomos con su cabecera de 32 bits (`size` u32 BE + `type`): lee
+/// el tamaño y salta al siguiente. Un `size` de 0 (atom hasta el final del
+/// contenedor) o de 1 (tamaño de 64 bits) no se da en los MP4 de este proyecto
+/// y aborta la búsqueda devolviendo `None`, dejando el post-proceso sin efecto
+/// en vez de corromper el archivo.
+fn find_mp4_atom(bytes: &[u8], desde: usize, hasta: usize, buscado: &[u8; 4]) -> Option<usize> {
+    let mut pos = desde;
+    while pos + 8 <= hasta {
+        if &bytes[pos + 4..pos + 8] == buscado {
+            return Some(pos);
+        }
+        let size = u32::from_be_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+        if size == 0 || size == 1 || size < 8 {
+            return None;
+        }
+        pos += size;
+    }
+    None
+}
+
+/// Repara el bug de `lofty` 0.25.4 que descarta el hijo `hdlr` del átomo `meta`
+/// al reescribir el tag `ilst` de un MP4.
+///
+/// # El bug
+///
+/// Cuando `lofty` reescribe un `meta` **heredado** (por ejemplo, el que deja un
+/// `remove --all` previo: `moov > udta > meta` vacío de `ilst` pero con su
+/// `hdlr`), reconstruye el `meta` solo con el `ilst` y descarta el `hdlr`.
+/// Cuando el archivo no tenía `udta` previo, `lofty` sí genera
+/// `meta { hdlr, ilst }` correctamente. La causa está en `mp4/write.rs` de
+/// `lofty`: su lista `IMPORTANT_CONTAINERS` incluye `moov`, `udta`, `moof`,
+/// `trak`, `mdia`, `minf` y `stbl`, pero no `meta`, así que el writer
+/// reconstruye el `meta` desde el tag sin conservar los átomos ajenos. El
+/// resultado es un archivo que `show` lee bien, pero cuyas etiquetas no ven los
+/// demuxers externos (ffprobe/ffmpeg), que exigen el `hdlr` en el `meta`.
+///
+/// # Estrategia: post-proceso idempotente
+///
+/// Se releen los bytes finales del archivo, se localiza la ruta
+/// `moov > udta > meta` con un recorrido big-endian de átomos de 32 bits y:
+///
+/// 1. Si la zona de hijos del `meta` ya contiene un `hdlr`, no se toca nada
+///    (idempotencia: una segunda ejecución jamás duplica el átomo).
+/// 2. En caso contrario, se insertan los 33 bytes de [`MP4_META_HDLR`] justo
+///    después de la cabecera + versión/flags del `meta`, donde empiezan sus
+///    hijos (igual que `lofty` los escribe en el caso sano: `hdlr` primero) y
+///    se **suman 33** a los tamaños (u32 BE) de `meta`, `udta` y `moov`.
+/// 3. El archivo se reescribe con los bytes insertados (los átomos posteriores
+///    se desplazan, por eso se reconstruye el `Vec<u8>` completo).
+///
+/// # Por qué no se rompen los offsets del audio
+///
+/// Los offsets de las muestras (`stco`/`co64`) apuntan a posiciones dentro de
+/// `mdat`, que en los MP4 de este proyecto va **antes** de `moov`. Insertar
+/// bytes dentro de `moov` solo desplaza lo que hay después del punto de
+/// inserción (el resto de `moov` y cualquier átomo posterior a él), nunca
+/// `mdat`, así que los `stco`/`co64` siguen apuntando a las mismas posiciones.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer o reescribir. Si la
+/// estructura `moov > udta > meta` no se encuentra o ya está sana, no se
+/// modifica nada y se devuelve `Ok`.
+fn ensure_mp4_meta_hdlr(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut bytes = std::fs::read(path)?;
+    let len = bytes.len();
+
+    // Ruta `moov > udta > meta`, localizada con tamaños de 32 bits.
+    let Some(moov) = find_mp4_atom(&bytes, 0, len, b"moov") else {
+        return Ok(());
+    };
+    let moov_size = u32::from_be_bytes(bytes[moov..moov + 4].try_into().unwrap()) as usize;
+    // El rango de hijos de cada contenedor empieza 8 bytes después de su campo
+    // `size` (cabecera `size`+`type`).
+    let Some(udta) = find_mp4_atom(&bytes, moov + 8, moov + moov_size, b"udta") else {
+        return Ok(());
+    };
+    let udta_size = u32::from_be_bytes(bytes[udta..udta + 4].try_into().unwrap()) as usize;
+    let Some(meta) = find_mp4_atom(&bytes, udta + 8, udta + udta_size, b"meta") else {
+        return Ok(());
+    };
+    let meta_size = u32::from_be_bytes(bytes[meta..meta + 4].try_into().unwrap()) as usize;
+    let meta_end = meta + meta_size;
+    if meta_end > len {
+        // Átomo `meta` con tamaño fuera del archivo: archivo malformado, no se
+        // toca nada.
+        return Ok(());
+    }
+
+    // `meta` es un FullBox: sus hijos empiezan 4 bytes después de la cabecera
+    // (`size`+`type`), tras los 4 bytes de versión+flags.
+    let children_start = meta + 12;
+    if children_start > meta_end {
+        return Ok(());
+    }
+
+    // Idempotencia: si el `meta` ya tiene un hijo `hdlr`, no se toca nada.
+    if find_mp4_atom(&bytes, children_start, meta_end, b"hdlr").is_some() {
+        return Ok(());
+    }
+
+    // Los ancestros se actualizan ANTES de escribir el archivo con los bytes
+    // insertados: `meta`, `udta` y `moov` crecen 33 bytes cada uno.
+    for size_field in [meta, udta, moov] {
+        let nuevo = u32::from_be_bytes(bytes[size_field..size_field + 4].try_into().unwrap()) + 33;
+        bytes[size_field..size_field + 4].copy_from_slice(&nuevo.to_be_bytes());
+    }
+
+    // Inserta el `hdlr` justo donde empiezan los hijos del `meta` (desplaza el
+    // `ilst`, si lo hay, hacia el final del átomo).
+    bytes.splice(
+        children_start..children_start,
+        MP4_META_HDLR.iter().copied(),
+    );
+
+    std::fs::write(path, bytes)?;
     Ok(())
 }
 
@@ -1349,6 +1833,18 @@ pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::E
 /// La carátula se valida **antes** de escribir el archivo: si la extensión de la
 /// imagen no está soportada, la función devuelve error sin modificar un solo
 /// byte.
+///
+/// # Limitación de los átomos numéricos
+///
+/// Los átomos `trkn` (pista) y `disk` (temporada) guardan el número y el total
+/// en **16 bits**: `lofty` 0.25.4 descarta en silencio un valor fuera de
+/// `1..=65535` (y el cero) al serializar, y al leer trata el `0` como ausente.
+/// Para no reportar un éxito falso, el backend avisa por stderr **y** en el
+/// informe cuando el número o el total no son representables: si falla el
+/// número se omite el **par completo** (no se deja un total huérfano) y, si solo
+/// falla el total, se escribe el número y se omite el total. MP3 y OGG guardan
+/// el par como texto, sin ese límite, y por eso **no** avisan: es una asimetría
+/// legítima entre contenedores.
 ///
 /// # Errores
 ///
@@ -1395,8 +1891,21 @@ fn remove_mp4_kind(tag: &mut Tag, kind: TagKind) -> bool {
         TagKind::Album => ItemKey::AlbumTitle,
         TagKind::Year | TagKind::Date => ItemKey::RecordingDate,
         TagKind::Genre => ItemKey::Genre,
-        TagKind::Track => ItemKey::TrackNumber,
-        TagKind::Season => ItemKey::DiscNumber,
+        TagKind::Track => {
+            // El número de pista y su total se guardan juntos en el átomo
+            // `trkn` (`TrackNumber` + `TrackTotal`): borrar solo el número
+            // dejaría un total huérfano, que el contrato de `track-numbering`
+            // prohíbe, así que se borran los dos como una unidad.
+            tag.remove_key(ItemKey::TrackTotal);
+            tag.remove_key(ItemKey::TrackNumber);
+            return true;
+        }
+        TagKind::Season => {
+            // Igual con `disk`: `DiscNumber` y `DiscTotal` van juntos.
+            tag.remove_key(ItemKey::DiscTotal);
+            tag.remove_key(ItemKey::DiscNumber);
+            return true;
+        }
         TagKind::Copyright => ItemKey::CopyrightMessage,
         TagKind::Composer => ItemKey::Composer,
         TagKind::Subtitle => ItemKey::TrackSubtitle,
@@ -1541,11 +2050,17 @@ pub fn display_tags_mp4(tag: &Tag) {
     }
 
     if let Some(track) = tag.track() {
-        outln!("#️⃣  Pista:     {}", track);
+        outln!(
+            "#️⃣  Pista:     {}",
+            format_number_with_total(track, tag.track_total())
+        );
     }
 
     if let Some(season) = tag.disk() {
-        outln!("📺 Temporada: {}", season);
+        outln!(
+            "📺 Temporada: {}",
+            format_number_with_total(season, tag.disk_total())
+        );
     }
 
     if let Some(copyright) = tag.get_string(ItemKey::CopyrightMessage) {
@@ -1615,6 +2130,755 @@ pub fn display_tags_mp4(tag: &Tag) {
     let item_count = tag.items().len();
     if item_count > 0 {
         outln!("\n📦 Total de metadatos: {}", item_count);
+    }
+
+    outln!("═══════════════════════════════════════\n");
+}
+
+// ---------------------------------------------------------------------------
+// Backend OGG Vorbis (comentarios de Vorbis: pares `CLAVE=valor`)
+// ---------------------------------------------------------------------------
+
+/// Asignación de un flag del subcomando `edit` a la clave del comentario de
+/// Vorbis (`VorbisComments`) que le corresponde en un archivo Ogg Vorbis.
+///
+/// Esta estructura y la tabla [`VORBIS_COMMENT_MAP`] son la **única fuente** del
+/// mapeo flag → clave del backend OGG: tanto la escritura
+/// ([`apply_metadata_ogg`]) como la visualización ([`display_tags_ogg`]) y los
+/// tests la consultan, de modo que el mapeo no queda repartido en ramas dispersas
+/// por función.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VorbisCommentMapping {
+    /// Nombre del flag del CLI, tal y como lo acepta `edit` (p. ej. `--title`).
+    pub flag: &'static str,
+    /// Clave del comentario de Vorbis, siempre en mayúsculas (p. ej. `TITLE`).
+    pub key: &'static str,
+}
+
+impl VorbisCommentMapping {
+    /// Devuelve el mapeo del flag indicado, o `None` si no tiene clave
+    /// equivalente en Vorbis.
+    pub fn for_flag(flag: &str) -> Option<&'static VorbisCommentMapping> {
+        VORBIS_COMMENT_MAP
+            .iter()
+            .find(|mapping| mapping.flag == flag)
+    }
+
+    /// Devuelve el mapeo de la clave indicada, o `None` si no está en la tabla.
+    ///
+    /// La comparación es exacta y distingue mayúsculas, porque las claves de la
+    /// tabla se declaran siempre en mayúsculas.
+    pub fn for_key(key: &str) -> Option<&'static VorbisCommentMapping> {
+        VORBIS_COMMENT_MAP.iter().find(|mapping| mapping.key == key)
+    }
+}
+
+/// Mapeo único de los 18 flags del CLI a las claves del comentario de Vorbis.
+///
+/// A diferencia de MP4, aquí `--year` y `--date` tienen claves **distintas**
+/// (`YEAR` y `DATE`), por lo que cada flag se escribe en su propia clave sin
+/// absorberse. `--url` y `--original-artist` no están en la tabla porque no
+/// tienen clave equivalente en Vorbis: se omiten con aviso.
+pub const VORBIS_COMMENT_MAP: &[VorbisCommentMapping] = &[
+    VorbisCommentMapping {
+        flag: "--title",
+        key: "TITLE",
+    },
+    VorbisCommentMapping {
+        flag: "--artist",
+        key: "ARTIST",
+    },
+    VorbisCommentMapping {
+        flag: "--album",
+        key: "ALBUM",
+    },
+    VorbisCommentMapping {
+        flag: "--album-artist",
+        key: "ALBUMARTIST",
+    },
+    VorbisCommentMapping {
+        flag: "--year",
+        key: "YEAR",
+    },
+    VorbisCommentMapping {
+        flag: "--date",
+        key: "DATE",
+    },
+    VorbisCommentMapping {
+        flag: "--genre",
+        key: "GENRE",
+    },
+    VorbisCommentMapping {
+        flag: "--track",
+        key: "TRACKNUMBER",
+    },
+    VorbisCommentMapping {
+        flag: "--season",
+        key: "DISCNUMBER",
+    },
+    VorbisCommentMapping {
+        flag: "--composer",
+        key: "COMPOSER",
+    },
+    VorbisCommentMapping {
+        flag: "--copyright",
+        key: "COPYRIGHT",
+    },
+    VorbisCommentMapping {
+        flag: "--lyrics",
+        key: "LYRICS",
+    },
+    VorbisCommentMapping {
+        flag: "--cover",
+        key: "METADATA_BLOCK_PICTURE",
+    },
+    VorbisCommentMapping {
+        flag: "--compilation",
+        key: "COMPILATION",
+    },
+    VorbisCommentMapping {
+        flag: "--title-sort",
+        key: "TITLESORT",
+    },
+    VorbisCommentMapping {
+        flag: "--artist-sort",
+        key: "ARTISTSORT",
+    },
+    VorbisCommentMapping {
+        flag: "--album-sort",
+        key: "ALBUMSORT",
+    },
+    VorbisCommentMapping {
+        flag: "--subtitle",
+        key: "SUBTITLE",
+    },
+];
+
+/// Carátula indicada a `edit --cover` sobre un archivo Ogg Vorbis.
+///
+/// Se entrega ya leída de disco para que la escritura del comentario y la de la
+/// carátula sean una sola operación: de `path` se deriva el tipo MIME (por la
+/// extensión) y `data` son los bytes de la imagen que se copian intactos al
+/// bloque de carátula.
+#[derive(Debug, Clone, Copy)]
+pub struct OggCover<'a> {
+    /// Ruta al archivo de imagen; de su extensión se deriva el tipo MIME.
+    pub path: &'a Path,
+    /// Bytes de la imagen, ya leídos de disco.
+    pub data: &'a [u8],
+}
+
+/// Opciones de edición de metadatos sobre un comentario de Vorbis.
+///
+/// Refleja uno a uno los flags del subcomando `edit`. Los campos que no se
+/// indican quedan a `None` (o a `false`/vacío) y no se escriben.
+#[derive(Debug, Clone, Default)]
+pub struct OggEditOptions<'a> {
+    /// Título de la canción (`TITLE`).
+    pub title: Option<&'a str>,
+    /// Artistas; se unen con `"; "` en una única clave `ARTIST`.
+    pub artists: &'a [String],
+    /// Álbum (`ALBUM`).
+    pub album: Option<&'a str>,
+    /// Artista del álbum (`ALBUMARTIST`).
+    pub album_artist: Option<&'a str>,
+    /// Año (`YEAR`).
+    pub year: Option<i32>,
+    /// Género (`GENRE`).
+    pub genre: Option<&'a str>,
+    /// Número de pista y su total (`TRACKNUMBER` y `TRACKTOTAL`).
+    pub track: Option<NumberWithTotal>,
+    /// Temporada / número de disco y su total (`DISCNUMBER` y `DISCTOTAL`).
+    pub season: Option<NumberWithTotal>,
+    /// Fecha de grabación (`DATE`).
+    pub date: Option<&'a str>,
+    /// Copyright (`COPYRIGHT`).
+    pub copyright: Option<&'a str>,
+    /// Compositor (`COMPOSER`).
+    pub composer: Option<&'a str>,
+    /// Subtítulo (`SUBTITLE`).
+    pub subtitle: Option<&'a str>,
+    /// Letra (`LYRICS`).
+    pub lyrics: Option<&'a str>,
+    /// Marca de compilación (`COMPILATION`).
+    pub compilation: bool,
+    /// Orden de clasificación del título (`TITLESORT`).
+    pub title_sort: Option<&'a str>,
+    /// Orden de clasificación del artista (`ARTISTSORT`).
+    pub artist_sort: Option<&'a str>,
+    /// Orden de clasificación del álbum (`ALBUMSORT`).
+    pub album_sort: Option<&'a str>,
+    /// Carátula (`METADATA_BLOCK_PICTURE`); `None` si no se indicó `--cover`.
+    pub cover: Option<OggCover<'a>>,
+    /// URL asociada (`--url`). No tiene clave equivalente en Vorbis: se omite
+    /// con aviso, sin escribir nada.
+    pub url: Option<&'a str>,
+    /// Artista original (`--original-artist`). No tiene clave equivalente en
+    /// Vorbis: se omite con aviso, sin escribir nada.
+    pub original_artist: Option<&'a str>,
+}
+
+/// Resultado de aplicar metadatos a un comentario de Vorbis.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OggEditReport {
+    /// `true` si se aplicó al menos un cambio.
+    pub changed: bool,
+    /// Avisos en español que el CLI debe emitir por stderr (por ejemplo, la
+    /// omisión de `--url` o `--original-artist`). [`edit_ogg`] ya los emite y,
+    /// además, los devuelve para que sean verificables por los tests.
+    pub warnings: Vec<String>,
+}
+
+/// Construye el aviso (en español) de un campo de `edit` que no tiene clave
+/// equivalente en Vorbis (`--url` y `--original-artist`).
+///
+/// Se emite por stderr, el campo se omite y la operación continúa con el resto
+/// de flags. No se crea ninguna clave inventada que supla la omisión.
+pub fn ogg_field_omitted_warning(flag: &str) -> String {
+    format!("⚠️  El campo '{flag}' no tiene clave equivalente en OGG; se omite.")
+}
+
+/// Devuelve la clave de Vorbis asociada a un flag del CLI según
+/// [`VORBIS_COMMENT_MAP`].
+///
+/// Solo se invoca con los flags constantes que tienen clave, por lo que la
+/// ausencia de mapeo es inalcanzable.
+fn vorbis_key(flag: &str) -> &'static str {
+    VorbisCommentMapping::for_flag(flag)
+        .expect("todo flag de texto tiene una clave asociada en VORBIS_COMMENT_MAP")
+        .key
+}
+
+/// Escribe un valor de texto en la clave de Vorbis que corresponde al flag,
+/// tomando la clave de la tabla [`VORBIS_COMMENT_MAP`] como única fuente del
+/// mapeo.
+fn set_vorbis_text(tag: &mut VorbisComments, flag: &str, value: &str) {
+    tag.insert(vorbis_key(flag).to_string(), value.to_string());
+}
+
+/// Aplica los metadatos indicados a un [`VorbisComments`].
+///
+/// El mapeo de cada flag a su clave se resuelve siempre a través de
+/// [`VORBIS_COMMENT_MAP`]. La carátula (`--cover`) no se escribe aquí: se
+/// gestiona como [`Picture`] y es responsabilidad de [`edit_ogg`].
+///
+/// `--year` y `--date` acaban en claves **distintas** (`YEAR` y `DATE`), así
+/// que no colisionan ni se absorben entre sí. `--url` y `--original-artist` no
+/// tienen clave equivalente: se omiten con aviso, sin abortar.
+#[must_use]
+pub fn apply_metadata_ogg(tag: &mut VorbisComments, options: &OggEditOptions<'_>) -> OggEditReport {
+    let mut report = OggEditReport::default();
+
+    if let Some(title) = options.title {
+        set_vorbis_text(tag, "--title", title);
+        report.changed = true;
+    }
+
+    if !options.artists.is_empty() {
+        set_vorbis_text(tag, "--artist", &options.artists.join("; "));
+        report.changed = true;
+    }
+
+    if let Some(album) = options.album {
+        set_vorbis_text(tag, "--album", album);
+        report.changed = true;
+    }
+
+    if let Some(album_artist) = options.album_artist {
+        set_vorbis_text(tag, "--album-artist", album_artist);
+        report.changed = true;
+    }
+
+    if let Some(year) = options.year {
+        set_vorbis_text(tag, "--year", &year.to_string());
+        report.changed = true;
+    }
+
+    if let Some(date) = options.date {
+        set_vorbis_text(tag, "--date", date);
+        report.changed = true;
+    }
+
+    if let Some(genre) = options.genre {
+        set_vorbis_text(tag, "--genre", genre);
+        report.changed = true;
+    }
+
+    if let Some(track) = options.track {
+        set_vorbis_text(tag, "--track", &track.number().to_string());
+        if let Some(total) = track.total() {
+            // `TRACKTOTAL` no corresponde a ningún flag del CLI (no está en
+            // `VORBIS_COMMENT_MAP`): es el total del número de pista, que Vorbis
+            // guarda como clave independiente de `TRACKNUMBER`. Si no se indica
+            // total, la clave que ya estuviera en el archivo se conserva.
+            tag.insert("TRACKTOTAL".to_string(), total.to_string());
+        }
+        report.changed = true;
+    }
+
+    if let Some(season) = options.season {
+        set_vorbis_text(tag, "--season", &season.number().to_string());
+        if let Some(total) = season.total() {
+            // Igual que `TRACKTOTAL`: `DISCTOTAL` es el total de la
+            // temporada/disco, no un flag del CLI.
+            tag.insert("DISCTOTAL".to_string(), total.to_string());
+        }
+        report.changed = true;
+    }
+
+    if let Some(copyright) = options.copyright {
+        set_vorbis_text(tag, "--copyright", copyright);
+        report.changed = true;
+    }
+
+    if let Some(composer) = options.composer {
+        set_vorbis_text(tag, "--composer", composer);
+        report.changed = true;
+    }
+
+    if let Some(subtitle) = options.subtitle {
+        set_vorbis_text(tag, "--subtitle", subtitle);
+        report.changed = true;
+    }
+
+    if let Some(lyrics) = options.lyrics {
+        set_vorbis_text(tag, "--lyrics", lyrics);
+        report.changed = true;
+    }
+
+    if options.compilation {
+        set_vorbis_text(tag, "--compilation", "1");
+        report.changed = true;
+    }
+
+    if let Some(title_sort) = options.title_sort {
+        set_vorbis_text(tag, "--title-sort", title_sort);
+        report.changed = true;
+    }
+
+    if let Some(artist_sort) = options.artist_sort {
+        set_vorbis_text(tag, "--artist-sort", artist_sort);
+        report.changed = true;
+    }
+
+    if let Some(album_sort) = options.album_sort {
+        set_vorbis_text(tag, "--album-sort", album_sort);
+        report.changed = true;
+    }
+
+    // `--url` y `--original-artist` no tienen clave equivalente en Vorbis: se
+    // omiten con aviso, sin escribir ninguna clave y sin marcar el informe como
+    // cambiado (para que, si son los únicos flags, el archivo no se reescriba).
+    if options.url.is_some() {
+        report.warnings.push(ogg_field_omitted_warning("--url"));
+    }
+    if options.original_artist.is_some() {
+        report
+            .warnings
+            .push(ogg_field_omitted_warning("--original-artist"));
+    }
+
+    report
+}
+
+/// Escribe una carátula como imagen en un comentario de Vorbis.
+///
+/// El [`Picture`] se construye igual que en MP3 (portada frontal, descripción
+/// "Cover" y el MIME que llega como argumento). La información de la imagen se
+/// calcula con [`PictureInformation::from_picture`] y, si no se puede inferir
+/// (por ejemplo, una imagen de menos de 8 bytes), se usa la información por
+/// defecto en lugar de abortar: la carátula se escribe igualmente con sus
+/// dimensiones a cero. El MIME **no** se degrada: una carátula WebP se guarda
+/// con `image/webp`.
+///
+/// La carátula se inserta siempre como `CoverFront`; antes de insertarla se
+/// elimina la `CoverFront` previa (si existe), de modo que una segunda edición
+/// **sustituye** a la primera en lugar de acumular (misma semántica que en MP3
+/// y MP4). Las carátulas de otros tipos se conservan.
+fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
+    let picture = create_picture_frame(data.to_vec(), mime);
+    let information = PictureInformation::from_picture(&picture).unwrap_or_default();
+    // Sustituye la `CoverFront` previa (si existe) en vez de acumular. Sin
+    // carátula previa es un no-op.
+    tag.remove_picture_type(PictureType::CoverFront);
+    let _ = tag.insert_picture(picture, Some(information));
+}
+
+/// Lee el comentario de Vorbis de un archivo Ogg.
+///
+/// Sirve a cualquier contenedor Ogg con comentarios de Vorbis: el códec del
+/// primer paquete decide el lector concreto, [`VorbisFile`] para Vorbis y
+/// [`OpusFile`] para Opus, de modo que un `.opus` se lee con la misma función
+/// que un `.ogg`. El formato se decide por el **contenido**, no por la extensión
+/// del nombre: el despacho reutiliza la misma sonda de la primera página que
+/// [`detect_format`]. El comentario es obligatorio en el contenedor, por lo que
+/// siempre existe: no se envuelve en `Option`.
+///
+/// Se devuelve el tipo concreto [`VorbisComments`] (no el `Tag` genérico)
+/// porque conserva las claves ajenas al mapeo con su **caja original** y el
+/// vendor del comentario, que es justo lo que el `Tag` genérico descarta.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer o no se puede interpretar
+/// como un contenedor Ogg con comentarios de Vorbis (Vorbis u Opus).
+pub fn read_vorbis_tag(path: &Path) -> Result<VorbisComments, Box<dyn std::error::Error>> {
+    match detect_format(path)? {
+        AudioFormat::OggVorbis => {
+            let mut file = File::open(path)?;
+            let vorbis_file = VorbisFile::read_from(&mut file, ParseOptions::default())?;
+            Ok(vorbis_file.vorbis_comments().clone())
+        }
+        AudioFormat::OggOpus => {
+            let mut file = File::open(path)?;
+            let opus_file = OpusFile::read_from(&mut file, ParseOptions::default())?;
+            Ok(opus_file.vorbis_comments().clone())
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "el archivo no es un contenedor Ogg con comentarios de Vorbis",
+        )
+        .into()),
+    }
+}
+
+/// Escribe el comentario de Vorbis en un archivo Ogg Vorbis.
+///
+/// `lofty` reemplaza solo el paquete de comentario y reescribe el resto del
+/// contenedor, de modo que las páginas de audio quedan intactas. El vendor del
+/// archivo se conserva: el escritor lo relee del propio archivo y sobrescribe el
+/// que llevara el tag en memoria.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no existe, no es escribible o no se puede
+/// interpretar como Ogg Vorbis.
+pub fn write_vorbis_tag(
+    path: &Path,
+    tag: &VorbisComments,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tag.save_to_path(path, WriteOptions::default())?;
+    Ok(())
+}
+
+/// Lee, aplica y guarda los metadatos OGG indicados sobre un archivo.
+///
+/// Es la operación completa del subcomando `edit` sobre un Ogg Vorbis: lee el
+/// comentario existente, aplica los cambios y, solo si hay alguno, reescribe el
+/// archivo. Los avisos de la operación se emiten por stderr y además se devuelven
+/// en el informe.
+///
+/// La carátula se valida **antes** de escribir el archivo: si la extensión de la
+/// imagen no está soportada, la función devuelve error sin modificar un solo
+/// byte. En OGG no hay degradación de WebP: se escribe el MIME real de la
+/// extensión y no se emite ningún aviso de degradación.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar o escribir, o si
+/// la extensión de la carátula no está soportada.
+pub fn edit_ogg(
+    path: &Path,
+    options: &OggEditOptions<'_>,
+) -> Result<OggEditReport, Box<dyn std::error::Error>> {
+    let mut tag = read_vorbis_tag(path)?;
+
+    let mut report = apply_metadata_ogg(&mut tag, options);
+
+    // Carátula. La validación del MIME ocurre antes de tocar el disco, de modo
+    // que una imagen inválida devuelve error sin dejar el archivo a medias.
+    if let Some(cover) = options.cover {
+        let mime = detect_cover_mime_type(cover.path)?;
+        push_ogg_cover(&mut tag, cover.data, mime);
+        report.changed = true;
+    }
+
+    if report.changed {
+        write_vorbis_tag(path, &tag)?;
+    }
+
+    for warning in &report.warnings {
+        eprintln!("{warning}");
+    }
+
+    Ok(report)
+}
+
+/// Elimina de un comentario de Vorbis todos los campos que corresponden a un
+/// [`TagKind`].
+///
+/// La carátula se elimina vaciando la lista de imágenes; la letra borra tanto
+/// `LYRICS` como `UNSYNCEDLYRICS`; el resto de campos se borra con
+/// [`VorbisComments::remove`]. Los dos tags sin clave equivalente en Vorbis
+/// ([`TagKind::Url`] y [`TagKind::OriginalArtist`]) no tienen nada que eliminar.
+fn remove_ogg_kind(tag: &mut VorbisComments, kind: TagKind) -> bool {
+    let key = match kind {
+        TagKind::Title => "TITLE",
+        TagKind::Artist => "ARTIST",
+        TagKind::Album => "ALBUM",
+        TagKind::Year => "YEAR",
+        TagKind::Date => "DATE",
+        TagKind::Genre => "GENRE",
+        TagKind::Track => {
+            // El número de pista y su total van juntos: un `TRACKTOTAL` sin
+            // `TRACKNUMBER` no significa nada (un total huérfano), y el contrato
+            // de `track-numbering` prohíbe ese estado, así que borrar el número
+            // borra también el total.
+            tag.remove("TRACKNUMBER").count();
+            tag.remove("TRACKTOTAL").count();
+            return true;
+        }
+        TagKind::Season => {
+            // Igual que la pista: el total de temporada (`DISCTOTAL`) se va con
+            // su número (`DISCNUMBER`) para no dejar un total huérfano.
+            tag.remove("DISCNUMBER").count();
+            tag.remove("DISCTOTAL").count();
+            return true;
+        }
+        TagKind::Copyright => "COPYRIGHT",
+        TagKind::Composer => "COMPOSER",
+        TagKind::Subtitle => "SUBTITLE",
+        TagKind::AlbumArtist => "ALBUMARTIST",
+        TagKind::Lyrics => {
+            // La letra puede estar en `LYRICS` o en `UNSYNCEDLYRICS` (escrita por
+            // otra herramienta): se borran ambas.
+            tag.remove("LYRICS").count();
+            tag.remove("UNSYNCEDLYRICS").count();
+            return true;
+        }
+        TagKind::Compilation => "COMPILATION",
+        TagKind::AlbumSort => "ALBUMSORT",
+        TagKind::ArtistSort => "ARTISTSORT",
+        TagKind::TitleSort => "TITLESORT",
+        TagKind::Cover => {
+            tag.remove_pictures();
+            return true;
+        }
+        // Sin clave equivalente en Vorbis: no hay nada que eliminar.
+        TagKind::Url | TagKind::OriginalArtist => return false,
+    };
+
+    tag.remove(key).count();
+    true
+}
+
+/// Elimina tags específicos de un comentario de Vorbis.
+///
+/// Acepta **los mismos nombres** (en inglés y en español) que [`remove_tags`]
+/// sobre MP3, porque todos comparten la tabla de alias [`classify_tag_alias`].
+/// Los tags sin clave equivalente en Vorbis ([`TagKind::Url`] y
+/// [`TagKind::OriginalArtist`]) se omiten con un aviso, sin abortar.
+///
+/// # Retorna
+///
+/// `true` si se reconoció al menos un tag (aunque la clave no existiera), del
+/// mismo modo que [`remove_tags`].
+pub fn remove_tags_ogg(tag: &mut VorbisComments, tags_to_remove: &[String]) -> bool {
+    let mut changed = false;
+
+    for tag_name in tags_to_remove {
+        let removed = match classify_tag_alias(tag_name) {
+            Some(TagKind::Url | TagKind::OriginalArtist) => {
+                eprintln!(
+                    "⚠️  El tag '{}' no tiene clave equivalente en OGG; se omite.",
+                    tag_name
+                );
+                false
+            }
+            Some(kind) => remove_ogg_kind(tag, kind),
+            None => {
+                eprintln!(
+                    "⚠️  Tag desconocido: '{}'. Tags válidos: {}",
+                    tag_name, VALID_TAG_NAMES
+                );
+                false
+            }
+        };
+
+        if removed {
+            outln!("✓ Eliminado: {}", tag_name);
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Vacía el comentario de Vorbis de un archivo Ogg Vorbis.
+///
+/// Elimina todas las claves de usuario y todas las carátulas, pero **preserva el
+/// vendor**: el comentario es obligatorio en el contenedor y no se puede
+/// eliminar, así que se deja el comentario sin ningún campo de usuario en lugar
+/// de borrarlo. El audio queda intacto (solo se reemplaza el paquete de
+/// comentario) y el archivo sigue siendo reproducible, del mismo modo que
+/// [`remove_all_mp4`] deja el audio de un MP4 intacto.
+///
+/// # Retorna
+///
+/// `true` si el archivo tenía metadatos (y se eliminaron), `false` si no tenía.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar como Ogg Vorbis
+/// o escribir.
+pub fn remove_all_ogg(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let tag = read_vorbis_tag(file)?;
+
+    // Hay metadatos si queda alguna clave de usuario o alguna carátula; el
+    // vendor no cuenta (es parte obligatoria del contenedor, no del contenido).
+    let had_metadata = tag.items().next().is_some() || !tag.pictures().is_empty();
+
+    if had_metadata {
+        // Se vacía el comentario conservando el vendor: `lofty` lo relee del
+        // archivo al escribir, así que basta con no llevar ningún campo.
+        let mut emptied = VorbisComments::new();
+        emptied.set_vendor(tag.vendor().to_string());
+        write_vorbis_tag(file, &emptied)?;
+    }
+
+    Ok(had_metadata)
+}
+
+/// Muestra los metadatos de un comentario de Vorbis en el mismo formato legible
+/// (mismos emojis y mismos nombres de campo) que [`display_tags`] usa en MP3 y
+/// [`display_tags_mp4`] en MP4.
+///
+/// Solo se muestran los campos de la tabla de mapeo ([`VORBIS_COMMENT_MAP`]) más
+/// las carátulas y la letra: el **vendor** y la clave `ENCODER` (que toda
+/// herramienta escribe, pero no son metadatos del usuario) no se muestran. Las
+/// claves se leen de la propia tabla para que el mapeo no quede duplicado. Cuando
+/// no hay ningún campo de la tabla, ni carátulas ni letra, se informa de que no
+/// se encontraron metadatos.
+pub fn display_tags_ogg(tag: &VorbisComments) {
+    outln!("\n📋 Metadatos encontrados:\n");
+    outln!("═══════════════════════════════════════");
+
+    let mut found = 0usize;
+
+    if let Some(title) = tag.get(vorbis_key("--title")) {
+        outln!("🎵 Título:    {}", title);
+        found += 1;
+    }
+
+    if let Some(artist) = tag.get(vorbis_key("--artist")) {
+        outln!("🎤 Artista:   {}", artist);
+        found += 1;
+    }
+
+    if let Some(album) = tag.get(vorbis_key("--album")) {
+        outln!("💿 Álbum:     {}", album);
+        found += 1;
+    }
+
+    // `--year` y `--date` son claves distintas en OGG: cada una con su etiqueta.
+    if let Some(year) = tag.get(vorbis_key("--year")) {
+        outln!("📅 Año:       {}", year);
+        found += 1;
+    }
+
+    if let Some(date) = tag.get(vorbis_key("--date")) {
+        outln!("📆 Fecha:     {}", date);
+        found += 1;
+    }
+
+    if let Some(genre) = tag.get(vorbis_key("--genre")) {
+        outln!("🎸 Género:    {}", genre);
+        found += 1;
+    }
+
+    // El total de pista (`TRACKTOTAL`) y el de temporada (`DISCTOTAL`) no son
+    // flags del CLI, sino el total de sendos números: se pegan al número con una
+    // barra cuando existen.
+    if let Some(track) = tag.get(vorbis_key("--track")) {
+        let total = tag.get("TRACKTOTAL");
+        outln!("#️⃣  Pista:     {}", format_number_with_total(track, total));
+        found += 1;
+    }
+
+    if let Some(season) = tag.get(vorbis_key("--season")) {
+        let total = tag.get("DISCTOTAL");
+        outln!("📺 Temporada: {}", format_number_with_total(season, total));
+        found += 1;
+    }
+
+    if let Some(copyright) = tag.get(vorbis_key("--copyright")) {
+        outln!("©️  Copyright: {}", copyright);
+        found += 1;
+    }
+
+    if let Some(composer) = tag.get(vorbis_key("--composer")) {
+        outln!("🎼 Compositor: {}", composer);
+        found += 1;
+    }
+
+    if let Some(subtitle) = tag.get(vorbis_key("--subtitle")) {
+        outln!("📄 Subtítulo: {}", subtitle);
+        found += 1;
+    }
+
+    if let Some(album_artist) = tag.get(vorbis_key("--album-artist")) {
+        outln!("👥 Artista del álbum: {}", album_artist);
+        found += 1;
+    }
+
+    // Mostrar carátulas si existen
+    let pictures = tag.pictures();
+    if !pictures.is_empty() {
+        outln!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+        for (i, (pic, _)) in pictures.iter().enumerate() {
+            outln!(
+                "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
+                i + 1,
+                pic.pic_type(),
+                pic.mime_type().map(|m| m.as_str()).unwrap_or(""),
+                pic.data().len()
+            );
+        }
+        found += pictures.len();
+    }
+
+    // Mostrar letra si existe (`LYRICS`, o `UNSYNCEDLYRICS` de otra herramienta)
+    if let Some(lyrics) = tag
+        .get(vorbis_key("--lyrics"))
+        .or_else(|| tag.get("UNSYNCEDLYRICS"))
+    {
+        outln!("📝 Letra:");
+        // Mostrar solo las primeras 3 líneas como preview
+        let lines: Vec<&str> = lyrics.lines().collect();
+        for line in lines.iter().take(3) {
+            outln!("   {}", line);
+        }
+        if lines.len() > 3 {
+            outln!("   ... ({} líneas más)", lines.len() - 3);
+        }
+        found += 1;
+    }
+
+    // Mostrar metadatos de Apple si existen
+    if tag.get(vorbis_key("--compilation")) == Some("1") {
+        outln!(" Compilación: Sí");
+        found += 1;
+    }
+
+    if let Some(album_sort) = tag.get(vorbis_key("--album-sort")) {
+        outln!("🔤 Orden álbum: {}", album_sort);
+        found += 1;
+    }
+
+    if let Some(artist_sort) = tag.get(vorbis_key("--artist-sort")) {
+        outln!("🔤 Orden artista: {}", artist_sort);
+        found += 1;
+    }
+
+    if let Some(title_sort) = tag.get(vorbis_key("--title-sort")) {
+        outln!("🔤 Orden título: {}", title_sort);
+        found += 1;
+    }
+
+    if found > 0 {
+        outln!("\n📦 Total de metadatos: {}", found);
+    } else {
+        outln!("\n⚠️  No se encontraron metadatos.");
     }
 
     outln!("═══════════════════════════════════════\n");

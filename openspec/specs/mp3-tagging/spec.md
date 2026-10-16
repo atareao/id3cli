@@ -27,7 +27,7 @@ Toda escritura de tags sobre un archivo MP3 MUST usar la versión ID3v2.4, del m
 
 ### Requirement: Mapeo de los flags del CLI a los frames ID3v2.4
 
-El CLI SHALL escribir cada flag de `edit` en el frame ID3v2.4 que le corresponde hoy, sin cambiar ningún mapeo: `--title` en `TIT2`, `--artist` en `TPE1`, `--album` en `TALB`, `--album-artist` en `TPE2`, `--genre` en `TCON`, `--track` en `TRCK`, `--season` en `TPOS`, `--composer` en `TCOM`, `--copyright` en `TCOP`, `--subtitle` en `TIT3`, `--original-artist` en `TOPE`, `--url` en `WOAR`, `--compilation` en `TCMP` con el valor `"1"`, `--title-sort` en `TSOT`, `--artist-sort` en `TSOP`, `--album-sort` en `TSOA`, `--lyrics` en `USLT` y `--cover` en `APIC`. En cuanto a las fechas, `--year` SHALL escribirse en el frame `TYER` y `--date` en el frame `TDRC`; son dos frames distintos y NO se sobrescriben entre sí. El CLI MUST NOT omitir ni redirigir a otro frame ninguno de estos campos en MP3.
+El CLI SHALL escribir cada flag de `edit` en el frame ID3v2.4 que le corresponde hoy, sin cambiar ningún mapeo: `--title` en `TIT2`, `--artist` en `TPE1`, `--album` en `TALB`, `--album-artist` en `TPE2`, `--genre` en `TCON`, `--track` en `TRCK`, `--season` en `TPOS`, `--composer` en `TCOM`, `--copyright` en `TCOP`, `--subtitle` en `TIT3`, `--original-artist` en `TOPE`, `--url` en `WOAR`, `--compilation` en `TCMP` con el valor `"1"`, `--title-sort` en `TSOT`, `--artist-sort` en `TSOP`, `--album-sort` en `TSOA`, `--lyrics` en `USLT` y `--cover` en `APIC`. En cuanto a las fechas, `--year` SHALL escribirse en el frame `TYER` y `--date` en el frame `TDRC`; son dos frames distintos y NO se sobrescriben entre sí. Además, `--track` SHALL escribirse en el frame `TRCK` como el número (`n`) cuando no se indique total, o como `n/total` cuando sí se indique; `--season` SHALL escribirse en el frame `TPOS` con la misma forma. El resto del mapeo MUST quedar exactamente como está. El CLI MUST NOT omitir ni redirigir a otro frame ninguno de estos campos en MP3.
 
 #### Scenario: Mapeo de los campos básicos
 - **WHEN** se ejecuta `edit` con `--title`, `--artist`, `--album`, `--album-artist`, `--genre`, `--track` y `--season` sobre un MP3
@@ -61,6 +61,22 @@ El CLI SHALL escribir cada flag de `edit` en el frame ID3v2.4 que le corresponde
 - **WHEN** se ejecuta `edit` indicando solo `--title` sobre un MP3 que ya tenía artista y álbum
 - **THEN** los frames de artista y álbum MUST permanecer intactos
 
+#### Scenario: Total de pista en TRCK
+- **WHEN** se ejecuta `edit --track 7/12` sobre un MP3
+- **THEN** el frame `TRCK` MUST contener `7/12` y MUST releerse como número 7 con total 12
+
+#### Scenario: Total de temporada en TPOS
+- **WHEN** se ejecuta `edit --season 1/2` sobre un MP3
+- **THEN** el frame `TPOS` MUST contener `1/2`
+
+#### Scenario: Sin total explícito se conserva el total preexistente
+- **WHEN** un MP3 ya tiene `TRCK` con `3/12` y se ejecuta `edit --track 5`
+- **THEN** el frame `TRCK` MUST quedar en `5/12`, conservando el total que ya estaba
+
+#### Scenario: Número sin total sobre un archivo sin total
+- **WHEN** se ejecuta `edit --track 5` sobre un MP3 cuyo `TRCK` no tiene total
+- **THEN** el frame `TRCK` MUST quedar en `5`
+
 ### Requirement: Múltiples artistas unidos con el separador `"; "`
 
 Cuando se indica `--artist` más de una vez, los valores MUST unirse en un único frame `TPE1` usando el separador `"; "`. Este comportamiento MUST NOT cambiar con respecto al actual.
@@ -91,23 +107,42 @@ La letra indicada con `--lyrics` MUST almacenarse en un frame `USLT` cuyo códig
 
 ### Requirement: Carátulas en MP3 con detección de MIME por extensión
 
-En MP3, la carátula indicada con `--cover` MUST escribirse en un frame `APIC`, y el tipo MIME MUST detectarse a partir de la extensión del archivo de imagen. El CLI SHALL aceptar `jpg` y `jpeg` como `image/jpeg`, `png` como `image/png` y `webp` como `image/webp`.
+En MP3, la carátula indicada con `--cover` MUST escribirse en un frame `APIC`, y el tipo MIME MUST detectarse a partir de la extensión del archivo de imagen. El CLI SHALL aceptar `jpg` y `jpeg` como `image/jpeg`, `png` como `image/png` y `webp` como `image/webp`. Cuando el MP3 ya contiene una carátula del tipo `CoverFront`, `edit --cover` MUST **sustituirla** por la nueva imagen —eliminando los frames `APIC` de tipo `CoverFront` existentes antes de insertar la indicada— y MUST NOT acumular varias carátulas `CoverFront` por ediciones sucesivas: el archivo resultante MUST contener exactamente un frame `APIC` `CoverFront` con los bytes de la **última** imagen indicada. Las carátulas de otros tipos de picture (p. ej. `BackCover`) MUST conservarse intactas al sustituir la `CoverFront`.
 
 #### Scenario: Carátula JPEG y PNG
+
 - **WHEN** se ejecuta `edit --cover portada.jpg` y, en otra invocación, `edit --cover portada.png` sobre un MP3
 - **THEN** el archivo MUST contener un frame `APIC` con MIME `image/jpeg` en el primer caso y `image/png` en el segundo, con los bytes de la imagen intactos
 
 #### Scenario: Carátula WebP en MP3
+
 - **WHEN** se ejecuta `edit --cover portada.webp` sobre un MP3
 - **THEN** el archivo MUST contener un frame `APIC` con MIME `image/webp`, sin ningún warning
 
 #### Scenario: Extensión de imagen no soportada
+
 - **WHEN** se ejecuta `edit --cover imagen.tiff` sobre un MP3
 - **THEN** el CLI MUST terminar con un código de salida distinto de cero y MUST escribir en stderr un mensaje en español que indique que el formato de imagen no está soportado
 
 #### Scenario: Archivo de carátula inexistente
+
 - **WHEN** se ejecuta `edit --cover ruta/que/no/existe.jpg` sobre un MP3
 - **THEN** el CLI MUST terminar con un código de salida distinto de cero y MUST escribir en stderr el mensaje en español de archivo de carátula no encontrado
+
+#### Scenario: Segunda edición sustituye a la primera
+
+- **WHEN** se ejecuta `edit --cover caratula_a.jpg` y después `edit --cover caratula_b.jpg` sobre el mismo MP3
+- **THEN** el archivo resultante MUST contener exactamente un frame `APIC` de tipo `CoverFront`, con el MIME y los bytes de `caratula_b.jpg` y MUST NOT conservar los bytes de `caratula_a.jpg`
+
+#### Scenario: Sustitución conserva carátulas de otros tipos
+
+- **WHEN** se ejecuta `edit --cover caratula_b.jpg` sobre un MP3 que tiene un `APIC` `CoverFront` y además un `APIC` de otro tipo (p. ej. `BackCover`)
+- **THEN** el `CoverFront` MUST sustituirse por los bytes de `caratula_b.jpg`, el `APIC` de `BackCover` MUST permanecer intacto y el archivo MUST contener los dos frames `APIC`
+
+#### Scenario: Primera carátula sin acumulación previa
+
+- **WHEN** se ejecuta `edit --cover caratula.jpg` sobre un MP3 sin carátulas previas
+- **THEN** el archivo MUST contener exactamente un frame `APIC` `CoverFront` con los bytes de la imagen indicada
 
 ### Requirement: `remove --all` borra físicamente ID3v1 e ID3v2
 

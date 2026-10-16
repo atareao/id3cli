@@ -7,7 +7,7 @@ Definir la lectura y la escritura de metadatos estilo iTunes (átomos `ilst`) en
 
 ### Requirement: Mapeo de los flags del CLI a los átomos `ilst`
 
-El CLI SHALL escribir cada flag de `edit` en el átomo MP4 que le corresponde: `--title` en `©nam`, `--artist` en `©ART`, `--album` en `©alb`, `--album-artist` en `aART`, `--date` en `©day`, `--year` en `©day` (el mismo átomo que `--date`, con la colisión resuelta por el requisito «Colisión de `--year` y `--date` en el átomo `©day`»), `--genre` en `©gen`, `--track` en `trkn`, `--season` en `disk`, `--composer` en `©wrt`, `--copyright` en `cprt`, `--lyrics` en `©lyr`, `--cover` en `covr`, `--compilation` en `cpil`, `--title-sort` en `sonm`, `--artist-sort` en `soar`, `--album-sort` en `soal` y `--subtitle` en el átomo freeform `----:com.apple.iTunes:SUBTITLE`. El CLI MUST NOT escribir ningún otro átomo para representar estos campos.
+El CLI SHALL escribir cada flag de `edit` en el átomo MP4 que le corresponde: `--title` en `©nam`, `--artist` en `©ART`, `--album` en `©alb`, `--album-artist` en `aART`, `--date` en `©day`, `--year` en `©day` (el mismo átomo que `--date`, con la colisión resuelta por el requisito «Colisión de `--year` y `--date` en el átomo `©day`»), `--genre` en `©gen`, `--track` en `trkn`, `--season` en `disk`, `--composer` en `©wrt`, `--copyright` en `cprt`, `--lyrics` en `©lyr`, `--cover` en `covr`, `--compilation` en `cpil`, `--title-sort` en `sonm`, `--artist-sort` en `soar`, `--album-sort` en `soal` y `--subtitle` en el átomo freeform `----:com.apple.iTunes:SUBTITLE`. Además, `--track` SHALL escribirse en el átomo `trkn`, que SHALL llevar el número y, cuando se indique, el total; `--season` SHALL escribirse en el átomo `disk` con número y total. El resto del mapeo MUST quedar exactamente como está. El CLI MUST NOT escribir ningún otro átomo para representar estos campos.
 
 #### Scenario: Escritura de los átomos de texto básicos
 - **WHEN** se ejecuta `edit` con `--title`, `--artist`, `--album`, `--album-artist` y `--genre` sobre un `.m4a`
@@ -33,25 +33,51 @@ El CLI SHALL escribir cada flag de `edit` en el átomo MP4 que le corresponde: `
 - **WHEN** se ejecuta `edit --title "Nuevo"` sobre un `.m4a` que ya tenía artista, álbum y carátula
 - **THEN** los átomos `©ART`, `©alb` y `covr` MUST permanecer intactos
 
+#### Scenario: Total de pista en el átomo trkn
+- **WHEN** se ejecuta `edit --track 7/12` sobre un `.m4a`
+- **THEN** el átomo `trkn` MUST contener el número 7 y el total 12, y MUST releerse con esos dos valores
+
+#### Scenario: Total de temporada en el átomo disk
+- **WHEN** se ejecuta `edit --season 1/2` sobre un `.m4a`
+- **THEN** el átomo `disk` MUST contener 1 y total 2
+
+#### Scenario: Sin total explícito se conserva el total preexistente
+- **WHEN** un `.m4a` ya tiene `trkn` con número 3 y total 12 y se ejecuta `edit --track 5`
+- **THEN** el átomo `trkn` MUST quedar con número 5 y total 12
+
 ### Requirement: Creación del árbol de metadatos `moov.udta.meta.ilst`
 
-Cuando el archivo MP4 no tenga átomo de metadatos, el CLI MUST crear la estructura `moov.udta.meta.ilst` necesaria para alojar los átomos escritos, MUST preservar el resto de la estructura del archivo (en especial el átomo `moov` y sus pistas de audio) y MUST NOT corromper ni reordenar los átomos preexistentes.
+Cuando el archivo MP4 no tenga átomo de metadatos, el CLI MUST crear la estructura `moov.udta.meta.ilst` necesaria para alojar los átomos escritos, MUST preservar el resto de la estructura del archivo (en especial el átomo `moov` y sus pistas de audio) y MUST NOT corromper ni reordenar los átomos preexistentes. El árbol `meta` resultante de CUALQUIER escritura del CLI MUST incluir su hijo `hdlr` (handler de tipo de medio) válido: sin ese átomo, los demuxers externos (ffmpeg/ffprobe, VLC, QuickTime) no parsean el `ilst` y las etiquetas resultan invisibles aunque existan en el archivo. Además de crear el árbol en archivos sin metadatos, el CLI MUST garantizar el `hdlr` cuando reescribe un archivo cuyo `ilst` fue eliminado previamente con `remove --all`, de modo que tras `edit` posterior las etiquetas MUST ser visibles por un lector de terceros (`ffprobe format_tags`).
 
 #### Scenario: MP4 sin metadatos previos
+
 - **WHEN** se ejecuta `edit --title "Prueba"` sobre un `.m4a` recién generado que no tiene átomo `ilst`
-- **THEN** el archivo resultante MUST contener la ruta `moov.udta.meta.ilst` con el átomo `©nam` y el audio MUST seguir siendo reproducible
+- **THEN** el archivo resultante MUST contener la ruta `moov.udta.meta.ilst` con el átomo `©nam`, el árbol `moov.udta.meta` MUST contener su hijo `hdlr`, y el audio MUST seguir siendo reproducible
 
 #### Scenario: MP4 con otros átomos preexistentes
+
 - **WHEN** se edita un `.m4a` que ya contiene átomos de metadatos ajenos al CLI
 - **THEN** los átomos preexistentes MUST conservarse sin cambios y solo MUST añadirse o modificarse los átomos correspondientes a los flags indicados
 
 #### Scenario: Estructura de átomos inválida o truncada
+
 - **WHEN** el archivo empieza por `ftyp` pero su estructura de átomos está truncada o es inconsistente
 - **THEN** el CLI MUST terminar con un código de salida distinto de cero y MUST escribir en stderr un mensaje en español indicando que el archivo MP4 no se pudo leer
 
 #### Scenario: Escritura fallida no deja el archivo a medias
+
 - **WHEN** la escritura de los átomos falla a mitad del proceso
 - **THEN** el CLI MUST terminar con un código de salida distinto de cero y el archivo original MUST permanecer legible con su estructura `moov` intacta
+
+#### Scenario: Las etiquetas son visibles para un lector de terceros tras `remove --all` + `edit`
+
+- **WHEN** se ejecuta `edit --title "Antes" --album "AlbumAntes"`, después `remove --all` y finalmente `edit --title "Despues" --album "AlbumDespues"` sobre el mismo `.m4a`
+- **THEN** `id3cli show` MUST mostrar los campos `Despues`/`AlbumDespues`, `ffprobe -show_entries format_tags` MUST listar `title=Despues` y `album=AlbumDespues` además de los brands, el árbol `moov.udta.meta` del archivo resultante MUST contener su hijo `hdlr`, y el audio MUST seguir siendo reproducible
+
+#### Scenario: El árbol `meta` reescrito siempre lleva `hdlr`
+
+- **WHEN** se inspecciona el árbol de átomos de un `.m4a` reescrito por el CLI en cualquier secuencia de operaciones (`edit` sobre archivo limpio, `edit` sobre archivo con metadatos, `remove --all` + `edit`)
+- **THEN** todo átomo `meta` del archivo resultante MUST contener su hijo `hdlr`, y MUST NOT existir ningún `meta` sin `hdlr` hijo
 
 ### Requirement: Colisión de `--year` y `--date` en el átomo `©day`
 

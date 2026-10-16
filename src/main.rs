@@ -36,11 +36,11 @@ fn report_error(error: Box<dyn Error>) -> ! {
     std::process::exit(1);
 }
 
-/// CLI para añadir metadatos y carátulas a archivos MP3 y MP4
+/// CLI para añadir metadatos y carátulas a archivos MP3, MP4, OGG y Opus
 #[derive(Parser, Debug)]
 #[command(name = "id3cli")]
 #[command(
-    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4) y MP4 (átomos iTunes)",
+    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4), MP4 (átomos iTunes) y OGG (comentarios Vorbis; Vorbis y Opus)",
     long_about = None
 )]
 struct Args {
@@ -51,14 +51,14 @@ struct Args {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 enum Command {
-    /// Mostrar todos los metadatos del archivo MP3 o MP4
+    /// Mostrar todos los metadatos del archivo MP3, MP4, OGG y Opus
     Show {
-        /// Ruta del archivo de audio (MP3 o MP4)
+        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
         file: PathBuf,
     },
-    /// Editar metadatos del archivo MP3 o MP4
+    /// Editar metadatos del archivo MP3, MP4, OGG y Opus
     Edit {
-        /// Ruta del archivo de audio (MP3 o MP4)
+        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
         file: PathBuf,
 
         /// Título de la canción
@@ -81,13 +81,13 @@ enum Command {
         #[arg(short, long)]
         genre: Option<String>,
 
-        /// Número de pista
-        #[arg(short = 'T', long)]
-        track: Option<u32>,
+        /// Número de pista (N o N/TOTAL)
+        #[arg(short = 'T', long, value_name = "N|N/TOTAL")]
+        track: Option<NumberWithTotal>,
 
-        /// Temporada (TPOS - útil para podcasts)
-        #[arg(short = 'S', long)]
-        season: Option<u32>,
+        /// Temporada (TPOS - útil para podcasts; N o N/TOTAL)
+        #[arg(short = 'S', long, value_name = "N|N/TOTAL")]
+        season: Option<NumberWithTotal>,
 
         /// Fecha de grabación (YYYY-MM-DD o YYYY)
         #[arg(short = 'd', long)]
@@ -141,19 +141,19 @@ enum Command {
         #[arg(long)]
         title_sort: Option<String>,
     },
-    /// Eliminar tags específicos del archivo MP3 o MP4
+    /// Eliminar tags específicos del archivo MP3, MP4, OGG y Opus
     Remove {
-        /// Ruta del archivo de audio (MP3 o MP4)
+        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
         file: PathBuf,
 
         // Tags a eliminar. La lista se deriva de `id3cli::VALID_TAG_NAMES`, la
-        // misma tabla de alias que comparten la clasificación de MP3 y la de
-        // MP4, para que la ayuda no pueda quedar desincronizada de los nombres
-        // realmente aceptados.
+        // misma tabla de alias que comparten la clasificación de MP3, la de
+        // MP4 y la de OGG, para que la ayuda no pueda quedar desincronizada de
+        // los nombres realmente aceptados.
         #[arg(help = format!("Tags a eliminar, en inglés o en español ({VALID_TAG_NAMES})"))]
         tags: Vec<String>,
 
-        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4)
+        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4 y el bloque de comentarios Vorbis en OGG, preservando el vendor)
         #[arg(short, long)]
         all: bool,
     },
@@ -161,21 +161,24 @@ enum Command {
 
 /// Backend con el que se procesa un archivo ya aceptado.
 ///
-/// El enrutado es la única pieza que decide entre el camino MP3 y el MP4; los
-/// subcomandos nunca vuelven a consultar el formato.
+/// El enrutado es la única pieza que decide entre el camino MP3, el MP4 y el
+/// OGG; los subcomandos nunca vuelven a consultar el formato. Un único backend
+/// OGG sirve a los dos códecs del contenedor: Vorbis y Opus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
     /// MP3: se usa el backend ID3v2.
     Mp3,
     /// MP4/M4A: se usa el backend `ilst`.
     Mp4,
+    /// OGG (Vorbis u Opus): se usa el backend de comentarios de Vorbis.
+    Ogg,
 }
 
 /// Comprueba que el archivo existe y que su formato (por contenido) está
 /// soportado, y devuelve el backend con el que hay que procesarlo.
 ///
 /// La decisión se toma sobre los *magic bytes* del archivo, nunca sobre la
-/// extensión del nombre. Ante un formato no soportado (FLAC, OGG, WAV, …) o
+/// extensión del nombre. Ante un formato no soportado (Speex, FLAC, WAV, …) o
 /// contenido no reconocible se escribe un mensaje en español en stderr, se sale
 /// con código distinto de cero y **no se escribe ni un byte del archivo**.
 ///
@@ -189,10 +192,12 @@ fn detect_supported_format(file: &Path) -> Backend {
     match detect_format(file) {
         Ok(AudioFormat::Mp3) => Backend::Mp3,
         Ok(AudioFormat::Mp4) => Backend::Mp4,
+        Ok(AudioFormat::OggVorbis) => Backend::Ogg,
+        Ok(AudioFormat::OggOpus) => Backend::Ogg,
         Ok(AudioFormat::Unsupported) => {
             eprintln!(
                 "Error: El archivo '{}' está en un formato de audio no soportado. \
-                 Formatos soportados: MP3 y MP4.",
+                 Formatos soportados: MP3, MP4, OGG y Opus.",
                 file.display()
             );
             std::process::exit(1);
@@ -200,7 +205,7 @@ fn detect_supported_format(file: &Path) -> Backend {
         Ok(AudioFormat::Unknown) => {
             eprintln!(
                 "Error: No se pudo determinar el formato del archivo '{}'. \
-                 Formatos soportados: MP3 y MP4.",
+                 Formatos soportados: MP3, MP4, OGG y Opus.",
                 file.display()
             );
             std::process::exit(1);
@@ -218,7 +223,9 @@ fn detect_supported_format(file: &Path) -> Backend {
 
 /// Informa de un fallo al procesar un contenedor MP4 y termina con código 1.
 ///
-/// Muestra el error y un recordatorio de los formatos soportados.
+/// El mensaje enumera los formatos soportados (MP3, MP4, OGG y Opus) además de
+/// la causa, de modo que un archivo con cabecera MP4 pero estructura inválida se
+/// rechaza con un error legible y sin haberlo modificado.
 fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     eprintln!(
         "Error: No se pudo procesar el archivo MP4 '{}': {}",
@@ -227,7 +234,26 @@ fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     );
     eprintln!(
         "  El archivo tiene formato MP4/M4A pero no se pudo interpretar. \
-         Formatos soportados: MP3 y MP4."
+         Formatos soportados: MP3, MP4, OGG y Opus."
+    );
+    std::process::exit(1);
+}
+
+/// Informa de un fallo al procesar un contenedor Ogg (Vorbis u Opus) y termina
+/// con código 1.
+///
+/// El mensaje enumera los formatos soportados (MP3, MP4, OGG y Opus) además de
+/// la causa, de modo que un archivo con página Ogg y códec Vorbis u Opus pero
+/// estructura inválida se rechaza con un error legible y sin haberlo modificado.
+fn report_ogg_error(file: &Path, error: impl std::fmt::Display) -> ! {
+    eprintln!(
+        "Error: No se pudo procesar el archivo OGG '{}': {}",
+        file.display(),
+        error
+    );
+    eprintln!(
+        "  El archivo tiene formato Ogg Vorbis u Opus pero no se pudo interpretar. \
+         Formatos soportados: MP3, MP4, OGG y Opus."
     );
     std::process::exit(1);
 }
@@ -260,6 +286,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 display_tags_mp4(&tag);
+            }
+            Backend::Ogg => {
+                // El comentario de Vorbis es obligatorio en el contenedor, así
+                // que siempre existe: no hay un `Ok(None)` que tratar como en
+                // MP4. `display_tags_ogg` ignora el vendor y `ENCODER` y, cuando
+                // no hay ningún campo del mapeo, informa de que no se
+                // encontraron metadatos y el proceso termina con código cero.
+                let tag = match read_vorbis_tag(file) {
+                    Ok(tag) => tag,
+                    Err(error) => report_ogg_error(file, error),
+                };
+
+                display_tags_ogg(&tag);
             }
         },
         Command::Edit {
@@ -557,6 +596,131 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     outln!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
                 }
             }
+            Backend::Ogg => {
+                // La carátula se valida ANTES de escribir nada: si la ruta no
+                // existe o la extensión no está soportada, se sale con error sin
+                // haber tocado el archivo (mismo contrato que en MP3 y MP4).
+                let cover_data = match cover {
+                    Some(cover_path) => {
+                        if !cover_path.exists() {
+                            eprintln!(
+                                "Error: El archivo de carátula '{}' no existe",
+                                cover_path.display()
+                            );
+                            std::process::exit(1);
+                        }
+                        if let Err(e) = detect_cover_mime_type(cover_path) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                        Some(fs::read(cover_path)?)
+                    }
+                    None => None,
+                };
+
+                let cover_input = match (cover, cover_data.as_deref()) {
+                    (Some(path), Some(data)) => Some(OggCover {
+                        path: path.as_path(),
+                        data,
+                    }),
+                    _ => None,
+                };
+
+                let ogg_options = OggEditOptions {
+                    title: title.as_deref(),
+                    artists: artist,
+                    album: album.as_deref(),
+                    album_artist: album_artist.as_deref(),
+                    year: *year,
+                    genre: genre.as_deref(),
+                    track: *track,
+                    season: *season,
+                    date: date.as_deref(),
+                    copyright: copyright.as_deref(),
+                    composer: composer.as_deref(),
+                    subtitle: subtitle.as_deref(),
+                    lyrics: lyrics.as_deref(),
+                    compilation: *compilation,
+                    title_sort: title_sort.as_deref(),
+                    artist_sort: artist_sort.as_deref(),
+                    album_sort: album_sort.as_deref(),
+                    cover: cover_input,
+                    url: url.as_deref(),
+                    original_artist: original_artist.as_deref(),
+                };
+
+                let report = match edit_ogg(file, &ogg_options) {
+                    Ok(report) => report,
+                    Err(error) => report_ogg_error(file, error),
+                };
+
+                // Confirmaciones. `--url` y `--original-artist` no tienen clave
+                // en OGG: `edit_ogg` ya avisa por stderr de su omisión, así que
+                // aquí no se confirman.
+                if let Some(title) = title {
+                    outln!("✓ Título: {}", title);
+                }
+                if !artist.is_empty() {
+                    outln!("✓ Artista(s): {}", artist.join("; "));
+                }
+                if let Some(album) = album {
+                    outln!("✓ Álbum: {}", album);
+                }
+                if let Some(album_artist) = album_artist {
+                    outln!("✓ Artista del álbum: {}", album_artist);
+                }
+                if let Some(year) = year {
+                    outln!("✓ Año: {}", year);
+                }
+                if let Some(genre) = genre {
+                    outln!("✓ Género: {}", genre);
+                }
+                if let Some(track) = track {
+                    outln!("✓ Pista: {}", track);
+                }
+                if let Some(season) = season {
+                    outln!("✓ Temporada: {}", season);
+                }
+                if let Some(date) = date {
+                    outln!("✓ Fecha: {}", date);
+                }
+                if let Some(copyright) = copyright {
+                    outln!("✓ Copyright: {}", copyright);
+                }
+                if let Some(composer) = composer {
+                    outln!("✓ Compositor: {}", composer);
+                }
+                if let Some(subtitle) = subtitle {
+                    outln!("✓ Subtítulo: {}", subtitle);
+                }
+                if let Some(lyrics_text) = lyrics {
+                    outln!("✓ Letra: {} línea(s)", lyrics_text.lines().count());
+                }
+                if let Some(cover_path) = cover {
+                    outln!("✓ Carátula añadida desde: {}", cover_path.display());
+                }
+                if *compilation {
+                    outln!("✓ Compilación: Sí");
+                }
+                if let Some(sort) = album_sort {
+                    outln!("✓ Orden álbum: {}", sort);
+                }
+                if let Some(sort) = artist_sort {
+                    outln!("✓ Orden artista: {}", sort);
+                }
+                if let Some(sort) = title_sort {
+                    outln!("✓ Orden título: {}", sort);
+                }
+
+                if report.changed {
+                    outln!(
+                        "\n✅ Metadatos guardados correctamente en '{}'",
+                        file.display()
+                    );
+                } else {
+                    outln!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
+                }
+            }
         },
         Command::Remove { file, tags, all } => match detect_supported_format(file) {
             Backend::Mp3 => {
@@ -646,6 +810,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if removed {
                     if let Err(e) = write_mp4_tag(file, &tag) {
                         report_mp4_error(file, e);
+                    }
+                    outln!(
+                        "\n✅ Metadatos eliminados correctamente de '{}'",
+                        file.display()
+                    );
+                } else {
+                    outln!("\n⚠️  No se encontraron tags válidos para eliminar.");
+                }
+            }
+            Backend::Ogg => {
+                // Vaciar el comentario de Vorbis preservando el vendor
+                if *all {
+                    match remove_all_ogg(file) {
+                        Ok(true) => {
+                            outln!("✅ Metadatos eliminados de '{}'", file.display());
+                        }
+                        Ok(false) => {
+                            outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
+                        }
+                        Err(error) => report_ogg_error(file, error),
+                    }
+                    return Ok(());
+                }
+
+                // Verificar que se especificaron tags para eliminar
+                if tags.is_empty() {
+                    eprintln!("Error: Debes especificar al menos un tag para eliminar");
+                    eprintln!("Ejemplo: id3cli remove cancion.ogg title artist");
+                    std::process::exit(1);
+                }
+
+                // Leer tag. El comentario de Vorbis es obligatorio en el
+                // contenedor, así que siempre existe: no hay un `Ok(None)` que
+                // tratar como en MP4.
+                let mut tag = match read_vorbis_tag(file) {
+                    Ok(tag) => tag,
+                    Err(error) => report_ogg_error(file, error),
+                };
+
+                // Eliminar tags (misma tabla de alias que en MP3 y MP4)
+                let removed = remove_tags_ogg(&mut tag, tags);
+
+                if removed {
+                    if let Err(e) = write_vorbis_tag(file, &tag) {
+                        report_ogg_error(file, e);
                     }
                     outln!(
                         "\n✅ Metadatos eliminados correctamente de '{}'",
