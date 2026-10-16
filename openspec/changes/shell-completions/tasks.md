@@ -16,14 +16,14 @@ El change incorpora el subcomando `id3cli completions <SHELL>` (bash/zsh/fish) g
 ## 2. Fase RED — unitarios (src/tests.rs)
 
 - [ ] 2.1 Tests de `GenerationShell::from_str`: acepta `"bash"`, `"zsh"`, `"fish"` (Display devuelve el mismo nombre en minúsculas) y rechaza `"powershell"`, `"elvish"`, `""` con el error en español que nombra los tres shells válidos.
-- [ ] 2.2 Test de `generate_completions` para bash sobre un `clap::Command` mínimo (con subcomandos `show`, `edit`, `remove`, `completions`): la salida contiene `_id3cli` y `complete -F _id3cli id3cli`, y los nombres de los subcomandos.
+- [ ] 2.2 Test de `generate_completions` para bash sobre un `clap::Command` mínimo (con subcomandos `show`, `edit`, `remove`, `completions`): la salida contiene `_id3cli` y la subcadena estable `complete -F _id3cli`, y los nombres de los subcomandos.
 - [ ] 2.3 Test de `generate_completions` para zsh: la salida contiene `#compdef id3cli` y `_arguments`.
 - [ ] 2.4 Test de `generate_completions` para fish: la salida contiene `complete -c id3cli`.
       Verificación: los tests 2.2-2.4 fallan por compilación (E0432/E0425: `clap_complete` y/o símbolos aún inexistentes); el resto de la suite unitaria pasa.
 
 ## 3. Fase RED — integración CLI (tests/integration_test.rs)
 
-- [ ] 3.1 `completions bash` → exit 0, stdout contiene `complete -F _id3cli id3cli`, stderr VACÍO.
+- [ ] 3.1 `completions bash` → exit 0, stdout contiene la subcadena estable `complete -F _id3cli`, stderr VACÍO.
 - [ ] 3.2 `completions zsh` → exit 0, stdout contiene `#compdef id3cli`, stderr VACÍO.
 - [ ] 3.3 `completions fish` → exit 0, stdout contiene `complete -c id3cli`, stderr VACÍO.
 - [ ] 3.4 Los tres shells: stdout NO contiene la línea «no se encontraron metadatos» ni los emojis del modo legible (no-rotura de la separación de canales).
@@ -42,7 +42,7 @@ El change incorpora el subcomando `id3cli completions <SHELL>` (bash/zsh/fish) g
 
 ## 5. Fase GREEN — e2e
 
-- [ ] 5.1 `scripts/e2e/e2e_completions.sh`: usa e2e_setup + helper de binario (--bin opcional), SIN e2e_gen_audio; verifica con e2e_run/check_rc/check_show_contains: `completions bash` → rc 0 + `complete -F _id3cli id3cli` presente + STDOUT pasa `bash -n` (oráculo de sintaxis real; la verificación se hace capturando la salida a un fichero y ejecutando `bash -n <fichero>`); `completions zsh` → rc 0 + `#compdef id3cli`; `completions fish` → rc 0 + `complete -c id3cli`; los tres con stderr vacío; `completions powershell` → rc ≠ 0 + stderr contiene los tres shells; contabilizado en E2E_PASS/E2E_FAIL con mensajes en español, resumen `e2e_summary "completions"`.
+- [ ] 5.1 `scripts/e2e/e2e_completions.sh`: usa e2e_setup + helper de binario (--bin opcional), SIN e2e_gen_audio; verifica con e2e_run/check_rc/check_show_contains: `completions bash` → rc 0 + subcadena estable `complete -F _id3cli` presente (sin fijar los flags `-o nosort -o bashdefault -o default` de la plantilla) + STDOUT pasa `bash -n` (oráculo de sintaxis real; la verificación se hace capturando la salida a un fichero y ejecutando `bash -n <fichero>`); `completions zsh` → rc 0 + `#compdef id3cli`; `completions fish` → rc 0 + `complete -c id3cli`; los tres con stderr vacío; `completions powershell` → rc ≠ 0 + stderr contiene los tres shells; contabilizado en E2E_PASS/E2E_FAIL con mensajes en español, resumen `e2e_summary "completions"`.
 - [ ] 5.2 Recipe `just e2e`: añade `scripts/e2e/e2e_completions.sh --bin target/debug/id3cli` tras el bucle de los 5 formatos (una sola construcción). Añadir recipe `e2e-completions` para ejecutarlo solo.
 - [ ] 5.3 Medir el recuento de aserciones del script (p. ej. «completions: N aserciones») con `scripts/e2e/e2e_completions.sh --bin target/debug/id3cli` — numero MEDIDO, nunca supuesto.
 - [ ] 5.4 Falsabilidad: corromper deliberadamente una aserción (p. ej. esperar `#compdef id3cli` en bash) en una copia temporal → exit 1 con la aserción nombrada; restaurar → exit 0. Verifica además `bash -n scripts/e2e/*.sh`.

@@ -8,11 +8,11 @@ La matriz de verificación e2e incorpora la capa de completions: un script dedic
 
 ### Requirement: El e2e MUST verificar la capa de completions con `bash -n` como oráculo
 
-El e2e MUST ejecutar `id3cli completions bash` y verificar: (a) exit 0 con stderr vacío; (b) el stdout contiene `complete -F _id3cli id3cli`; (c) el stdout, guardado a fichero, pasa `bash -n` (script bash sintácticamente válido — el intérprete real como oráculo). Para `completions zsh` MUST verificar `#compdef id3cli` y para `completions fish` líneas `complete -c id3cli`, ambas con exit 0 y stderr vacío. MUST verificar que el script bash menciona los subcomandos `show`, `edit`, `remove` y `completions`.
+El e2e MUST ejecutar `id3cli completions bash` y verificar: (a) exit 0 con stderr vacío; (b) el stdout contiene la subcadena estable `complete -F _id3cli` (sin fijar los flags de la plantilla); (c) el stdout, guardado a fichero, pasa `bash -n` (script bash sintácticamente válido — el intérprete real como oráculo). Para `completions zsh` MUST verificar `#compdef id3cli` y para `completions fish` líneas `complete -c id3cli`, ambas con exit 0 y stderr vacío. MUST verificar que el script bash menciona los subcomandos `show`, `edit`, `remove` y `completions`.
 
 #### Scenario: La capa de completions de bash
 - **WHEN** el e2e de completions verifica `id3cli completions bash`
-- **THEN** exit 0, stderr vacío, `complete -F _id3cli id3cli` presente en stdout y `bash -n` sobre el stdout guardado devuelve 0
+- **THEN** exit 0, stderr vacío, la subcadena estable `complete -F _id3cli` presente en stdout y `bash -n` sobre el stdout guardado devuelve 0
 
 #### Scenario: La capa de completions de zsh y fish
 - **WHEN** el e2e de completions verifica `id3cli completions zsh` y `id3cli completions fish`

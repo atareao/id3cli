@@ -8,12 +8,12 @@ Capability NUEVA: contrato del subcomando `id3cli completions <SHELL>` que emite
 
 ### Requirement: El subcomando `completions` MUST emitir el script de completions para bash, zsh y fish
 
-`id3cli completions <SHELL>` MUST aceptar exactamente `bash`, `zsh` y `fish` (minúsculas). El script MUST generarse en runtime con `clap_complete` 4.5 sobre el Command real del CLI (incluido el propio subcomando `completions`), MUST escribirse COMPLETO en stdout vía la capa de salida (`print_block`) y el proceso MUST terminar con exit 0 y stderr vacío.
+`id3cli completions <SHELL>` MUST aceptar exactamente `bash`, `zsh` y `fish` (minúsculas). El script MUST generarse en runtime con `clap_complete` 4.5 sobre el Command real del CLI (incluido el propio subcomando `completions`) y MUST escribirse COMPLETO en stdout vía la capa de salida (`print_block`), con exit 0 y stderr vacío. El script es la salida NATIVA del generador: para bash la línea de registro es `complete -F _id3cli -o nosort -o bashdefault -o default id3cli` (la subcadena estable `complete -F _id3cli` es el marcador de verificación; el resto de flags pertenecen a la plantilla de clap_complete y no se fijan).
 
 #### Scenario: Generación para bash
 - **GIVEN** un id3cli compilado
 - **WHEN** se ejecuta `id3cli completions bash`
-- **THEN** el exit code es 0, el stderr está vacío y el stdout contiene la función `_id3cli` y la línea `complete -F _id3cli id3cli`
+- **THEN** el exit code es 0, el stderr está vacío y el stdout contiene la función `_id3cli` y la subcadena estable `complete -F _id3cli` (sin fijar el resto de flags de la plantilla)
 
 #### Scenario: Generación para zsh
 - **GIVEN** un id3cli compilado

@@ -22,7 +22,7 @@ El repo prohíbe `println!` (pánico con pipe cerrado). Los scripts de completio
 
 ## Decisión 5 — Marcadores por shell verificables (oráculos)
 
-- bash: el script contiene la función `_id3cli` y la línea `complete -F _id3cli id3cli`.
+- bash: el script contiene la función `_id3cli` y la línea de registro nativa `complete -F _id3cli -o nosort -o bashdefault -o default id3cli` (clap_complete 4.5); como oráculo se usa la subcadena estable `complete -F _id3cli`, sin fijar los flags (pertenecen a la plantilla del generador).
 - zsh: contiene `#compdef id3cli` y `_arguments`/`_id3cli`.
 - fish: contiene líneas `complete -c id3cli ...`.
 
