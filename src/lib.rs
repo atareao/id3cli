@@ -45,6 +45,7 @@ use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
+use std::str::FromStr;
 
 /// Construye un [`FrameId`] a partir de un identificador conocido en tiempo de
 /// compilación.
@@ -3375,6 +3376,81 @@ pub fn format_json_name(format: AudioFormat) -> &'static str {
             )
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Completions para shells (`completions <SHELL>`): bash, zsh y fish
+// ---------------------------------------------------------------------------
+
+/// Shell para el que se genera el script de completions del CLI.
+///
+/// Se aceptan exactamente tres valores —`bash`, `zsh` y `fish`— por su nombre
+/// en minúsculas; cualquier otro valor (incluida la cadena vacía) se rechaza
+/// con un error en español que nombra los shells válidos. La derivación
+/// `Clone`/`Copy` lo hace usable como *value parser* de clap
+/// (`clap::value_parser!`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationShell {
+    /// Bash (script con la función `_id3cli` registrada con `complete -F`).
+    Bash,
+    /// Zsh (script declarado con `#compdef` y completado con `_arguments`).
+    Zsh,
+    /// Fish (lista de líneas `complete -c id3cli`).
+    Fish,
+}
+
+impl FromStr for GenerationShell {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "bash" => Ok(Self::Bash),
+            "zsh" => Ok(Self::Zsh),
+            "fish" => Ok(Self::Fish),
+            _ => Err(format!(
+                "el shell '{value}' no está soportado; shells válidos: bash, zsh y fish"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for GenerationShell {
+    /// Devuelve el nombre en minúsculas, tal y como `clap_complete` lo espera
+    /// y como el CLI lo muestra.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bash => write!(f, "bash"),
+            Self::Zsh => write!(f, "zsh"),
+            Self::Fish => write!(f, "fish"),
+        }
+    }
+}
+
+/// Genera el script de completions del CLI para el shell indicado.
+///
+/// El script se genera sobre el árbol de comandos que recibe (el mismo que
+/// `Args::command()` construye en el binario, o un árbol mínimo en los tests) y
+/// el nombre del binario es **siempre** `"id3cli"`, con independencia del
+/// nombre del ejecutable: así el contenido del script no depende de cómo se
+/// llame el binario en disco.
+pub fn generate_completions(shell: GenerationShell, cmd: &mut clap::Command) -> String {
+    let clap_shell = match shell {
+        GenerationShell::Bash => clap_complete::Shell::Bash,
+        GenerationShell::Zsh => clap_complete::Shell::Zsh,
+        GenerationShell::Fish => clap_complete::Shell::Fish,
+    };
+
+    // `clap_complete::generate` escribe bytes (`std::io::Write`); `String` solo
+    // implementa `std::fmt::Write`, así que se acumula en un buffer de bytes y
+    // se convierte al final. El script siempre es UTF-8 válido: el nombre del
+    // binario y los subcomandos son ASCII y las descripciones de clap se copian
+    // tal cual. La salida es la NATIVA de clap_complete, sin reescritura de
+    // líneas: el marcador estable del spec es la subcadena `complete -F _id3cli`
+    // y el resto de flags (`-o nosort -o bashdefault -o default`) son parte del
+    // template de clap_complete 4.5, validado por `bash -n`.
+    let mut buffer = Vec::new();
+    clap_complete::generate(clap_shell, cmd, "id3cli", &mut buffer);
+    String::from_utf8(buffer).expect("el script de completions generado es UTF-8 válido")
 }
 
 #[cfg(test)]

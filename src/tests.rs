@@ -8,6 +8,12 @@ use lofty::tag::{Accessor, ItemKey, TagType};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Los tests de generación de completions (`shell-completions`) construyen un
+// `clap::Command` mínimo con el nombre del binario y sus subcomandos; el alias
+// evita colisionar con `Tag` y con otros nombres del módulo.
+use clap::Command as ClapCommand;
+use std::str::FromStr;
+
 // Los tests que escriben y releen del disco siguen usando el backend ANTERIOR
 // `id3` (ahora dev-dependency): verifican la paridad entre librerías —`lofty`
 // escribe y `id3` lee— sin tocar ninguna de sus expectativas.
@@ -5151,5 +5157,133 @@ fn test_json_vorbis_track_total_y_lyrics_completos() {
     assert!(
         json.contains("Cuarta línea"),
         "la última línea de la letra no debe truncarse como en el preview, fue: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Generación de completions para shells (`completions <SHELL>`) — change
+// shell-completions, fase RED
+//
+// Fase RED: los símbolos de generación (`GenerationShell` y
+// `generate_completions`) NO existen todavía, así que estos tests no compilan
+// hasta el GREEN (E0425 «cannot find»). El oráculo son los marcadores estables
+// que `clap_complete` emite por shell: la función `_id3cli` con su `complete -F`
+// en bash, `#compdef`/`_arguments` en zsh y las líneas `complete -c id3cli` en
+// fish.
+// ---------------------------------------------------------------------------
+
+/// El mínimo árbol de subcomandos del CLI para ejercitar la generación.
+///
+/// Reproduce los subcomandos reales (`show`, `edit`, `remove` y el propio
+/// `completions`) sin flags, porque el oráculo de estos tests es que el script
+/// los liste y que los marcadores por shell aparezcan; los flags son asunto del
+/// GREEN.
+fn command_minimo() -> ClapCommand {
+    ClapCommand::new("id3cli")
+        .subcommand(ClapCommand::new("show"))
+        .subcommand(ClapCommand::new("edit"))
+        .subcommand(ClapCommand::new("remove"))
+        .subcommand(ClapCommand::new("completions"))
+}
+
+#[test]
+fn test_generation_shell_acepta_tres_shells() {
+    // Los tres shells soportados se aceptan por su nombre exacto en minúsculas
+    // y su `Display` los devuelve tal cual (minúsculas): es el nombre que
+    // `completions` pasa a `clap_complete`.
+    let bash =
+        GenerationShell::from_str("bash").expect("bash debe ser un shell de generación válido");
+    assert_eq!(
+        bash.to_string(),
+        "bash",
+        "el Display de Bash debe ser \"bash\""
+    );
+
+    let zsh = GenerationShell::from_str("zsh").expect("zsh debe ser un shell de generación válido");
+    assert_eq!(zsh.to_string(), "zsh", "el Display de Zsh debe ser \"zsh\"");
+
+    let fish =
+        GenerationShell::from_str("fish").expect("fish debe ser un shell de generación válido");
+    assert_eq!(
+        fish.to_string(),
+        "fish",
+        "el Display de Fish debe ser \"fish\""
+    );
+}
+
+#[test]
+fn test_generation_shell_rechaza_shells_no_soportados() {
+    // Cualquier otro valor (powershell, elvish, la cadena vacía…) se rechaza
+    // con un error en español que nombra los tres shells válidos.
+    for invalido in ["powershell", "elvish", ""] {
+        let error = match GenerationShell::from_str(invalido) {
+            Ok(shell) => panic!("{invalido:?} debe rechazarse, pero se aceptó {shell:?}"),
+            Err(error) => error,
+        };
+        for valido in ["bash", "zsh", "fish"] {
+            assert!(
+                error.contains(valido),
+                "el error para {invalido:?} debe nombrar el shell válido {valido}, fue: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_generate_completions_bash() {
+    // El script de bash debe definir la función `_id3cli`, registrarla con la
+    // subcadena estable `complete -F _id3cli` (el resto de flags de la línea de
+    // registro —`-o nosort -o bashdefault -o default`— son del template de
+    // clap_complete 4.5 y no se fijan) y listar los subcomandos del CLI
+    // (incluido el propio `completions`).
+    let mut cmd = command_minimo();
+
+    let script = generate_completions(GenerationShell::Bash, &mut cmd);
+
+    assert!(
+        script.contains("_id3cli"),
+        "el script de bash debe definir la función _id3cli, fue: {script}"
+    );
+    assert!(
+        script.contains("complete -F _id3cli"),
+        "el script de bash debe registrar la función con complete -F, fue: {script}"
+    );
+    for subcomando in ["show", "edit", "remove", "completions"] {
+        assert!(
+            script.contains(subcomando),
+            "el script de bash debe listar el subcomando {subcomando}, fue: {script}"
+        );
+    }
+}
+
+#[test]
+fn test_generate_completions_zsh() {
+    // El script de zsh debe declararse con `#compdef id3cli` y completar los
+    // argumentos con `_arguments`.
+    let mut cmd = command_minimo();
+
+    let script = generate_completions(GenerationShell::Zsh, &mut cmd);
+
+    assert!(
+        script.contains("#compdef id3cli"),
+        "el script de zsh debe declararse con #compdef id3cli, fue: {script}"
+    );
+    assert!(
+        script.contains("_arguments"),
+        "el script de zsh debe generar _arguments, fue: {script}"
+    );
+}
+
+#[test]
+fn test_generate_completions_fish() {
+    // El script de fish es una lista de líneas `complete -c id3cli`, una por
+    // subcomando y flag.
+    let mut cmd = command_minimo();
+
+    let script = generate_completions(GenerationShell::Fish, &mut cmd);
+
+    assert!(
+        script.contains("complete -c id3cli"),
+        "el script de fish debe emitir líneas complete -c id3cli, fue: {script}"
     );
 }

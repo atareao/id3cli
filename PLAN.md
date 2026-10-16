@@ -2,7 +2,7 @@
 
 ## Estado y regla de oro
 
-> **ESTADO: FASES 0-3 COMPLETADAS (2026-10-16): RELEASE v0.7.0 PUBLICADA y FASE 3 (salida JSON) CERRADA vía change OpenSpec `json-output` (archivado como `2026-10-16-json-output`, PR #29 fusionado). Fase 4 EN EJECUCIÓN: verificación final DoD en curso y release única v0.8.0 por delante.**
+> **✅ TODAS LAS FASES COMPLETADAS (2026-10-16): FASES 0-4 y FASE 5 CERRADAS. Releases v0.7.0 (FLAC), v0.8.0 (JSON) y v0.9.0 (completions bash/zsh/fish) publicadas en crates.io y GitHub Releases. Changes OpenSpec `json-output` y `shell-completions` archivados (2026-10-16). Plan director ejecutado en su totalidad.**
 
 Este plan consolida, en orden de ejecución:
 
@@ -110,7 +110,28 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - **Release:** la release v0.7.0 (soporte FLAC) ya se publicó (PR #28 + pipeline `release-prepare` + `release.yml`, 2026-10-16). La Fase 4 cierra la Fase 3 con una **liberación única v0.8.0** del JSON: PR development → main, bump minor automático por el `feat:` en CI (no tocar Cargo.toml local). Verbificar el checklist de la Fase 4 (barrido completo + archive del change `json-output`).
 - **Archive:** un change de OpenSpec por feature (`flac-support`, `json-output`) — ambos archivados (`2026-10-16-flac-support`, `2026-10-16-json-output`).
 - **Falsabilidad e2e:** re-demostrar tras ampliar (aserción corrompida → exit 1).
-- **Estado 2026-10-16:** barrido completo verde (306 tests, fmt, clippy -D warnings 0, bash -n, openspec validate --specs 14 items, e2e 479 aserciones con `cargo build --locked`), no-rotura del modo legible verificada contra el binario v0.7.0 (salida idéntica en los 5 fixtures; solo `show --json` difiere, rc 2 → 0 por el flag nuevo). Pendiente: PR development → main `release: v0.8.0` → bump minor automático → tag → crates.io (cadena probada en v0.7.0).
+- **Estado 2026-10-16:** ✅ FASE 4 CERRADA. Barrido completo verde (306 tests, fmt, clippy -D warnings 0, bash -n, openspec validate --specs 14 items, e2e 479 aserciones con `cargo build --locked`), no-rotura del modo legible verificada contra el binario v0.7.0 (salida idéntica en los 5 fixtures; solo `show --json` difiere, rc 2 → 0 por el flag nuevo). Release **v0.8.0** publicada: PR **#30** development → main (`0598c1a`), `release-prepare.yml` OK (commit `chore: release v0.8.0` `1af3013` + tag `v0.8.0`), `release.yml` OK (GitHub Release «id3cli v0.8.0» publicada 2026-10-16T18:21:18Z), crates.io **max_version 0.8.0** (2026-10-16). `development` sincronizado con `main` (ambos en `1af3013`). Último eslabón de la cadena de release probada en v0.7.0, sin desviaciones.
+
+## Fase 5 — Feature: completions para bash, zsh y fish (DESPUÉS de v0.8.0)
+
+> **✅ COMPLETADA (2026-10-16)** vía el change OpenSpec `shell-completions` (8 artefactos, aprobado por el usuario con «adelante»; TDD RED→GREEN). Subcomando `id3cli completions <SHELL>` (bash/zsh/fish exactos) que emite el script de completions por stdout, generado en runtime con `clap_complete ~4.5` (misma minor que clap 4.5.x) sobre el Command real del CLI vía `CommandFactory`; `GenerationShell` (FromStr con error en español) + `generate_completions()` en lib.rs; `print_block()` en output.rs (bloques multilínea con el mismo contrato de pipe cerrado → exit 0). El oráculo se alineó a la subcadena estable `complete -F _id3cli` (la salida es la NATIVA del generador: `complete -F _id3cli -o nosort -o bashdefault -o default id3cli`, validada con `bash -n`; desviación de post-procesado rechazada por el director). e2e dedicado `e2e_completions.sh` (20 aserciones) + `just e2e` ampliado a 6 scripts; falsabilidad re-demostrada (corrupción → exit 1). Suite 306→318 (174 unit + 144 int); e2e 479→499 aserciones; docs al día (README, AGENTS, copilot); test documental verde. PR #31 → squash `b2fb0d6` en `development`; change archivado `2026-10-16-shell-completions`; specs base 14→15 items. Release prevista: v0.9.0.
+
+### 5.1 — Diseño (resumen para el checkpoint)
+
+- Subcomando **`id3cli completions <SHELL>`** con `SHELL ∈ {bash, zsh, fish}` exactos; generación en runtime con **`clap_complete = "4.5"`** (misma minor que clap 4.5.54) sobre el Command real del CLI (vía `CommandFactory` → `Args::command()`).
+- Lógica en lib.rs: enum `GenerationShell` (FromStr con error en español nombrando los tres shells, Display) + `generate_completions(shell, &mut clap::Command) -> String` testeable con un Command mínimo; main.rs añade el subcomando (value_parser) y enruta.
+- Salida por la capa `output.rs`: nueva `print_block(&str)` para bloques multilínea con el MISMO contrato que `print_line` (pipe cerrado → exit 0; otros errores de escritura → exit 1 con mensaje en español; nunca `println!`).
+- En el e2e: `bash -n` como oráculo de sintaxis del script bash generado (parser real), marcadores `#compdef id3cli` (zsh) y `complete -c id3cli` (fish), subcomandos presentes, pipe cerrado → exit 0, shell no soportado → exit ≠ 0, y falsabilidad re-demostrada (corromper el marcador esperado → exit 1).
+
+### 5.2 — Grupos de tareas (tasks.md del change, TDD estricto)
+
+1. Artefactos de especificación + **STOP de aprobación del usuario** (nada de `src/` ni `tests/` antes).
+2. RED unitarios (`src/tests.rs`): `GenerationShell` (FromStr/Display), marcadores por shell sobre un `clap::Command` mínimo (`complete -F _id3cli id3cli` en bash, `#compdef id3cli` en zsh, `complete -c id3cli` en fish) y nombres de subcomandos en el script.
+3. RED integración (`tests/integration_test.rs`): `completions bash|zsh|fish` → rc 0 + marcador + stderr vacío; shell inválido → exit ≠ 0 + error en español con los tres shells; pipe cerrado → exit 0.
+4. GREEN: `clap_complete` en `[dependencies]` + Cargo.lock commiteado; `GenerationShell`/`generate_completions`/`print_block`; subcomando en `main.rs`.
+5. GREEN e2e: `scripts/e2e/e2e_completions.sh` (bash -n, marcadores, subcomandos, pipe, shell inválido, falsabilidad) + recipe `just e2e` ampliada (5 formatos + completions, una sola construcción).
+6. REFACTOR docs: README (sección completions con instalación en `.bashrc`/`.zshrc`/`config.fish`, recuentos medidos del escudo/desglose, roadmap), AGENTS.md, copilot-instructions; test documental verde.
+7. Verificación y cierre: barrido completo (cargo test/fmt/clippy, `bash -n scripts/e2e/*.sh`, `just e2e`, `openspec validate --specs`), no-rotura de show/edit/remove, archive del change, PR a `development`, release única **v0.9.0**.
 
 ## Riesgos / notas
 
@@ -127,5 +148,6 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - [x] **Fase 1:** fixes 1.1 y 1.2 con tests RED→GREEN, e2e ampliado con las aserciones que hoy fallarían, sin regresiones (292 tests verdes = 164 unitarios + 128 integración; e2e 392 aserciones en los cinco formatos).
 - [x] **Fase 2:** FLAC soportado (detección, backend `Backend::Flac` en el CLI, fixture `sample.flac`, tests integración, e2e_flac.sh, docs coherentes, hoja de ruta actualizada; change `flac-support` archivado; suite 292 tests; e2e 392 aserciones: 70+80+81+81+80).
 - [x] **Fase 3:** `show --json` implementado (change `json-output` archivado), serde+serde_json con lock commiteado, 306 tests (169 unit + 137 int), e2e JSON por formato con jq (479 aserciones), PR #29 fusionado.
-- [ ] **Fase 4:** suite completa verde ✅ (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado ✅, README/AGENTS/copilot al día ✅ — pendiente solo la **release v0.8.0 única** (PR development → main, bump minor automático por el `feat:` en CI) y la verificación de la publicación (tag + crates.io + GitHub Release).
+- [x] **Fase 4:** suite completa verde (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado, README/AGENTS/copilot al día, release **v0.8.0 única** publicada (PR #30, tag `v0.8.0`, GitHub Release + crates.io `max_version: 0.8.0`), `development` sincronizado con `main`.
+- [x] **Fase 5:** completions para bash/zsh/fish (change `shell-completions` archivado), suite 318 (174+144), e2e 499 aserciones con `bash -n` como oráculo y falsabilidad, PR #31 fusionado, release única v0.9.0 publicada.
 - [ ] Ninguna de las fases 1-3 se toca sin aprobación explícita del usuario (este plan está **GUARDADO**, no en ejecución).

@@ -5,7 +5,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
 
 - **Big picture:** single-binary Rust CLI that reads/writes metadata on **MP3** (ID3v2.4 tags), **MP4 / M4A** (iTunes-style `ilst` atoms), **OGG** (Vorbis comments, `KEY=value` pairs; the Ogg container covers both Vorbis and Opus) and **FLAC** (Vorbis comments, native `fLaC`). The project is organized as:
   - [src/lib.rs](src/lib.rs#L1) - Core library with all business logic (2702 lines)
-  - [src/main.rs](src/main.rs#L1) - CLI application with clap subcommands `show`/`edit`/`remove` (871 lines)
+  - [src/main.rs](src/main.rs#L1) - CLI application with clap subcommands `show`/`edit`/`remove`/`completions` (871 lines)
   - [src/tests.rs](src/tests.rs#L1) - Unit tests for library functions (4888 lines)
   - [tests/integration_test.rs](tests/integration_test.rs#L1) - Integration tests spawning the binary (5438 lines)
   - [tests/fixtures](tests/fixtures) - real samples `sample.mp3`, `sample.m4a`, `sample.ogg`, `sample.opus` and `sample.flac`, plus their regeneration scripts `generate_sample_m4a.sh`, `generate_sample_ogg.sh`, `generate_sample_opus.sh` and `generate_sample_flac.sh`
@@ -17,7 +17,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
 
 - **Key files to reference:**
   - **src/lib.rs** (2702 lines) - All business logic: `apply_metadata()`, `apply_metadata_mp4()`, `apply_metadata_ogg()`, `edit_mp4()`, `edit_ogg()`, `read_mp4_tag()`, `read_vorbis_tag()`, `write_mp4_tag()`, `write_vorbis_tag()`, `remove_tags()`, `remove_tags_mp4()`, `remove_tags_ogg()`, `remove_all_id3()`, `remove_all_mp4()`, `remove_all_ogg()`, `remove_all_flac()`, `display_tags()`, `display_tags_mp4()`, `display_tags_ogg()`, `display_tags_flac()`, `add_lyrics()`, `add_url()`, `add_cover_art()`, `add_apple_metadata()`, `detect_format()`, `detect_format_from_bytes()`, `detect_mime_type()`, `detect_cover_mime_type()`, `read_flac_pictures()`, `MP4_ATOM_MAP`, `VORBIS_COMMENT_MAP`
-  - **src/main.rs** (871 lines) - CLI with clap derive and the `show`/`edit`/`remove` subcommands
+  - **src/main.rs** (871 lines) - CLI with clap derive and the `show`/`edit`/`remove`/`completions` subcommands
   - **src/tests.rs** (4888 lines) - Unit tests (a module of lib.rs via `#[cfg(test)]`)
   - **tests/integration_test.rs** (5438 lines) - Integration tests that spawn the binary as a subprocess
   - **Cargo.toml** - Project metadata, `edition 2024`, and dependencies
@@ -26,7 +26,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Build debug binary: `cargo build`
   - Run locally with subcommands: `cargo run -- edit song.mp3 --title "X" --artist "Y"`
   - Build optimized release: `cargo build --release`
-  - Run all tests: `cargo test` (306 = 169 unit + 137 integration); use `--no-fail-fast` if more than one suite fails, since `cargo test` stops at the first failing binary
+  - Run all tests: `cargo test` (318 = 174 unit + 144 integration); use `--no-fail-fast` if more than one suite fails, since `cargo test` stops at the first failing binary
   - Run only unit tests: `cargo test --lib`
   - Run only integration tests: `cargo test --test '*'`
   - Format: `cargo fmt`
@@ -75,10 +75,11 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Display: `show` prints all tags with a readable format
   - Tag removal: `remove` deletes specific tags (English/Spanish names) or everything with `--all` (the ID3 block in MP3, the `ilst` tree in MP4, the user keys in OGG — which preserves the mandatory vendor; in FLAC the whole VORBIS_COMMENT block is removed, vendor included, a documented degradation)
   - Multiple artists: `--artist` can be repeated, joined with `"; "`
+  - Shell completions: `completions <bash|zsh|fish>` prints the completion script for the chosen shell to stdout (generated from the real parser via `clap_complete`)
 
 - **What an AI helper should do first:**
   1. Run `cargo build` to ensure the toolchain and dependencies are available
-  2. Run `cargo test` to verify all 306 tests pass (169 unit + 137 integration)
+  2. Run `cargo test` to verify all 318 tests pass (174 unit + 144 integration)
   3. Review **src/lib.rs** for all business logic functions
   4. Review **src/main.rs** for CLI structure and argument handling
   5. Test with: `cargo run -- show /tmp/test.mp3`
@@ -93,7 +94,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Do not change `edition` or bump deps without mentioning compatibility reasons
   - All new features must include tests (both unit and integration)
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing coverage — currently 306 tests (169 unit + 137 integration)
+  - Preserve existing coverage — currently 318 tests (174 unit + 144 integration)
   - When modifying shared functions (`apply_metadata()`, `add_cover_art()`, `add_lyrics()`, `add_url()`, `add_apple_metadata()`), update ALL tests that call them
   - Use the `"; "` separator for multiple artists
   - Supported image formats: JPG, PNG, WEBP — validate extensions and return helpful errors

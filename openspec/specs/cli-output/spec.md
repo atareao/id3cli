@@ -7,7 +7,7 @@ El spec de `cli-output` no decía nada sobre qué debe pasar cuando la salida es
 
 ### Requirement: El cierre del pipe por el consumidor MUST NOT ser un error
 
-El contrato de BrokenPipe se confirma para el modo `--json`: el JSON se escribe con `outln!`, de modo que un consumidor que cierra el extremo de lectura MUST terminar con exit 0, sin pánico y sin mensajes por stderr, igual que el modo legible.
+El contrato de BrokenPipe se confirma para el modo `--json`: el JSON se escribe con `outln!`, de modo que un consumidor que cierra el extremo de lectura MUST terminar con exit 0, sin pánico y sin mensajes por stderr, igual que el modo legible. El contrato se extiende a la nueva `print_block`, que escribe los bloques multilínea de los scripts de completions por la misma capa de salida: un consumidor que cierra el extremo de lectura mientras `completions` escribe MUST terminar con exit 0, sin pánico y sin mensajes por stderr.
 
 #### Scenario: Pipe cerrado durante la salida JSON
 - **WHEN** el consumidor cierra el extremo de lectura mientras `show --json` escribe su línea
@@ -37,6 +37,14 @@ El contrato de BrokenPipe se confirma para el modo `--json`: el JSON se escribe 
 - **WHEN** no hay ningún consumidor que cierre el pipe antes de tiempo (por ejemplo, al redirigir la salida a un archivo)
 - **THEN** la salida MUST imprimirse igual que antes y el código de salida MUST seguir siendo cero
 
+#### Scenario: Pipe cerrado durante la salida de completions
+- **WHEN** el consumidor cierra el extremo de lectura mientras `id3cli completions bash` escribe su script
+- **THEN** el CLI MUST terminar con exit 0, MUST NOT emitir nada por stderr y MUST NOT generar un pánico
+
+#### Scenario: Salida de completions consumida por completo
+- **WHEN** se redirige el script de completions a un fichero (p. ej. `.bash_completion` o `.zshrc`)
+- **THEN** la salida MUST imprimirse completa (todas las líneas del script) y el código de salida MUST seguir siendo cero
+
 ### Requirement: Un fallo de escritura distinto del pipe cerrado MUST seguir siendo un error
 
 Si la escritura en la salida estándar falla por una causa distinta del pipe cerrado —por ejemplo `ENOSPC` o cualquier otro error del dispositivo de salida—, el CLI MUST avisar por stderr con un mensaje en español y MUST terminar con código de salida distinto de cero. Tragarse ese error MUST NOT ser aceptable.
@@ -55,7 +63,7 @@ Si la escritura en la salida estándar falla por una causa distinta del pipe cer
 
 ### Requirement: Los avisos y los errores MUST seguir saliendo por stderr
 
-En modo legible, los avisos (p. ej. «⚠️ No se encontraron tags ID3 en …») MUST seguir saliendo por stderr con exit 0, sin cambios. En modo JSON, ese aviso concreto de «sin tags» MUST NO emitirse: el caso se representa con `"tags": null` en el propio JSON y el stderr MUST quedar vacío (salvo errores reales, que siguen yendo por stderr con exit ≠ 0). Los avisos de degradación de `edit` (`--url`, `--original-artist`, etc.) no cambian: siguen por stderr en cualquier modo.
+En modo legible, los avisos (p. ej. «⚠️ No se encontraron tags ID3 en …») MUST seguir saliendo por stderr con exit 0, sin cambios. En modo JSON, ese aviso concreto de «sin tags» MUST NO emitirse: el caso se representa con `"tags": null` en el propio JSON y el stderr MUST quedar vacío (salvo errores reales, que siguen yendo por stderr con exit ≠ 0). Los avisos de degradación de `edit` (`--url`, `--original-artist`, etc.) no cambian: siguen por stderr en cualquier modo. En el modo `completions` el stderr MUST quedar vacío en éxito, y un shell no soportado MUST producir un error en español por stderr con exit ≠ 0 sin contaminar el stdout.
 
 #### Scenario: Aviso de sin tags en modo legible (sin cambios)
 - **WHEN** se ejecuta `id3cli show` (sin `--json`) sobre un MP3 sin tags
@@ -80,3 +88,20 @@ En modo legible, los avisos (p. ej. «⚠️ No se encontraron tags ID3 en …»
 #### Scenario: Los avisos MUST NOT contaminar la salida estándar
 - **WHEN** el CLI emite un aviso o un error
 - **THEN** ningún aviso MUST aparecer en la salida estándar y el mensaje MUST quedar confinado a stderr
+
+#### Scenario: stdout libre de contaminación del modo legible
+- **WHEN** se ejecuta `id3cli completions bash`
+- **THEN** el stdout contiene ÚNICAMENTE el script (sin «no se encontraron metadatos», sin ⚠️ ni otros emojis) y el stderr está vacío
+
+#### Scenario: Shell no soportado
+- **WHEN** se ejecuta `id3cli completions powershell`
+- **THEN** el proceso termina con exit ≠ 0, el stderr menciona `bash`, `zsh` y `fish`, y el stdout está vacío
+
+### Requirement: La superficie del CLI MUST incluir `completions` sin tocar `show`/`edit`/`remove`
+
+La adición del subcomando `completions` MUST ser estrictamente aditiva: el CLI SHALL exponer `id3cli completions <SHELL>` junto a `show`, `edit` y `remove`, y las salidas legible y JSON de `show`, así como los avisos, errores y degradaciones de `edit`/`remove`, MUST mantener su contrato sin cambios.
+
+#### Scenario: Completions convive con los subcomandos existentes
+- **GIVEN** un id3cli compilado con el change
+- **WHEN** se ejecuta `id3cli show <MP3 con tags>` sin `--json`
+- **THEN** la salida es byte a byte la misma que antes del change (sin regresión)
