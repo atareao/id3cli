@@ -26,7 +26,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Build debug binary: `cargo build`
   - Run locally with subcommands: `cargo run -- edit song.mp3 --title "X" --artist "Y"`
   - Build optimized release: `cargo build --release`
-  - Run all tests: `cargo test` (292 = 164 unit + 128 integration); use `--no-fail-fast` if more than one suite fails, since `cargo test` stops at the first failing binary
+  - Run all tests: `cargo test` (306 = 169 unit + 137 integration); use `--no-fail-fast` if more than one suite fails, since `cargo test` stops at the first failing binary
   - Run only unit tests: `cargo test --lib`
   - Run only integration tests: `cargo test --test '*'`
   - Format: `cargo fmt`
@@ -78,7 +78,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
 
 - **What an AI helper should do first:**
   1. Run `cargo build` to ensure the toolchain and dependencies are available
-  2. Run `cargo test` to verify all 292 tests pass (164 unit + 128 integration)
+  2. Run `cargo test` to verify all 306 tests pass (169 unit + 137 integration)
   3. Review **src/lib.rs** for all business logic functions
   4. Review **src/main.rs** for CLI structure and argument handling
   5. Test with: `cargo run -- show /tmp/test.mp3`
@@ -93,7 +93,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Do not change `edition` or bump deps without mentioning compatibility reasons
   - All new features must include tests (both unit and integration)
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing coverage — currently 292 tests (164 unit + 128 integration)
+  - Preserve existing coverage — currently 306 tests (169 unit + 137 integration)
   - When modifying shared functions (`apply_metadata()`, `add_cover_art()`, `add_lyrics()`, `add_url()`, `add_apple_metadata()`), update ALL tests that call them
   - Use the `"; "` separator for multiple artists
   - Supported image formats: JPG, PNG, WEBP — validate extensions and return helpful errors

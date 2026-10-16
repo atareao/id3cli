@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`), **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg) y **FLAC** (comentarios Vorbis, `fLaC` nativo).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-292%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-306%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -84,6 +84,8 @@ cargo install id3cli
 ```bash
 # Mostrar todos los tags del archivo
 id3cli show <FILE>
+# Mostrar todos los tags del archivo en JSON (una línea, para scripts y jq)
+id3cli show <FILE> --json
 
 # Editar tags del archivo
 id3cli edit <FILE> [OPTIONS]
@@ -106,6 +108,17 @@ id3cli remove <FILE> [TAGS...]
 **Tags disponibles:** `title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`
 
 También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`, `género`, `pista`, `temporada`, `fecha`, `compositor`, `subtítulo`, `carátula`, `letra`, `compilación`, etc.
+
+### Opciones para el comando show
+
+| Opción     | Descripción                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `<FILE>`   | Ruta del archivo de audio MP3, MP4, OGG, Opus o FLAC (argumento posicional, requerido)                        |
+| `-j, --json` | Emite los metadatos como **un único objeto JSON compacto en una línea** con salto de línea final, adecuado para `jq` y scripts |
+
+**Contrato del JSON** (claves estables): el objeto tiene la forma `{ "formato": "...", "tags": {...} }`. `formato` es el códec real detectado por contenido —`mp3`, `mp4`, `ogg`, `opus` o `flac`— y en el contenedor Ogg se distingue `ogg` (Vorbis) de `opus` (OpusHead). `tags` es un objeto con **todas** las claves siempre presentes (`null` si el campo está ausente): `title`, `artists`, `album`, `year`, `date`, `genre`, `track`, `season`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `url`, `lyrics`, `compilation`, `album_sort`, `artist_sort`, `title_sort`, `pictures`. `artists` y `pictures` son siempre arrays (nunca `null`); `compilation` es siempre booleana; `track` y `season` son objetos `{ "number": N, "total": N|null }` o `null`; `year` es número o `null`; `lyrics` es el texto completo sin recorte; cada `pictures[i]` es `{ "type": "...", "mime": "...|null", "size_bytes": N }`.
+
+**Sin tags:** si el contenedor no tiene tag (MP3 sin ID3v2, MP4 sin `ilst`), `tags` vale `null` con exit 0 y **stderr vacío** (el aviso ⚠️ del modo legible queda suprimido: el consumidor es una máquina). En OGG/Opus/FLAC el comentario de Vorbis siempre existe, así que un comentario vacío se emite como objeto `tags` con todas las claves `null`/vacías. Los errores (formato no soportado, archivo inexistente) siguen yendo por stderr en español con exit ≠ 0 y **nada** en stdout. El cierre de pipe por el consumidor termina con exit 0 sin pánico, igual que el modo legible.
 
 ### Opciones para el comando edit
 
@@ -142,6 +155,8 @@ La salida normal del CLI se escribe por **stdout** y los avisos y los errores po
 - **Fallo real de escritura = error.** Si la escritura falla por otra causa (por ejemplo un destino sin espacio), el CLI avisa **en español por stderr** y termina con un código de salida **distinto de cero**.
 
 > [!note] Un pipe cerrado no es un error, es un final normal de la salida. Solo los fallos reales de escritura se tratan como error, y los avisos y los errores siguen saliendo por stderr en ambos casos.
+
+En el modo `show --json` la salida es exclusivamente el objeto JSON: los avisos informativos del modo legible (p. ej. «no se encontraron metadatos») se suprimen para no contaminar el stdout, y el stderr queda vacío salvo errores reales (que terminan con exit ≠ 0). La ausencia de bytes ANSI y de texto fuera del objeto JSON es parte del contrato.
 
 ## Ejemplos de uso
 
@@ -764,12 +779,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **292 tests** (164 unitarios + 128 de integración):
+El proyecto tiene **cobertura completa** con **306 tests** (169 unitarios + 137 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (292)
-cargo test --lib        # Solo tests unitarios (164)
-cargo test --test '*'   # Solo tests de integración (128)
+cargo test              # Ejecutar todos los tests (306)
+cargo test --lib        # Solo tests unitarios (169)
+cargo test --test '*'   # Solo tests de integración (137)
 ```
 
 **Ejemplos de tests:**
@@ -799,10 +814,11 @@ cargo test --test '*'   # Solo tests de integración (128)
 
 Además de la suite de Rust, el repositorio incluye un tooling de **verificación e2e local** (`scripts/e2e/`) que ejercita el binario real de extremo a extremo: escribe y relee los **20 tags** de `VALID_TAG_NAMES` y las carátulas **JPG y PNG** sobre los **cinco formatos soportados** (MP3, MP4/M4A, OGG, Opus y FLAC). Es una verificación de regresión de lectura/escritura del flujo completo `edit → show → remove`, contrastada con un **lector independiente**; está pensada para no sobrecargar el repositorio, así que **todo el material se genera al vuelo y nada se versiona**.
 
-**Qué verifica** (dos capas por formato):
+**Qué verifica** (tres capas por formato):
 
 - **Capa 1 — `id3cli show`:** cada uno de los 20 tags de `VALID_TAG_NAMES` (`title`, `artist`, `album`, `year`, `genre`, `track`, `season`, `date`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `cover`, `lyrics`, `url`, `compilation`, `album_sort`, `artist_sort`, `title_sort`) se escribe con `edit` y se relee con `show` campo a campo.
 - **Capa 2 — `ffprobe` como lector independiente:** la metadata se consulta con `ffprobe` (`format_tags` en MP3/MP4, `stream_tags` en OGG/Opus); en OGG/Opus se comprueba además en los **bytes crudos** del comentario Vorbis (incluido el *vendor* preservado tras `remove --all`).
+- **Capa 3 — `id3cli show --json` con `jq` como parser independiente:** el runner ejecuta el modo JSON y valida el documento con `jq` (oráculo independiente, como `ffprobe`): JSON válido y sin bytes ANSI, `.formato` igual al códec real del formato (`mp3`, `m4a`→`mp4`, `ogg`, `opus`, `flac`), una muestra de campos por ruta jq (p. ej. `.tags.track.number`), el caso `tags: null` en MP3/MP4 sin tags con stderr vacío, y la falsabilidad de una aserción JSON (corromper el formato esperado → exit 1).
 - **Cobertura por formato:** MP3 verifica los **20/20** tags; MP4, OGG, Opus y FLAC verifican los 18 relevantes y comprueban que `url` y `original_artist` **se omiten con aviso** (stderr) y no aparecen en `ffprobe`. En FLAC, además, `remove --all` elimina el bloque VORBIS_COMMENT completo y el vendor **no** se conserva (a diferencia de OGG/Opus, donde el vendor es obligatorio; degradación documentada en la sección de degradaciones).
 - **Carátulas:** `cover.jpg` y `cover.png` (generadas con `testsrc`) se añaden **cada una sobre audio recién generado** y se comparan **byte a byte** contra la extracción de `ffmpeg` (`-map 0:v:0 -c copy`), es decir, *roundtrip* de bytes.
 - **Borrado:** `remove` de un campo con el resto intacto y `remove --all` (en MP3 el bloque ID3v2 **desaparece físicamente** del archivo; en OGG/Opus el comentario Vorbis se **vacía preservando el vendor**), con el audio final **reproducible** (duración conservada).
@@ -836,7 +852,7 @@ scripts/e2e/e2e_m4a.sh --keep
 
 **Localidad:** todo el material (audio de silencio `anullsrc` y carátulas `testsrc`) se genera bajo `/tmp/opencode/e2e/<ext>/` dentro del directorio temporal de la ejecución (`mktemp -d`) y se elimina con un `trap` al terminar; con `--keep` el temporal se conserva y el script indica dónde queda. El repositorio queda sin binarios ni imágenes generados.
 
-**Requisitos:** `ffmpeg` y `ffprobe` en el `PATH` (y `cargo` para el build por defecto). Si falta alguna, el script falla con exit 1 y un mensaje en español indicando la herramienta ausente.
+**Requisitos:** `ffmpeg`, `ffprobe` y `jq` en el `PATH` (y `cargo` para el build por defecto). Si falta alguna, el script falla con exit 1 y un mensaje en español indicando la herramienta ausente.
 
 **Códigos de salida:** `0` = todas las aserciones pasan; `1` = fallo de alguna aserción, con un mensaje en español que identifica el **nombre de la aserción fallida** y el valor esperado frente al obtenido.
 
@@ -870,6 +886,7 @@ Desarrollado con 🦀 Rust
 - [x] Metadatos para podcasts (composer, subtitle, original artist, album artist)
 - [x] Temporada (season/TPOS) para organizar podcasts por temporadas
 - [x] Arquitectura modular (lib.rs separado del CLI)
+- [x] Salida JSON de `show` (`--json`, para scripts y consumidores tipo máquina)
 - [ ] Modo batch para procesar múltiples archivos
 - [ ] Binarios para Windows y macOS
 - [x] Soporte para MP4 / M4A (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`)
