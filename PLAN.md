@@ -2,7 +2,7 @@
 
 ## Estado y regla de oro
 
-> **✅ TODAS LAS FASES COMPLETADAS (2026-10-16): FASES 0-4 y FASE 5 CERRADAS. Releases v0.7.0 (FLAC), v0.8.0 (JSON) y v0.9.0 (completions bash/zsh/fish) publicadas en crates.io y GitHub Releases. Changes OpenSpec `json-output` y `shell-completions` archivados (2026-10-16). Plan director ejecutado en su totalidad.**
+> **ESTADO (2026-10-16): FASES 0-5 COMPLETADAS — releases v0.7.0 (FLAC), v0.8.0 (JSON) y v0.9.0 (completions) publicadas. Fase 6 EN EJECUCIÓN: feature modo batch (`<FILE>...` en show/edit/remove; change OpenSpec `batch-processing` propuesto, en STOP a la espera de la aprobación del usuario para tocar `src/`). Release resultante prevista: v0.10.0 (minor por `feat:`).**
 
 Este plan consolida, en orden de ejecución:
 
@@ -133,6 +133,29 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 6. REFACTOR docs: README (sección completions con instalación en `.bashrc`/`.zshrc`/`config.fish`, recuentos medidos del escudo/desglose, roadmap), AGENTS.md, copilot-instructions; test documental verde.
 7. Verificación y cierre: barrido completo (cargo test/fmt/clippy, `bash -n scripts/e2e/*.sh`, `just e2e`, `openspec validate --specs`), no-rotura de show/edit/remove, archive del change, PR a `development`, release única **v0.9.0**.
 
+## Fase 6 — Feature: modo batch — procesar múltiples archivos (DESPUÉS de v0.9.0)
+
+> **ESTADO (2026-10-16): EN EJECUCIÓN — Fase de planificación.** Change OpenSpec `batch-processing` propuesto (proposal + design + tasks + deltas de spec: NEW `batch-processing`; MODIFIED `cli-output`, `e2e-tooling`, `e2e-verification`), en **STOP** a la espera de la aprobación del usuario. La release resultante será **v0.10.0** (minor por `feat:`), publicada con la cadena probada en v0.7.0-v0.9.0.
+
+### 6.1 — Diseño (resumen para el checkpoint)
+
+- Los subcomandos `show`, `edit` y `remove` pasan de `FILE` único a **`<FILE>...` (1..n)**: `Vec<PathBuf>` con `num_args = 1..` + `required = true` en clap. La misma operación se aplica a todos los archivos en el orden dado. **No-rotura estricta con N=1**: comportamiento byte a byte idéntico al binario v0.9.x (verificado contra el binario de referencia `0bed51f` guardado en `/tmp/opencode/v091_ref/`).
+- **`show` legible con N>1**: cada bloque se antecede de una cabecera `=== <ruta> ===` (con N=1 no hay cabecera, salida actual intacta). **`show --json` con N>1**: **NDJSON** — una línea JSON por archivo en el orden dado (con N=1, la línea única actual intacta; consumible con `jq -s`).
+- **Exit agregado del batch**: 0 solo si TODOS los archivos se procesan con éxito; si alguno falla (archivo inexistente, formato no soportado, error de escritura), los demás SE PROCESAN igual y al final el CLI informa los fallos por stderr y termina con exit ≠ 0. Los avisos (sin tags, degradaciones MP4/OGG) conservan su contrato por archivo y NO cuentan como fallo.
+- **Completions**: el script generado refleja automáticamente `<FILE>...` (clap_complete regenera sobre el Command real); sin cambios en esa capa.
+- Formato mixto soportado: `edit --title X a.mp3 b.m4a c.ogg` despacha cada archivo a su backend (avisos de degradación por archivo cuando procedan).
+- Sin archivos → error de clap (exit 2) con el mensaje estándar de argumento requerido.
+
+### 6.2 — Grupos de tareas (tasks.md del change, TDD estricto)
+
+1. Artefactos de especificación + **STOP de aprobación del usuario** (nada de `src/` ni `tests/` antes).
+2. RED unitarios (`src/tests.rs`): cabecera de bloque legible (`=== <ruta> ===` solo con N>1), NDJSON (una línea por archivo, orden preservado), y despacho de la operación por archivo con acumulación de fallos (funciones nuevas en lib.rs aún inexistentes → E0425; el resto de la suite unitaria pasa).
+3. RED integración (`tests/integration_test.rs`): `show f1 f2` (cabeceras + ambos bloques, rc 0), `show --json f1 f2` (2 líneas JSON válidas con jq -s), `edit --title X f1 f2` (ambos editados, verificado releyendo con `id3`), `edit` con un archivo inexistente entre dos buenos (rc ≠ 0, los buenos SÍ editados, stderr menciona el fallo), `remove --all f1 f2`, formato mixto `edit` MP3+M4A, y `show` sin archivos (rc 2).
+4. GREEN: `files: Vec<PathBuf>` en las tres variantes de `Command` (main.rs), funciones de batch en lib.rs reutilizando la lógica por archivo existente (despacho por `detect_supported_format`), cabeceras y NDJSON, exit agregado; suite completa verde.
+5. GREEN e2e: `scripts/e2e/e2e_batch.sh` (2-3 audios generados por extensión: edit batch verificado con show/ffprobe, NDJSON con `jq -s` contando líneas, archivo inexistente → rc ≠ 0 con el resto editado, falsabilidad corrompiendo una aserción → exit 1) + recipe `just e2e` ampliada (5 formatos + completions + batch) y recipe `e2e-batch`; recuentos medidos.
+6. REFACTOR docs: README (sección modo batch: `<FILE>...`, NDJSON, exit agregado, ejemplos; recuentos medidos del escudo/desglose; roadmap), AGENTS.md, copilot-instructions; test documental verde.
+7. Verificación y cierre: barrido completo (cargo test/fmt/clippy, `bash -n scripts/e2e/*.sh`, `just e2e`, `openspec validate --specs`), no-rotura N=1 byte a byte contra el binario de referencia, archive del change, PR a `development`, release única **v0.10.0**.
+
 ## Riesgos / notas
 
 - `--year`/`--date` en FLAC: mismo comportamiento Vorbis (claves separadas YEAR/DATE en el comentario; el e2e debe medir cómo los expone ffprobe — stream_tags, caja original, igual que OGG).
@@ -150,4 +173,5 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - [x] **Fase 3:** `show --json` implementado (change `json-output` archivado), serde+serde_json con lock commiteado, 306 tests (169 unit + 137 int), e2e JSON por formato con jq (479 aserciones), PR #29 fusionado.
 - [x] **Fase 4:** suite completa verde (306 tests, fmt, clippy 0, bash -n, openspec 14 items, e2e 479 aserciones), change `json-output` archivado, README/AGENTS/copilot al día, release **v0.8.0 única** publicada (PR #30, tag `v0.8.0`, GitHub Release + crates.io `max_version: 0.8.0`), `development` sincronizado con `main`.
 - [x] **Fase 5:** completions para bash/zsh/fish (change `shell-completions` archivado), suite 318 (174+144), e2e 499 aserciones con `bash -n` como oráculo y falsabilidad, PR #31 fusionado, release única v0.9.0 publicada.
+- [ ] **Fase 6:** modo batch (`<FILE>...` en show/edit/remove; change `batch-processing`), suite con recuentos medidos, e2e (5 formatos + completions + batch), no-rotura N=1 byte a byte, archive, PR y release única v0.10.0.
 - [ ] Ninguna de las fases 1-3 se toca sin aprobación explícita del usuario (este plan está **GUARDADO**, no en ejecución).
