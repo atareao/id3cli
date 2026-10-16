@@ -36,11 +36,11 @@ fn report_error(error: Box<dyn Error>) -> ! {
     std::process::exit(1);
 }
 
-/// CLI para añadir metadatos y carátulas a archivos MP3, MP4, OGG y Opus
+/// CLI para añadir metadatos y carátulas a archivos MP3, MP4, OGG, Opus y FLAC
 #[derive(Parser, Debug)]
 #[command(name = "id3cli")]
 #[command(
-    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4), MP4 (átomos iTunes) y OGG (comentarios Vorbis; Vorbis y Opus)",
+    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4), MP4 (átomos iTunes), OGG (comentarios Vorbis; Vorbis y Opus) y FLAC (comentarios Vorbis)",
     long_about = None
 )]
 struct Args {
@@ -51,14 +51,14 @@ struct Args {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 enum Command {
-    /// Mostrar todos los metadatos del archivo MP3, MP4, OGG y Opus
+    /// Mostrar todos los metadatos del archivo MP3, MP4, OGG, Opus y FLAC
     Show {
-        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
+        /// Ruta del archivo de audio (MP3, MP4, OGG, Opus y FLAC)
         file: PathBuf,
     },
-    /// Editar metadatos del archivo MP3, MP4, OGG y Opus
+    /// Editar metadatos del archivo MP3, MP4, OGG, Opus y FLAC
     Edit {
-        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
+        /// Ruta del archivo de audio (MP3, MP4, OGG, Opus y FLAC)
         file: PathBuf,
 
         /// Título de la canción
@@ -141,9 +141,9 @@ enum Command {
         #[arg(long)]
         title_sort: Option<String>,
     },
-    /// Eliminar tags específicos del archivo MP3, MP4, OGG y Opus
+    /// Eliminar tags específicos del archivo MP3, MP4, OGG, Opus y FLAC
     Remove {
-        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
+        /// Ruta del archivo de audio (MP3, MP4, OGG, Opus y FLAC)
         file: PathBuf,
 
         // Tags a eliminar. La lista se deriva de `id3cli::VALID_TAG_NAMES`, la
@@ -153,7 +153,7 @@ enum Command {
         #[arg(help = format!("Tags a eliminar, en inglés o en español ({VALID_TAG_NAMES})"))]
         tags: Vec<String>,
 
-        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4 y el bloque de comentarios Vorbis en OGG, preservando el vendor)
+        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4, el bloque de comentarios Vorbis en OGG y Opus preservando el vendor, y el mismo bloque en FLAC eliminado por completo, sin conservar el vendor — degradación documentada)
         #[arg(short, long)]
         all: bool,
     },
@@ -161,9 +161,11 @@ enum Command {
 
 /// Backend con el que se procesa un archivo ya aceptado.
 ///
-/// El enrutado es la única pieza que decide entre el camino MP3, el MP4 y el
-/// OGG; los subcomandos nunca vuelven a consultar el formato. Un único backend
-/// OGG sirve a los dos códecs del contenedor: Vorbis y Opus.
+/// El enrutado es la única pieza que decide entre el camino MP3, el MP4, el OGG
+/// y el FLAC; los subcomandos nunca vuelven a consultar el formato. Un único
+/// backend OGG sirve a los dos códecs del contenedor: Vorbis y Opus. FLAC nativo
+/// tiene su propio backend aunque reutilice las mismas funciones de comentarios
+/// de Vorbis: el nombre del contenedor no debe colarse en los mensajes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
     /// MP3: se usa el backend ID3v2.
@@ -172,13 +174,15 @@ enum Backend {
     Mp4,
     /// OGG (Vorbis u Opus): se usa el backend de comentarios de Vorbis.
     Ogg,
+    /// FLAC nativo: se usa el backend de comentarios de Vorbis, igual que OGG.
+    Flac,
 }
 
 /// Comprueba que el archivo existe y que su formato (por contenido) está
 /// soportado, y devuelve el backend con el que hay que procesarlo.
 ///
 /// La decisión se toma sobre los *magic bytes* del archivo, nunca sobre la
-/// extensión del nombre. Ante un formato no soportado (Speex, FLAC, WAV, …) o
+/// extensión del nombre. Ante un formato no soportado (Speex, WAV, …) o
 /// contenido no reconocible se escribe un mensaje en español en stderr, se sale
 /// con código distinto de cero y **no se escribe ni un byte del archivo**.
 ///
@@ -194,10 +198,11 @@ fn detect_supported_format(file: &Path) -> Backend {
         Ok(AudioFormat::Mp4) => Backend::Mp4,
         Ok(AudioFormat::OggVorbis) => Backend::Ogg,
         Ok(AudioFormat::OggOpus) => Backend::Ogg,
+        Ok(AudioFormat::Flac) => Backend::Flac,
         Ok(AudioFormat::Unsupported) => {
             eprintln!(
                 "Error: El archivo '{}' está en un formato de audio no soportado. \
-                 Formatos soportados: MP3, MP4, OGG y Opus.",
+                 Formatos soportados: MP3, MP4, OGG, Opus y FLAC.",
                 file.display()
             );
             std::process::exit(1);
@@ -205,7 +210,7 @@ fn detect_supported_format(file: &Path) -> Backend {
         Ok(AudioFormat::Unknown) => {
             eprintln!(
                 "Error: No se pudo determinar el formato del archivo '{}'. \
-                 Formatos soportados: MP3, MP4, OGG y Opus.",
+                 Formatos soportados: MP3, MP4, OGG, Opus y FLAC.",
                 file.display()
             );
             std::process::exit(1);
@@ -223,9 +228,9 @@ fn detect_supported_format(file: &Path) -> Backend {
 
 /// Informa de un fallo al procesar un contenedor MP4 y termina con código 1.
 ///
-/// El mensaje enumera los formatos soportados (MP3, MP4, OGG y Opus) además de
-/// la causa, de modo que un archivo con cabecera MP4 pero estructura inválida se
-/// rechaza con un error legible y sin haberlo modificado.
+/// El mensaje enumera los formatos soportados (MP3, MP4, OGG, Opus y FLAC)
+/// además de la causa, de modo que un archivo con cabecera MP4 pero estructura
+/// inválida se rechaza con un error legible y sin haberlo modificado.
 fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     eprintln!(
         "Error: No se pudo procesar el archivo MP4 '{}': {}",
@@ -234,28 +239,70 @@ fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     );
     eprintln!(
         "  El archivo tiene formato MP4/M4A pero no se pudo interpretar. \
-         Formatos soportados: MP3, MP4, OGG y Opus."
+         Formatos soportados: MP3, MP4, OGG, Opus y FLAC."
     );
     std::process::exit(1);
 }
 
-/// Informa de un fallo al procesar un contenedor Ogg (Vorbis u Opus) y termina
-/// con código 1.
+/// Informa de un fallo al procesar un archivo del backend de comentarios de
+/// Vorbis (Ogg Vorbis, Opus o FLAC nativo) y termina con código 1.
 ///
-/// El mensaje enumera los formatos soportados (MP3, MP4, OGG y Opus) además de
-/// la causa, de modo que un archivo con página Ogg y códec Vorbis u Opus pero
-/// estructura inválida se rechaza con un error legible y sin haberlo modificado.
-fn report_ogg_error(file: &Path, error: impl std::fmt::Display) -> ! {
+/// El mensaje enumera los formatos soportados además de la causa, de modo que un
+/// archivo reconocible por contenido pero con estructura inválida (página Ogg
+/// malformada, FLAC ilegible…) se rechaza con un error legible y sin haberlo
+/// modificado. Es el mismo helper para OGG y para FLAC porque ambos comparten el
+/// backend de comentarios de Vorbis.
+fn report_vorbis_error(file: &Path, error: impl std::fmt::Display) -> ! {
     eprintln!(
-        "Error: No se pudo procesar el archivo OGG '{}': {}",
+        "Error: No se pudo procesar el archivo '{}': {}",
         file.display(),
         error
     );
     eprintln!(
-        "  El archivo tiene formato Ogg Vorbis u Opus pero no se pudo interpretar. \
-         Formatos soportados: MP3, MP4, OGG y Opus."
+        "  El archivo tiene un comentario de Vorbis (Ogg Vorbis, Opus o FLAC nativo) \
+         pero no se pudo interpretar. Formatos soportados: MP3, MP4, OGG, Opus y FLAC."
     );
     std::process::exit(1);
+}
+
+/// Elimina tags concretos (sin `--all`) del comentario de Vorbis de un archivo
+/// Ogg Vorbis, Opus o FLAC nativo.
+///
+/// Compartida por las ramas `Backend::Ogg` y `Backend::Flac` de `remove`, que
+/// solo se diferencian en el tratamiento de `--all` (el borrado de carátulas a
+/// nivel de archivo en FLAC).
+fn remove_vorbis_tags(file: &Path, tags: &[String]) -> Result<(), Box<dyn Error>> {
+    // Verificar que se especificaron tags para eliminar
+    if tags.is_empty() {
+        eprintln!("Error: Debes especificar al menos un tag para eliminar");
+        eprintln!("Ejemplo: id3cli remove cancion.ogg title artist");
+        std::process::exit(1);
+    }
+
+    // Leer tag. El comentario siempre se materializa (obligatorio en Ogg/Opus;
+    // vacío si el FLAC no tiene bloque `VORBIS_COMMENT`): no hay un `Ok(None)`
+    // que tratar como en MP4.
+    let mut tag = match read_vorbis_tag(file) {
+        Ok(tag) => tag,
+        Err(error) => report_vorbis_error(file, error),
+    };
+
+    // Eliminar tags (misma tabla de alias que en MP3 y MP4)
+    let removed = remove_tags_ogg(&mut tag, tags);
+
+    if removed {
+        if let Err(e) = write_vorbis_tag(file, &tag) {
+            report_vorbis_error(file, e);
+        }
+        outln!(
+            "\n✅ Metadatos eliminados correctamente de '{}'",
+            file.display()
+        );
+    } else {
+        outln!("\n⚠️  No se encontraron tags válidos para eliminar.");
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -288,17 +335,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_tags_mp4(&tag);
             }
             Backend::Ogg => {
-                // El comentario de Vorbis es obligatorio en el contenedor, así
-                // que siempre existe: no hay un `Ok(None)` que tratar como en
-                // MP4. `display_tags_ogg` ignora el vendor y `ENCODER` y, cuando
-                // no hay ningún campo del mapeo, informa de que no se
-                // encontraron metadatos y el proceso termina con código cero.
+                // El comentario de Vorbis siempre se materializa: en Ogg/Opus es
+                // obligatorio en el contenedor. No hay un `Ok(None)` que tratar
+                // como en MP4. `display_tags_ogg` ignora el vendor y `ENCODER` y,
+                // cuando no hay ningún campo del mapeo, informa de que no se
+                // encontraron metadatos y el proceso termina con código cero. En
+                // Ogg/Opus las carátulas viven dentro del propio comentario, así
+                // que el tag basta para mostrarlas.
                 let tag = match read_vorbis_tag(file) {
                     Ok(tag) => tag,
-                    Err(error) => report_ogg_error(file, error),
+                    Err(error) => report_vorbis_error(file, error),
                 };
 
                 display_tags_ogg(&tag);
+            }
+            Backend::Flac => {
+                // Como en Ogg, el comentario se materializa siempre (vacío si el
+                // FLAC no tiene bloque `VORBIS_COMMENT`). Pero las carátulas de
+                // un FLAC viven en bloques `PICTURE` del archivo, no en el
+                // comentario: `read_flac_pictures` las lee aparte y
+                // `display_tags_flac` las muestra con el mismo formato que
+                // `display_tags_ogg` usa para las imágenes.
+                let tag = match read_vorbis_tag(file) {
+                    Ok(tag) => tag,
+                    Err(error) => report_vorbis_error(file, error),
+                };
+                let pictures = match read_flac_pictures(file) {
+                    Ok(pictures) => pictures,
+                    Err(error) => report_vorbis_error(file, error),
+                };
+
+                display_tags_flac(&pictures, &tag);
             }
         },
         Command::Edit {
@@ -596,7 +663,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     outln!("\n⚠️  No se especificaron cambios. Usa --help para ver las opciones.");
                 }
             }
-            Backend::Ogg => {
+            Backend::Ogg | Backend::Flac => {
                 // La carátula se valida ANTES de escribir nada: si la ruta no
                 // existe o la extensión no está soportada, se sale con error sin
                 // haber tocado el archivo (mismo contrato que en MP3 y MP4).
@@ -651,12 +718,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let report = match edit_ogg(file, &ogg_options) {
                     Ok(report) => report,
-                    Err(error) => report_ogg_error(file, error),
+                    Err(error) => report_vorbis_error(file, error),
                 };
 
                 // Confirmaciones. `--url` y `--original-artist` no tienen clave
-                // en OGG: `edit_ogg` ya avisa por stderr de su omisión, así que
-                // aquí no se confirman.
+                // en el comentario Vorbis: `edit_ogg` ya avisa por stderr de su
+                // omisión, así que aquí no se confirman.
                 if let Some(title) = title {
                     outln!("✓ Título: {}", title);
                 }
@@ -829,40 +896,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(false) => {
                             outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
                         }
-                        Err(error) => report_ogg_error(file, error),
+                        Err(error) => report_vorbis_error(file, error),
                     }
                     return Ok(());
                 }
 
-                // Verificar que se especificaron tags para eliminar
-                if tags.is_empty() {
-                    eprintln!("Error: Debes especificar al menos un tag para eliminar");
-                    eprintln!("Ejemplo: id3cli remove cancion.ogg title artist");
-                    std::process::exit(1);
-                }
-
-                // Leer tag. El comentario de Vorbis es obligatorio en el
-                // contenedor, así que siempre existe: no hay un `Ok(None)` que
-                // tratar como en MP4.
-                let mut tag = match read_vorbis_tag(file) {
-                    Ok(tag) => tag,
-                    Err(error) => report_ogg_error(file, error),
-                };
-
-                // Eliminar tags (misma tabla de alias que en MP3 y MP4)
-                let removed = remove_tags_ogg(&mut tag, tags);
-
-                if removed {
-                    if let Err(e) = write_vorbis_tag(file, &tag) {
-                        report_ogg_error(file, e);
+                remove_vorbis_tags(file, tags)?;
+            }
+            Backend::Flac => {
+                // Eliminar por completo el bloque VORBIS_COMMENT y los bloques
+                // PICTURE. A diferencia de Ogg/Opus (donde el comentario es
+                // obligatorio y se vacía conservando el vendor), en FLAC lofty no
+                // escribe un bloque de comentario vacío y el vendor se pierde:
+                // degradación documentada del spec `flac-tagging`. `remove_all_flac`
+                // cuenta también las carátulas de los bloques PICTURE del archivo
+                // para decidir si había metadatos.
+                if *all {
+                    match remove_all_flac(file) {
+                        Ok(true) => {
+                            outln!("✅ Metadatos eliminados de '{}'", file.display());
+                        }
+                        Ok(false) => {
+                            outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
+                        }
+                        Err(error) => report_vorbis_error(file, error),
                     }
-                    outln!(
-                        "\n✅ Metadatos eliminados correctamente de '{}'",
-                        file.display()
-                    );
-                } else {
-                    outln!("\n⚠️  No se encontraron tags válidos para eliminar.");
+                    return Ok(());
                 }
+
+                remove_vorbis_tags(file, tags)?;
             }
         },
     }

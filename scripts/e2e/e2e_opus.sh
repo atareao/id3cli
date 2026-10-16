@@ -104,9 +104,11 @@ main() {
         --artist-sort "$E2E_V_ARTIST_SORT" \
         --title-sort "$E2E_V_TITLE_SORT"
     check_rc 0
-    # Avisos de la degradación del contenedor Ogg (medidos en el spec):
-    check_stderr_aviso "El campo '--url' no tiene clave equivalente en OGG; se omite."
-    check_stderr_aviso "El campo '--original-artist' no tiene clave equivalente en OGG; se omite."
+    # Avisos de la degradación del contenedor Ogg (medidos en el spec): literal
+    # generalizado en el change flac-support (tarea 5.3) a «los comentarios de
+    # Vorbis».
+    check_stderr_aviso "El campo '--url' no tiene clave equivalente en los comentarios de Vorbis; se omite."
+    check_stderr_aviso "El campo '--original-artist' no tiene clave equivalente en los comentarios de Vorbis; se omite."
 
     # 3) show campo a campo: los 18 tags escritos (Año y Fecha separados),
     #    sin url/original_artist.

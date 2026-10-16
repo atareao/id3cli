@@ -1336,7 +1336,11 @@ fn test_detect_format_too_short() {
 
 #[test]
 fn test_detect_format_unsupported_magic_bytes() {
-    let magics: [&[u8]; 5] = [b"fLaC", b"RIFF", b"FORM", b"MAC ", b"wvpk"];
+    // FLAC ya no figura aquí: desde el change `flac-support` se reconoce por
+    // contenido (`fLaC` en el offset 0) como formato soportado y se cubre en
+    // `test_detect_format_flac`. Quedan los magics de formatos reconocibles
+    // pero fuera de alcance.
+    let magics: [&[u8]; 4] = [b"RIFF", b"FORM", b"MAC ", b"wvpk"];
     for magic in magics {
         let mut header = magic.to_vec();
         header.extend_from_slice(&[0u8; 8]);
@@ -1347,6 +1351,31 @@ fn test_detect_format_unsupported_magic_bytes() {
             String::from_utf8_lossy(magic)
         );
     }
+}
+
+#[test]
+fn test_detect_format_flac() {
+    // `fLaC` en el offset 0 es el patrón del FLAC nativo (fuera de Ogg). El
+    // resto del bloque inspeccionado es irrelevante para el reconocimiento.
+    let mut header = b"fLaC".to_vec();
+    header.extend_from_slice(&[0u8; 8]);
+    assert_eq!(
+        detect_format_from_bytes(&header),
+        AudioFormat::Flac,
+        "el patrón `fLaC` debe reconocerse como FLAC nativo"
+    );
+
+    // `detect_format_from_bytes` decide por contenido, nunca por la extensión,
+    // y el reconocimiento de `fLaC` va ANTES que la tabla de magics no
+    // soportados y que la sonda de cabecera MPEG: una cabecera de frame MP3
+    // detrás del patrón debe seguir dando FLAC.
+    let mut header = b"fLaC".to_vec();
+    header.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
+    assert_eq!(
+        detect_format_from_bytes(&header),
+        AudioFormat::Flac,
+        "`fLaC` precede a cualquier otro reconocimiento por contenido"
+    );
 }
 
 #[test]
@@ -4651,15 +4680,15 @@ fn test_documentacion_describe_los_formatos_soportados() {
     let mut fallos: Vec<String> = Vec::new();
 
     // (1) Los formatos soportados en `## Formatos admitidos`: la sección
-    //     nombra MP3, MP4, OGG y Opus; ninguna línea de «No soportado» menciona
-    //     OGG ni Opus; y esas líneas siguen listando Speex, FLAC, WAV, AIFF y
-    //     APE.
+    //     nombra MP3, MP4, OGG, Opus y FLAC; ninguna línea de «No soportado»
+    //     menciona OGG, Opus ni FLAC; y esas líneas siguen listando Speex,
+    //     WAV, AIFF y APE.
     match seccion_markdown(readme, "contenga «Formatos admitidos»", |h| {
         h.contains("Formatos admitidos")
     }) {
         Err(error) => fallos.push(format!("[1] {error}")),
         Ok(seccion) => {
-            for formato in ["MP3", "MP4", "OGG", "Opus"] {
+            for formato in ["MP3", "MP4", "OGG", "Opus", "FLAC"] {
                 if !seccion.contains(formato) {
                     fallos.push(format!(
                         "[1] la sección «Formatos admitidos» no nombra {formato}"
@@ -4682,9 +4711,14 @@ fn test_documentacion_describe_los_formatos_soportados() {
                         "[1] una línea de «No soportado» sigue tratando OGG como no soportado: {linea}"
                     ));
                 }
+                if linea.contains("FLAC") {
+                    fallos.push(format!(
+                        "[1] una línea de «No soportado» sigue tratando FLAC como no soportado: {linea}"
+                    ));
+                }
             }
             let texto_no_soportados = no_soportados.join("\n");
-            for pendiente in ["Speex", "FLAC", "WAV", "AIFF", "APE"] {
+            for pendiente in ["Speex", "WAV", "AIFF", "APE"] {
                 if !texto_no_soportados.contains(pendiente) {
                     fallos.push(format!(
                         "[1] las líneas de «No soportado» ya no mencionan {pendiente}"
@@ -4694,7 +4728,7 @@ fn test_documentacion_describe_los_formatos_soportados() {
         }
     }
 
-    // (2) Tres secciones de mapeo, una por formato, cada una con al menos una
+    // (2) Cuatro secciones de mapeo, una por formato, cada una con al menos una
     //     fila de tabla que nombra un flag del CLI.
     let secciones_mapeo = [
         (
@@ -4711,6 +4745,12 @@ fn test_documentacion_describe_los_formatos_soportados() {
             "OGG (encabezado con `Mapeo` y `OGG`)",
             seccion_markdown(readme, "contenga «Mapeo» y «OGG»", |h| {
                 h.contains("Mapeo") && h.contains("OGG")
+            }),
+        ),
+        (
+            "FLAC (encabezado con `Mapeo` y `FLAC`)",
+            seccion_markdown(readme, "contenga «Mapeo» y «FLAC»", |h| {
+                h.contains("Mapeo") && h.contains("FLAC")
             }),
         ),
     ];
@@ -4767,8 +4807,7 @@ fn test_documentacion_describe_los_formatos_soportados() {
         );
     }
 
-    // (4) Hoja de ruta: OGG y Opus como soportados y Speex y FLAC como
-    //     pendientes.
+    // (4) Hoja de ruta: OGG, Opus y FLAC como soportados y Speex como pendiente.
     match seccion_markdown(readme, "contenga «Roadmap»", |h| h.contains("Roadmap")) {
         Err(error) => fallos.push(format!("[4] {error}")),
         Ok(seccion) => {
@@ -4792,16 +4831,25 @@ fn test_documentacion_describe_los_formatos_soportados() {
                         .to_string(),
                 );
             }
-            for pendiente in ["Speex", "FLAC"] {
-                let sigue_pendiente = seccion.lines().any(|linea| {
-                    let recortada = linea.trim_start();
-                    recortada.starts_with("- [ ]") && linea_contiene_palabra(recortada, pendiente)
-                });
-                if !sigue_pendiente {
-                    fallos.push(format!(
-                        "[4] la hoja de ruta no mantiene {pendiente} como pendiente (falta una línea `- [ ]` que lo mencione)"
-                    ));
-                }
+            let flac_hecho = seccion.lines().any(|linea| {
+                let recortada = linea.trim_start();
+                recortada.starts_with("- [x]") && linea_contiene_palabra(recortada, "FLAC")
+            });
+            if !flac_hecho {
+                fallos.push(
+                    "[4] la hoja de ruta no marca FLAC como soportado (falta una línea `- [x]` que lo mencione)"
+                        .to_string(),
+                );
+            }
+            let speex_pendiente = seccion.lines().any(|linea| {
+                let recortada = linea.trim_start();
+                recortada.starts_with("- [ ]") && linea_contiene_palabra(recortada, "Speex")
+            });
+            if !speex_pendiente {
+                fallos.push(
+                    "[4] la hoja de ruta no mantiene Speex como pendiente (falta una línea `- [ ]` que lo mencione)"
+                        .to_string(),
+                );
             }
         }
     }
@@ -4848,7 +4896,7 @@ fn test_documentacion_describe_los_formatos_soportados() {
         }
     }
 
-    // (6) Manifiesto: la `description` nombra los tres formatos y las `keywords`
+    // (6) Manifiesto: la `description` nombra los cuatro formatos y las `keywords`
     //     siguen siendo exactamente las cinco de hoy, en el mismo orden.
     match manifiesto
         .lines()
@@ -4856,7 +4904,7 @@ fn test_documentacion_describe_los_formatos_soportados() {
     {
         None => fallos.push("[6] `Cargo.toml` no declara `description`".to_string()),
         Some(linea) => {
-            for formato in ["MP3", "MP4", "OGG"] {
+            for formato in ["MP3", "MP4", "OGG", "FLAC"] {
                 if !linea.contains(formato) {
                     fallos.push(format!(
                         "[6] la `description` de `Cargo.toml` no menciona {formato}: {linea}"
@@ -4880,7 +4928,7 @@ fn test_documentacion_describe_los_formatos_soportados() {
 
     assert!(
         fallos.is_empty(),
-        "La documentación no cumple el contrato de los formatos (MP3, MP4, OGG y Opus) y el total \
+        "La documentación no cumple el contrato de los formatos (MP3, MP4, OGG, Opus y FLAC) y el total \
          de pista/temporada. {} comprobación(es) fallida(s):\n- {}",
         fallos.len(),
         fallos.join("\n- ")

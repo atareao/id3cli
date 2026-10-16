@@ -32,6 +32,7 @@ pub mod output;
 use lofty::TextEncoding;
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::TaggedFileExt;
+use lofty::flac::FlacFile;
 use lofty::id3::v2::{
     Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
@@ -101,9 +102,10 @@ fn year_frame(tag: &Id3v2Tag) -> Option<i32> {
 /// # Asimetría del cero entre contenedores
 ///
 /// El tipo **no prohíbe** el cero, pero los contenedores no lo representan
-/// igual: MP3 (frame de texto) y OGG (comentario Vorbis) escriben `0` tal cual y
-/// lo muestran al releer, mientras que el átomo numérico de MP4 (`trkn`/`disk`)
-/// lo descarta y el backend avisa de la degradación (ver [`Mp4EditOptions`]).
+/// igual: MP3 (frame de texto) y el backend de comentarios Vorbis (OGG y FLAC)
+/// escriben `0` tal cual y lo muestran al releer, mientras que el átomo
+/// numérico de MP4 (`trkn`/`disk`) lo descarta y el backend avisa de la
+/// degradación (ver [`Mp4EditOptions`]).
 ///
 /// [`FromStr`]: std::str::FromStr
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,9 +191,9 @@ impl std::fmt::Display for NumberWithTotal {
 /// Compone el texto de un número con su total para los tres visualizadores.
 ///
 /// Devuelve `7` cuando no hay total y `7/12` cuando lo hay, de modo que MP3,
-/// MP4 y OGG muestren el par igual sin repetir la lógica. El número se acepta
-/// como texto para que la visualización de OGG, que lee una clave de comentario,
-/// no tenga que convertirla.
+/// MP4 y el backend de comentarios Vorbis (OGG y FLAC) muestren el par igual sin
+/// repetir la lógica. El número se acepta como texto para que la visualización
+/// del comentario, que lee una clave, no tenga que convertirla.
 fn format_number_with_total(
     number: impl std::fmt::Display,
     total: Option<impl std::fmt::Display>,
@@ -919,11 +921,13 @@ const FORMAT_PROBE_LEN: usize = 512;
 
 /// Magic bytes de formatos de audio reconocibles pero **fuera de alcance**.
 ///
-/// Ogg **no** figura aquí: el contenedor Ogg se decide por el códec de su primer
-/// paquete en [`detect_format_from_bytes`], no por la cabecera de página, porque
-/// Vorbis y Opus están soportados mientras que Speex, FLAC y Theora no.
+/// El FLAC nativo **no** figura aquí: se reconoce por `fLaC` (offset 0) como
+/// [`AudioFormat::Flac`] en [`detect_format_from_bytes`]. Ogg tampoco figura: el
+/// contenedor Ogg se decide por el códec de su primer paquete, no por la cabecera
+/// de página, porque Vorbis y Opus están soportados mientras que Speex, Theora y
+/// el códec FLAC dentro de Ogg (`\x7fFLAC`) no — este último pasa por la rama
+/// Ogg, no por esta tabla.
 const UNSUPPORTED_MAGIC: &[&[u8]] = &[
-    b"fLaC", // FLAC nativo (fuera de Ogg)
     b"RIFF", // Contenedores RIFF (WAV, AVI, …)
     b"FORM", // AIFF / AIFC
     b"MAC ", // Monkey's Audio (APE)
@@ -948,8 +952,13 @@ pub enum AudioFormat {
     /// (`OggS`, versión `0`) y por el identificador `OpusHead` del primer
     /// paquete. Soportado.
     OggOpus,
-    /// Formato de audio reconocible pero fuera de alcance (FLAC, WAV, AIFF, APE…,
-    /// o un contenedor Ogg con un códec distinto de Vorbis u Opus: Speex, FLAC,
+    /// FLAC nativo (fuera de Ogg), reconocido por el patrón `fLaC` en el offset
+    /// 0. Soportado. Es distinto del códec FLAC dentro de un contenedor Ogg —
+    /// identificador `\x7fFLAC` en el primer paquete—, que es un formato
+    /// reconocible pero fuera de alcance.
+    Flac,
+    /// Formato de audio reconocible pero fuera de alcance (WAV, AIFF, APE…, o un
+    /// contenedor Ogg con un códec distinto de Vorbis u Opus: Speex, FLAC,
     /// Theora…).
     Unsupported,
     /// Contenido no reconocible o archivo demasiado corto para decidirlo.
@@ -958,9 +967,9 @@ pub enum AudioFormat {
 
 /// Detecta el formato de audio de un archivo a partir de su contenido.
 ///
-/// Reconoce MP3, MP4 y los contenedores Ogg con códec Vorbis u Opus (véase
-/// [`detect_format_from_bytes`]). Recibe la ruta únicamente para **leer** sus
-/// primeros bytes: la extensión del nombre no interviene en la decisión. El
+/// Reconoce MP3, MP4, FLAC nativo y los contenedores Ogg con códec Vorbis u Opus
+/// (véase [`detect_format_from_bytes`]). Recibe la ruta únicamente para **leer**
+/// sus primeros bytes: la extensión del nombre no interviene en la decisión. El
 /// archivo se abre solo en modo lectura, de modo que esta función nunca lo
 /// modifica.
 ///
@@ -984,6 +993,9 @@ pub fn detect_format(path: &Path) -> io::Result<AudioFormat> {
 ///
 /// * MP3: cabecera ID3v2 (`ID3`) o cabecera de frame MPEG válida.
 /// * MP4: átomo `ftyp` en el offset 4, con independencia del brand declarado.
+/// * FLAC nativo: patrón `fLaC` en el offset 0. Es distinto del códec FLAC
+///   dentro de un contenedor Ogg (`\x7fFLAC` en el primer paquete), que sigue
+///   siendo un formato reconocible pero fuera de alcance.
 /// * Ogg (Vorbis u Opus): cabecera de página `OggS` completa, de versión `0`,
 ///   cuyo primer paquete empieza por el identificador de códec `\x01vorbis`
 ///   (Vorbis) u `OpusHead` (Opus). La decisión es por **códec**, no por
@@ -1000,6 +1012,16 @@ pub fn detect_format_from_bytes(header: &[u8]) -> AudioFormat {
 
     if header.len() >= 8 && &header[4..8] == b"ftyp" {
         return AudioFormat::Mp4;
+    }
+
+    // FLAC nativo: patrón `fLaC` en el offset 0. Va antes de la sonda MPEG y de
+    // la tabla de magics no soportados: un FLAC siempre es soportado (una
+    // cabecera de frame MP3 detrás del patrón no cambia la decisión) y nunca
+    // debe caer en `Unsupported`. El códec FLAC **dentro** de un contenedor Ogg
+    // (`\x7fFLAC` en el primer paquete) no llega aquí: su página empieza por
+    // `OggS`, así que lo decide la rama Ogg de más abajo.
+    if header.starts_with(b"fLaC") {
+        return AudioFormat::Flac;
     }
 
     if is_valid_mpeg_frame_header(header) {
@@ -1842,9 +1864,10 @@ fn ensure_mp4_meta_hdlr(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 /// Para no reportar un éxito falso, el backend avisa por stderr **y** en el
 /// informe cuando el número o el total no son representables: si falla el
 /// número se omite el **par completo** (no se deja un total huérfano) y, si solo
-/// falla el total, se escribe el número y se omite el total. MP3 y OGG guardan
-/// el par como texto, sin ese límite, y por eso **no** avisan: es una asimetría
-/// legítima entre contenedores.
+/// falla el total, se escribe el número y se omite el total. MP3 y el backend
+/// de comentarios Vorbis (OGG y FLAC) guardan el par como texto, sin ese
+/// límite, y por eso **no** avisan: es una asimetría legítima entre
+/// contenedores.
 ///
 /// # Errores
 ///
@@ -2136,14 +2159,15 @@ pub fn display_tags_mp4(tag: &Tag) {
 }
 
 // ---------------------------------------------------------------------------
-// Backend OGG Vorbis (comentarios de Vorbis: pares `CLAVE=valor`)
+// Backend de comentarios Vorbis (pares `CLAVE=valor`): OGG Vorbis, Opus y FLAC
 // ---------------------------------------------------------------------------
 
 /// Asignación de un flag del subcomando `edit` a la clave del comentario de
-/// Vorbis (`VorbisComments`) que le corresponde en un archivo Ogg Vorbis.
+/// Vorbis (`VorbisComments`) que le corresponde en un archivo del backend de
+/// comentarios Vorbis (Ogg Vorbis, Opus o FLAC nativo).
 ///
 /// Esta estructura y la tabla [`VORBIS_COMMENT_MAP`] son la **única fuente** del
-/// mapeo flag → clave del backend OGG: tanto la escritura
+/// mapeo flag → clave del backend de comentarios Vorbis: tanto la escritura
 /// ([`apply_metadata_ogg`]) como la visualización ([`display_tags_ogg`]) y los
 /// tests la consultan, de modo que el mapeo no queda repartido en ramas dispersas
 /// por función.
@@ -2254,7 +2278,8 @@ pub const VORBIS_COMMENT_MAP: &[VorbisCommentMapping] = &[
     },
 ];
 
-/// Carátula indicada a `edit --cover` sobre un archivo Ogg Vorbis.
+/// Carátula indicada a `edit --cover` sobre un archivo del backend de
+/// comentarios de Vorbis (OGG, Opus o FLAC nativo).
 ///
 /// Se entrega ya leída de disco para que la escritura del comentario y la de la
 /// carátula sean una sola operación: de `path` se deriva el tipo MIME (por la
@@ -2335,7 +2360,9 @@ pub struct OggEditReport {
 /// Se emite por stderr, el campo se omite y la operación continúa con el resto
 /// de flags. No se crea ninguna clave inventada que supla la omisión.
 pub fn ogg_field_omitted_warning(flag: &str) -> String {
-    format!("⚠️  El campo '{flag}' no tiene clave equivalente en OGG; se omite.")
+    format!(
+        "⚠️  El campo '{flag}' no tiene clave equivalente en los comentarios de Vorbis; se omite."
+    )
 }
 
 /// Devuelve la clave de Vorbis asociada a un flag del CLI según
@@ -2504,15 +2531,21 @@ fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
     let _ = tag.insert_picture(picture, Some(information));
 }
 
-/// Lee el comentario de Vorbis de un archivo Ogg.
+/// Lee el comentario de Vorbis de un archivo Ogg o FLAC nativo.
 ///
-/// Sirve a cualquier contenedor Ogg con comentarios de Vorbis: el códec del
-/// primer paquete decide el lector concreto, [`VorbisFile`] para Vorbis y
-/// [`OpusFile`] para Opus, de modo que un `.opus` se lee con la misma función
-/// que un `.ogg`. El formato se decide por el **contenido**, no por la extensión
-/// del nombre: el despacho reutiliza la misma sonda de la primera página que
-/// [`detect_format`]. El comentario es obligatorio en el contenedor, por lo que
-/// siempre existe: no se envuelve en `Option`.
+/// Sirve a cualquier contenedor que guarde sus metadatos como comentario de
+/// Vorbis: el formato decide el lector concreto —[`VorbisFile`] para Ogg Vorbis,
+/// [`OpusFile`] para Opus y [`FlacFile`] para FLAC nativo—, de modo que un
+/// `.opus` o un `.flac` se lee con la misma función que un `.ogg`. El formato se
+/// decide por el **contenido**, no por la extensión del nombre: el despacho
+/// reutiliza la misma sonda de la primera página que [`detect_format`].
+///
+/// En los contenedores Ogg (Vorbis y Opus) el comentario es obligatorio, por lo
+/// que siempre existe. En FLAC nativo es **opcional**: un archivo sin bloque
+/// `VORBIS_COMMENT` devuelve un [`VorbisComments`] vacío
+/// ([`VorbisComments::new`]) y, al guardar (véase [`write_vorbis_tag`]), lofty
+/// inserta el bloque en el archivo. El CLI trabaja siempre con un
+/// [`VorbisComments`] concreto, nunca con un `Option`.
 ///
 /// Se devuelve el tipo concreto [`VorbisComments`] (no el `Tag` genérico)
 /// porque conserva las claves ajenas al mapeo con su **caja original** y el
@@ -2521,7 +2554,8 @@ fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
 /// # Errores
 ///
 /// Retorna un error si el archivo no se puede leer o no se puede interpretar
-/// como un contenedor Ogg con comentarios de Vorbis (Vorbis u Opus).
+/// como un contenedor con comentarios de Vorbis (Ogg Vorbis, Opus o FLAC
+/// nativo).
 pub fn read_vorbis_tag(path: &Path) -> Result<VorbisComments, Box<dyn std::error::Error>> {
     match detect_format(path)? {
         AudioFormat::OggVorbis => {
@@ -2534,25 +2568,60 @@ pub fn read_vorbis_tag(path: &Path) -> Result<VorbisComments, Box<dyn std::error
             let opus_file = OpusFile::read_from(&mut file, ParseOptions::default())?;
             Ok(opus_file.vorbis_comments().clone())
         }
+        AudioFormat::Flac => {
+            let mut file = File::open(path)?;
+            let flac_file = FlacFile::read_from(&mut file, ParseOptions::default())?;
+            Ok(flac_file
+                .vorbis_comments()
+                .cloned()
+                .unwrap_or_else(VorbisComments::new))
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "el archivo no es un contenedor Ogg con comentarios de Vorbis",
+            "no se pudo leer el comentario de Vorbis del archivo",
         )
         .into()),
     }
 }
 
-/// Escribe el comentario de Vorbis en un archivo Ogg Vorbis.
+/// Lee las carátulas de un archivo FLAC nativo.
 ///
-/// `lofty` reemplaza solo el paquete de comentario y reescribe el resto del
-/// contenedor, de modo que las páginas de audio quedan intactas. El vendor del
-/// archivo se conserva: el escritor lo relee del propio archivo y sobrescribe el
-/// que llevara el tag en memoria.
+/// En FLAC las imágenes viven en bloques `PICTURE` independientes del bloque
+/// `VORBIS_COMMENT`: al escribir, lofty materializa las carátulas del comentario
+/// como bloques de picture del archivo, y al releer pasan a
+/// [`FlacFile::pictures`] (vía el trait [`OggPictureStorage`]), **no** al tag que
+/// devuelve [`read_vorbis_tag`]. De ahí que `show` necesite esta lectura aparte
+/// para listar la carátula de un `.flac`, y que `remove --all` tenga que contar
+/// esas imágenes para decidir si el archivo tenía metadatos.
+///
+/// El formato se decide por **contenido**, con [`FlacFile::read_from`] (nunca por
+/// la extensión), igual que el resto de lecturas de la librería.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no existe, no se puede leer o no se puede
+/// interpretar como un FLAC nativo.
+pub fn read_flac_pictures(
+    path: &Path,
+) -> Result<Vec<(Picture, PictureInformation)>, Box<dyn std::error::Error>> {
+    let mut file = File::open(path)?;
+    let flac_file = FlacFile::read_from(&mut file, ParseOptions::default())?;
+    Ok(flac_file.pictures().to_vec())
+}
+
+/// Escribe el comentario de Vorbis en un archivo Ogg Vorbis, Opus o FLAC nativo.
+///
+/// `lofty` inspecciona el contenedor real (Ogg o FLAC) y reemplaza solo el
+/// paquete o bloque de comentario, reescribiendo el resto del contenedor, de
+/// modo que el audio queda intacto. El vendor del archivo se conserva: el
+/// escritor lo relee del propio archivo y sobrescribe el que llevara el tag en
+/// memoria. Sobre un FLAC sin bloque `VORBIS_COMMENT`, lofty lo inserta al
+/// guardar.
 ///
 /// # Errores
 ///
 /// Retorna un error si el archivo no existe, no es escribible o no se puede
-/// interpretar como Ogg Vorbis.
+/// interpretar como un archivo con comentarios de Vorbis.
 pub fn write_vorbis_tag(
     path: &Path,
     tag: &VorbisComments,
@@ -2561,17 +2630,18 @@ pub fn write_vorbis_tag(
     Ok(())
 }
 
-/// Lee, aplica y guarda los metadatos OGG indicados sobre un archivo.
+/// Lee, aplica y guarda los metadatos del backend de comentarios Vorbis (Ogg
+/// Vorbis, Opus o FLAC nativo) indicados sobre un archivo.
 ///
-/// Es la operación completa del subcomando `edit` sobre un Ogg Vorbis: lee el
-/// comentario existente, aplica los cambios y, solo si hay alguno, reescribe el
-/// archivo. Los avisos de la operación se emiten por stderr y además se devuelven
-/// en el informe.
+/// Es la operación completa del subcomando `edit` sobre un archivo de ese
+/// backend: lee el comentario existente, aplica los cambios y, solo si hay
+/// alguno, reescribe el archivo. Los avisos de la operación se emiten por stderr
+/// y además se devuelven en el informe.
 ///
 /// La carátula se valida **antes** de escribir el archivo: si la extensión de la
 /// imagen no está soportada, la función devuelve error sin modificar un solo
-/// byte. En OGG no hay degradación de WebP: se escribe el MIME real de la
-/// extensión y no se emite ningún aviso de degradación.
+/// byte. En este backend no hay degradación de WebP: se escribe el MIME real de
+/// la extensión y no se emite ningún aviso de degradación.
 ///
 /// # Errores
 ///
@@ -2680,7 +2750,7 @@ pub fn remove_tags_ogg(tag: &mut VorbisComments, tags_to_remove: &[String]) -> b
         let removed = match classify_tag_alias(tag_name) {
             Some(TagKind::Url | TagKind::OriginalArtist) => {
                 eprintln!(
-                    "⚠️  El tag '{}' no tiene clave equivalente en OGG; se omite.",
+                    "⚠️  El tag '{}' no tiene clave equivalente en los comentarios de Vorbis; se omite.",
                     tag_name
                 );
                 false
@@ -2704,14 +2774,17 @@ pub fn remove_tags_ogg(tag: &mut VorbisComments, tags_to_remove: &[String]) -> b
     changed
 }
 
-/// Vacía el comentario de Vorbis de un archivo Ogg Vorbis.
+/// Vacía el comentario de Vorbis de un archivo del backend de comentarios Vorbis
+/// (Ogg Vorbis, Opus o FLAC nativo).
 ///
 /// Elimina todas las claves de usuario y todas las carátulas, pero **preserva el
-/// vendor**: el comentario es obligatorio en el contenedor y no se puede
-/// eliminar, así que se deja el comentario sin ningún campo de usuario en lugar
-/// de borrarlo. El audio queda intacto (solo se reemplaza el paquete de
-/// comentario) y el archivo sigue siendo reproducible, del mismo modo que
-/// [`remove_all_mp4`] deja el audio de un MP4 intacto.
+/// vendor** y deja el comentario sin ningún campo de usuario en lugar de borrarlo.
+/// En los contenedores Ogg el comentario es obligatorio y no se puede eliminar;
+/// en FLAC nativo, donde el bloque `VORBIS_COMMENT` es opcional, se conserva el
+/// bloque vacío por coherencia y para preservar el vendor. El audio queda intacto
+/// (solo se reemplaza el paquete o bloque de comentario) y el archivo sigue
+/// siendo reproducible, del mismo modo que [`remove_all_mp4`] deja el audio de un
+/// MP4 intacto.
 ///
 /// # Retorna
 ///
@@ -2719,8 +2792,8 @@ pub fn remove_tags_ogg(tag: &mut VorbisComments, tags_to_remove: &[String]) -> b
 ///
 /// # Errores
 ///
-/// Retorna un error si el archivo no se puede leer, interpretar como Ogg Vorbis
-/// o escribir.
+/// Retorna un error si el archivo no se puede leer, interpretar como un archivo
+/// con comentarios de Vorbis o escribir.
 pub fn remove_all_ogg(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
     let tag = read_vorbis_tag(file)?;
 
@@ -2739,6 +2812,75 @@ pub fn remove_all_ogg(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
     Ok(had_metadata)
 }
 
+/// Vacía todos los metadatos de un FLAC nativo, incluida la carátula.
+///
+/// A diferencia de [`remove_all_ogg`] (que preserva el vendor en los contenedores
+/// Ogg), en FLAC `remove --all` elimina por completo el bloque `VORBIS_COMMENT`:
+/// `lofty` 0.25.4 no escribe un bloque de comentario vacío en un contenedor FLAC,
+/// así que el vendor —que vive dentro de ese bloque— se pierde. Es una degradación
+/// documentada del spec `flac-tagging`, no un error.
+///
+/// El cálculo de «tenía metadatos» cuenta tanto los campos de usuario del bloque
+/// `VORBIS_COMMENT` como las carátulas de los bloques `PICTURE` del archivo (las
+/// imágenes escritas desde el comentario se materializan como bloques de picture
+/// y al releer viven en [`read_flac_pictures`], no en el tag). El audio queda
+/// intacto y el archivo sigue siendo reproducible por contenido.
+///
+/// # Retorna
+///
+/// `true` si el archivo tenía metadatos (y se eliminaron), `false` si no tenía.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer, interpretar como FLAC nativo
+/// o escribir.
+pub fn remove_all_flac(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut handle = File::open(file)?;
+    let flac_file = FlacFile::read_from(&mut handle, ParseOptions::default())?;
+
+    let tag = flac_file
+        .vorbis_comments()
+        .cloned()
+        .unwrap_or_else(VorbisComments::new);
+
+    // Hay metadatos si queda alguna clave de usuario o alguna carátula a nivel de
+    // archivo; el vendor no cuenta (es parte del contenedor, no del contenido).
+    let had_metadata = tag.items().next().is_some() || !flac_file.pictures().is_empty();
+
+    if had_metadata {
+        // Vaciar el comentario basta: al guardarlo, lofty elimina el bloque
+        // `VORBIS_COMMENT` y los bloques `PICTURE` completos.
+        write_vorbis_tag(file, &VorbisComments::new())?;
+    }
+
+    Ok(had_metadata)
+}
+
+/// Muestra un bloque de carátulas en el formato que [`display_tags_ogg`] usa para
+/// las imágenes y devuelve cuántas se mostraron.
+///
+/// Compartida por la visualización de Ogg/Opus (las imágenes del propio
+/// comentario) y de FLAC nativo (los bloques `PICTURE` del archivo), de modo que
+/// ambas ramas imprimen la misma línea «Carátulas: N imagen(es)» y la misma
+/// descripción de cada imagen.
+fn display_pictures_block(pictures: &[(Picture, PictureInformation)]) -> usize {
+    if pictures.is_empty() {
+        return 0;
+    }
+
+    outln!("🖼️  Carátulas: {} imagen(es)", pictures.len());
+    for (i, (pic, _)) in pictures.iter().enumerate() {
+        outln!(
+            "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
+            i + 1,
+            pic.pic_type(),
+            pic.mime_type().map(|m| m.as_str()).unwrap_or(""),
+            pic.data().len()
+        );
+    }
+    pictures.len()
+}
+
 /// Muestra los metadatos de un comentario de Vorbis en el mismo formato legible
 /// (mismos emojis y mismos nombres de campo) que [`display_tags`] usa en MP3 y
 /// [`display_tags_mp4`] en MP4.
@@ -2749,7 +2891,11 @@ pub fn remove_all_ogg(file: &Path) -> Result<bool, Box<dyn std::error::Error>> {
 /// claves se leen de la propia tabla para que el mapeo no quede duplicado. Cuando
 /// no hay ningún campo de la tabla, ni carátulas ni letra, se informa de que no
 /// se encontraron metadatos.
-pub fn display_tags_ogg(tag: &VorbisComments) {
+///
+/// Núcleo compartido por [`display_tags_ogg`] y [`display_tags_flac`]: los campos
+/// vienen del comentario y las carátulas del slice que recibe, que en Ogg/Opus es
+/// el del propio comentario y en FLAC el de los bloques `PICTURE` del archivo.
+fn display_vorbis_content(tag: &VorbisComments, pictures: &[(Picture, PictureInformation)]) {
     outln!("\n📋 Metadatos encontrados:\n");
     outln!("═══════════════════════════════════════");
 
@@ -2770,7 +2916,8 @@ pub fn display_tags_ogg(tag: &VorbisComments) {
         found += 1;
     }
 
-    // `--year` y `--date` son claves distintas en OGG: cada una con su etiqueta.
+    // `--year` y `--date` son claves distintas en el comentario Vorbis: cada una
+    // con su etiqueta.
     if let Some(year) = tag.get(vorbis_key("--year")) {
         outln!("📅 Año:       {}", year);
         found += 1;
@@ -2822,20 +2969,7 @@ pub fn display_tags_ogg(tag: &VorbisComments) {
     }
 
     // Mostrar carátulas si existen
-    let pictures = tag.pictures();
-    if !pictures.is_empty() {
-        outln!("🖼️  Carátulas: {} imagen(es)", pictures.len());
-        for (i, (pic, _)) in pictures.iter().enumerate() {
-            outln!(
-                "   [{}] Tipo: {:?}, MIME: {}, Tamaño: {} bytes",
-                i + 1,
-                pic.pic_type(),
-                pic.mime_type().map(|m| m.as_str()).unwrap_or(""),
-                pic.data().len()
-            );
-        }
-        found += pictures.len();
-    }
+    found += display_pictures_block(pictures);
 
     // Mostrar letra si existe (`LYRICS`, o `UNSYNCEDLYRICS` de otra herramienta)
     if let Some(lyrics) = tag
@@ -2882,6 +3016,31 @@ pub fn display_tags_ogg(tag: &VorbisComments) {
     }
 
     outln!("═══════════════════════════════════════\n");
+}
+
+/// Muestra los metadatos de un comentario de Vorbis (Ogg Vorbis, Opus o FLAC
+/// nativo) en el mismo formato legible que [`display_vorbis_content`] aplica a
+/// los campos y las carátulas.
+///
+/// En Ogg/Opus las carátulas viven dentro del propio comentario, así que basta
+/// con el tag: las imágenes se leen de [`VorbisComments::pictures`]. En FLAC
+/// nativo las imágenes viajan en bloques `PICTURE` del archivo
+/// ([`read_flac_pictures`]) y el comentario no las ve; por eso la visualización
+/// de FLAC ([`display_tags_flac`]) pasa ese slice aparte.
+pub fn display_tags_ogg(tag: &VorbisComments) {
+    display_vorbis_content(tag, tag.pictures());
+}
+
+/// Muestra los metadatos de un FLAC nativo en el mismo formato que
+/// [`display_tags_ogg`].
+///
+/// Recibe aparte las carátulas porque en FLAC las imágenes viven en bloques
+/// `PICTURE` independientes del bloque `VORBIS_COMMENT`: [`read_flac_pictures`]
+/// las lee del archivo y este display las muestra con el mismo formato (misma
+/// línea «Carátulas: N imagen(es)» y misma descripción de cada imagen) que el de
+/// Ogg/Opus.
+pub fn display_tags_flac(pictures: &[(Picture, PictureInformation)], tag: &VorbisComments) {
+    display_vorbis_content(tag, pictures);
 }
 
 #[cfg(test)]

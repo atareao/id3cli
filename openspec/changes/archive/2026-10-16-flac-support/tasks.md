@@ -1,0 +1,109 @@
+# Tasks
+
+El change incorpora FLAC como quinto formato soportado siguiendo el patrón del change `opus-support` (ya archivado): detección por contenido (`fLaC`), backend de comentarios de Vorbis reutilizado, `Backend::Flac` explícito en el CLI, fixture real, tests RED→GREEN, e2e ampliado y coherencia documental. Nada de `src/` ni `tests/` se toca antes del STOP del grupo 1.
+
+## 1. Artefactos de especificación (OpenSpec)
+
+- [ ] 1.1 Redactar `proposal.md` con la intención (FLAC, quinto formato, backend Vorbis reutilizado), el alcance (detección, backend, CLI, fixture, tests, e2e, docs; no-goals: `\x7fFLAC` en Ogg, bloques PICTURE separados, ID3v2 en FLAC) y el impacto (src/, tests/, fixtures, e2e, README/AGENTS/copilot, specs; commits `feat:`; no-rotura 283 tests).
+      Verificación: `openspec/changes/flac-support/proposal.md` MUST contener Why, What Changes, Capabilities (NEW: flac-tagging; MODIFIED: format-detection, e2e-tooling, e2e-verification) e Impact.
+- [ ] 1.2 Redactar el delta `specs/flac-tagging/spec.md` (capability nueva) con el contrato de tipos (`FlacFile` + `Option<VorbisComments>` materializado), el mapeo (misma tabla Vorbis), las degradaciones, la carátula (solo comentario Vorbis) y el borrado con vendor.
+      Verificación: MUST fijar con MUST la materialización del comentario vacío, el mapeo por claves Vorbis, la carátula en `METADATA_BLOCK_PICTURE` dentro del comentario y el no-goal de bloques `PICTURE` separados e ID3v2 en FLAC; cada requirement con escenarios WHEN/THEN.
+- [ ] 1.3 Redactar el delta `specs/format-detection/spec.md` (MODIFIED): `fLaC` → FLAC nativo soportado, `\x7fFLAC` en Ogg sigue rechazado, mensaje con los cinco formatos.
+      Verificación: MUST fijar el reconocimiento de `fLaC` por contenido (no extensión), MUST conservar el rechazo de `\x7fFLAC` en Ogg y MUST actualizar el mensaje «Formatos soportados: MP3, MP4, OGG, Opus y FLAC.» con sus escenarios.
+- [ ] 1.4 Redactar los deltas `specs/e2e-tooling/spec.md` y `specs/e2e-verification/spec.md` (MODIFIED): quinto script y recipe, tabla de códec ampliada, FLAC en la matriz de verificación y tabla de clave ffprobe de FLAC fijada durante GREEN con medición.
+      Verificación: `e2e_flac.sh` + recipe `e2e-flac` + `flac` en el bucle de `just e2e` MUST quedar contratados; la matriz MUST incluir FLAC con 18 tags + url/original omitidos, carátula con roundtrip y sustitución, y remove --all con vendor.
+- [ ] 1.5 Redactar `design.md` (decisiones 1-7 y alternativas descartadas) y `tasks.md` (este fichero).
+      Verificación: design.md MUST documentar las 7 decisiones (detección, Backend::Flac, materialización del comentario, alcance de la carátula, fixture estructural, e2e con medición, mensajes generalizados) con la evidencia de lofty 0.25.4 citada (src/flac/mod.rs:36-39, 58-105; read.rs; probe.rs:375).
+- [ ] 1.6 STOP: presentar la especificación al usuario y esperar aprobación explícita antes de tocar `src/` ni `tests/`.
+      Verificación: aprobación explícita del usuario registrada en la conversación antes del grupo 2.
+
+## 2. Fase RED — detección unitaria de FLAC
+
+- [ ] 2.1 Invertir `test_detect_format_unsupported_magic_bytes` (`src/tests.rs:1338`): quitar `b"fLaC"` de la lista de magics no soportados (queda `RIFF`, `FORM`, `MAC `, `wvpk`) y actualizar el comentario que hoy nombra FLAC entre los rechazados.
+      Verificación: el test pasa con la lista reducida y fallaría si `fLaC` se mantuviera (la suite se ejecuta y confirma que falla sin el GREEN).
+- [ ] 2.2 Añadir `test_detect_format_flac` (unitario): `b"fLaC"` + bytes de relleno → `AudioFormat::Flac`; mismo contenido renombrado con extensión `.mp3` y sin extensión sigue reconociéndose por sus bytes; `detect_format_from_bytes` con los primeros 64 bytes.
+      Verificación: RED — falla hasta el GREEN (el enum no tiene `Flac` todavía); luego verde.
+
+## 3. Fase RED — fixture real de FLAC
+
+- [ ] 3.1 Crear `tests/fixtures/sample.flac` con `ffmpeg`: fuente `anullsrc` a 48 kHz, mono, 0,6 s, códec `flac`, con `-map_metadata -1 -fflags +bitexact -flags:a +bitexact`, tamaño pequeño y commiteado en `tests/fixtures/`.
+      Verificación: `ffprobe` lo reconoce como codec `flac` y `ffmpeg` lo decodifica; los tests lo usan vía `create_temp_flac()`.
+- [ ] 3.2 Crear `tests/fixtures/generate_sample_flac.sh` que regenere el fixture y verifique estructura, no igualdad de bytes, siguiendo el patrón de `generate_sample_opus.sh`: patrón `fLaC` en el offset 0, primer bloque STREAMINFO obligatorio, bloque VORBIS_COMMENT con vendor no vacío y clave `ENCODER` pero SIN campos de usuario, decodificación completa con `ffmpeg` y `ffprobe` codec=flac.
+      Verificación: `bash -n` limpio; el script en modo `--check` pasa sobre el fixture versionado y falla (exit 1) ante un FLAC con campos de usuario fabricado.
+- [ ] 3.3 Añadir `create_temp_flac()` en `tests/integration_test.rs` (réplica de `create_temp_opus`): copia el fixture versionado a una ruta temporal única.
+      Verificación: los tests del grupo 4 la usan; nada opera sobre el fixture versionado directamente.
+
+## 4. Fase RED — integración y CLI sobre FLAC
+
+- [ ] 4.1 Invertir el caso `("flac", ...)` de `test_cli_rejects_unsupported_formats_and_leaves_file_untouched` (`tests/integration_test.rs:2918`): FLAC sale de la lista de rechazados (que queda con ogg_sin_paquete, wav, aif) y pasa a una comprobación positiva; actualizar el comentario que hoy pone a FLAC entre los no soportados.
+      Verificación: RED — falla mientras el CLI rechaza `.flac`; verde tras el GREEN.
+- [ ] 4.2 Invertir `test_cli_unsupported_format_message_lists_mp3_mp4_and_ogg` (`tests/integration_test.rs:4118`): deja de usar un `.flac` como ejemplo de no soportado (usa WAV o AIFF) y el mensaje esperado pasa a enumerar los cinco formatos.
+      Verificación: RED/verde según el momento; el literal «MP3, MP4, OGG, Opus y FLAC.» queda fijado.
+- [ ] 4.3 Añadir los tests CLI nuevos sobre `sample.flac` (vía `create_temp_flac()`), replicando el patrón Opus: `show` de un tag existente (pre-escrito con lofty); `edit` con título, artista y álbum releído con un lector independiente (`id3cli::read_vorbis_tag`); `edit --track 7/12 --season 1/2` comprobando `TRACKNUMBER`/`TRACKTOTAL` y `DISCNUMBER`/`DISCTOTAL`; `edit --cover` JPG y PNG releídas (1 imagen, MIME correcto); `remove` de un campo conservando el resto; `remove --all` con vendor conservado y el archivo sigue siendo FLAC por contenido; flujo completo `show`/`edit`/`remove`.
+      Verificación: RED — todos fallan mientras el CLI rechaza `.flac`; el grupo 5 los pone verdes.
+
+## 5. Fase GREEN — implementación
+
+- [ ] 5.1 `src/lib.rs`: añadir `Flac` al enum `AudioFormat`; en `detect_format_from_bytes`, reconocer `b"fLaC"` (offset 0) → `AudioFormat::Flac` antes de la tabla de no soportados; quitar `b"fLaC"` de `UNSUPPORTED_MAGIC`; actualizar los comentarios de las listas (hoy ~914-916, ~941-942, ~1013) y del enum (la variante `Unsupported` deja de nombrar FLAC y explica la distinción `\x7fFLAC` en Ogg).
+      Verificación: `cargo test --lib` verde con los tests 2.1/2.2; `cargo clippy` sin warnings.
+- [ ] 5.2 `src/lib.rs`: generalizar `read_vorbis_tag` con la rama `AudioFormat::Flac` → `FlacFile::read_from(&mut File::open(path)?, ParseOptions::default())` + `vorbis_comments().cloned().unwrap_or_else(VorbisComments::new)`; actualizar la doc (el comentario ya no es «obligatorio en el contenedor» en general: en Ogg sí, en FLAC se materializa vacío). `write_vorbis_tag` no cambia.
+      Verificación: `edit` sobre un `.flac` sin comentario crea el bloque VORBIS_COMMENT (lofty lo inserta); tests 4.3 de lectura/escritura verdes.
+- [ ] 5.3 `src/lib.rs`: generalizar los literales del backend Vorbis que nombran «OGG» de forma excluyente («no tiene clave equivalente en OGG» en `remove_tags_ogg` y el mensaje de error de `read_vorbis_tag` para archivos que no son Ogg) al mecanismo «comentarios de Vorbis» o al formato real; actualizar los tests que fijan esos literales.
+      Verificación: los avisos no mienten al ejecutarse sobre FLAC; suite verde.
+- [ ] 5.4 `src/main.rs`: `Ok(AudioFormat::Flac) => Backend::Flac` en `detect_supported_format`; nuevo `Backend::Flac` en el enum; ramas en show/edit/remove que llaman a las funciones Vorbis existentes; `report_ogg_error` se generaliza (o se añade `report_flac_error` con el mismo cuerpo nombrando «comentarios de Vorbis»); los 4 mensajes que enumeran formatos pasan a «Formatos soportados: MP3, MP4, OGG, Opus y FLAC.».
+      Verificación: `cargo test` completo verde; `cargo clippy --all-targets --all-features -- -D warnings` 0 warnings; `cargo fmt --check` limpio.
+- [ ] 5.5 Lint completo de la implementación (fmt + clippy) y repaso de que el e2e existente (mp3/m4a/ogg/opus) sigue en verde con el binario nuevo.
+      Verificación: `just e2e-mp3`, `just e2e-m4a`, `just e2e-ogg`, `just e2e-opus` → 0 fallidas (recuentos sin cambios: 70/80/81/81).
+
+## 6. Fase GREEN — e2e de FLAC
+
+- [x] 6.1 `scripts/e2e/e2e_lib.sh`: añadir `flac` a `E2E_CODEC` (valor `flac`), la rama `flac` en el `case` de `e2e_gen_audio` (sin flags extra, como opus) y la rama en `ffprobe_entries_for` con el conjunto MEDIDO (ver 6.3); actualizar la doc de USO.
+      Verificación: `bash -n` limpio; `e2e_setup flac` + `e2e_gen_audio` generan un `.flac` decodificable.
+      Evidencia (2026-10-16): `E2E_CODEC[flac]=flac`; rama `flac) extra_args=()` en `e2e_gen_audio`; `ffprobe_entries_for` devuelve `format_tags` para `flac` (medido en 6.3: el FLAC nativo expone la metadata en `format_tags`, no en `stream_tags`; caja Vorbis preservada salvo `track`/`disc`/`album_artist`); doc de USO, `E2E_EXT` y los `e2e_die` de `e2e_setup`/`e2e_gen_audio`/`ffprobe_entries_for` aceptan `flac`. `bash -n scripts/e2e/e2e_lib.sh scripts/e2e/e2e_flac.sh` limpio; `just e2e-flac --bin target/debug/id3cli` → 80 aserciones, 0 fallidas.
+- [x] 6.2 Crear `scripts/e2e/e2e_flac.sh` replicando el flujo de `e2e_ogg.sh`: show inicial sin campos → edit con los 18 tags + `--url`/`--original-artist` (omitidos con aviso) → show campo a campo → ffprobe (capa 2, entradas medidas) → remove de un campo → remove --all (vendor conservado) → ffprobe de reproducibilidad → variante track/season sin total → carátula JPG y PNG sobre audio recién generado (roundtrip) → segunda edición de `--cover` (sustituye: 1 carátula, `check_cover_not_roundtrip` de la primera).
+      Verificación: `just e2e-flac --bin target/debug/id3cli` → 0 fallidas; recuento nuevo de aserciones de FLAC anotado (≈76).
+      Evidencia (2026-10-16): `scripts/e2e/e2e_flac.sh` creado (9 etapas, mismo orden que `e2e_ogg.sh`). FLAC expone en `format_tags` (no stream_tags), así que `FF_TAGS` = misma tabla que OGG/Opus y el runner resuelve las entradas por `ffprobe_entries_for`; el aviso por stderr es el literal generalizado del change («no tiene clave equivalente en los comentarios de Vorbis», tarea 5.3, A DIFERENCIA del «en OGG» que esperaban ogg/opus — ver evidencia 6.5). `remove --all` en FLAC ELIMINA el bloque VORBIS_COMMENT completo (vendor NO conservado, degradación documentada en el spec): se verifica `check_ffprobe_no_user_tags` (format_tags vacío) y reproducibilidad (`check_duration_approx 1.5`), sin comprobar vendor. `just e2e-flac --bin target/debug/id3cli` → **80 aserciones, 0 fallidas, exit 0** (recuento real; la previsión «≈76» del enunciado era orientativa).
+- [x] 6.3 MEDICIÓN de las claves ffprobe de FLAC (registrar en tasks.md): con `ffmpeg` 9.0.2, sobre un FLAC escrito por `id3cli` con todos los campos, medir si la metadata se expone en `format_tags` o `stream_tags`, la caja de las claves (mayúsculas Vorbis o minúsculas), y el par track/season. Anotar la tabla resultante y fijarla en `specs/e2e-verification/spec.md` (celdas reales medidas, nunca supuestas).
+      Verificación: la tabla del spec e2e-verification queda con las celdas de FLAC medidas y la evidencia fechada en tasks.md.
+      Evidencia (2026-10-16, ffmpeg/ffprobe n9.0.2): FLAC escrito por `id3cli` con los 18 tags + `--url`/`--original-artist`. La metadata está en **`format_tags`** (`stream_tags` vacío), caja Vorbis MAYÚSCULAS preservada (TITLE, ARTIST, ALBUM, YEAR, DATE, GENRE, COPYRIGHT, COMPOSER, SUBTITLE, LYRICS, COMPILATION, TITLESORT, ARTISTSORT, ALBUMSORT, TRACKTOTAL, DISCTOTAL), con las mismas normalizaciones a minúsculas que OGG/Opus: TRACKNUMBER→`track` (7), DISCNUMBER→`disc` (1), ALBUMARTIST→`album_artist` (hallazgo 3.5). Tabla clave→celda: `TITLE`↔TítuloMediciónFLAC; `ARTIST`↔«Artista1Med; Artista2Med»; `ALBUM`↔ÁlbumMed; `YEAR`↔2026; `DATE`↔2026-10-13; `GENRE`↔RockMed; `track`↔7; `TRACKTOTAL`↔12; `disc`↔1; `DISCTOTAL`↔2; `COPYRIGHT`↔©2026Med; `COMPOSER`↔CompositorMed; `SUBTITLE`↔SubtítuloMed; `LYRICS`↔«LetraMed\nSegunda línea Med» (multilínea); `COMPILATION`↔1; `TITLESORT`↔TitleSortMed; `ARTISTSORT`↔ArtistSortMed; `ALBUMSORT`↔AlbumSortMed; `album_artist`↔AlbumArtistMed; url/original_artist↔«—» (ausentes, omitidos con aviso). `remove --all`: format_tags vacío (bloque VORBIS_COMMENT eliminado, vendor NO conservado); archivo sigue siendo FLAC reproducible (codec=flac, duración 1.5 s). Evidencia escrita en `specs/e2e-verification/spec.md` (nota de medición del requirement de dos capas).
+- [x] 6.4 `.justfile`: recipe `e2e-flac` (como las demás) y FLAC añadido al bucle de la recipe `e2e`.
+      Verificación: `just e2e-flac` funciona; `just e2e` (tras 6.2 y 6.3) ejecuta los cinco script en serie.
+      Evidencia (2026-10-16): recipe `e2e-flac *args: scripts/e2e/e2e_flac.sh {{args}}` añadida tras `e2e-opus`; bucle de `e2e` pasa a `for ext in mp3 m4a ogg opus flac; do` y su comentario a «los 5 formatos en serie». `just e2e-flac --bin target/debug/id3cli` → 80 aserciones, 0 fallidas; `just e2e` completo → mp3 70, m4a 80, ogg 81, opus 81, flac 80 — todas 0 fallidas, exit 0.
+- [x] 6.5 Falsabilidad re-demostrada: corromper una aserción del flujo nuevo (p. ej. el valor esperado de una comprobación ffprobe de FLAC) → exit 1 con el nombre de la aserción; restaurar → exit 0. Evidencia fechada.
+      Verificación: salida FAIL con el nombre de la aserción y exit code 1; tras restaurar, exit 0.
+      Evidencia (2026-10-16): corrupción `check_ffprobe_tag TRACKTOTAL "13"` (valor esperado 12→13) en `e2e_flac.sh` → `FAIL: aserción 'check_ffprobe_tag': se esperaba TRACKTOTAL=13 y ffprobe devolvió «12» (format_tags)` → `PASS/FAIL: flac: 80 aserciones, 1 fallidas` → **exit 1**; restaurada a `"12"` → `PASS/FAIL: flac: 80 aserciones, 0 fallidas` → **exit 0**. Además se detectó y corrigió una deuda del grupo 5: los scripts `e2e_ogg.sh`/`e2e_opus.sh` esperaban el literal antiguo «no tiene clave equivalente en OGG» mientras el binario (tarea 5.3) ya emite «en los comentarios de Vorbis» → 2 aserciones fallidas en cada uno hasta alinear los literales (2 líneas por script; recuentos 81/81 intactos, `just e2e` completo en verde).
+
+## 7. Fase REFACTOR — coherencia documental
+
+- [x] 7.1 Actualizar `test_documentacion_describe_los_formatos_soportados` (`src/tests.rs:4641`): la lista de «No soportado» deja de exigir FLAC entre los pendientes (queda Speex, WAV, AIFF, APE), la sección de formatos admitidos debe nombrar FLAC, la hoja de ruta deja de exigir una línea `- [ ]` con FLAC y pasa a exigir `- [x]` (Speex sigue `- [ ]`), y la sección de mapeo gana una entrada FLAC con `--title`/`--artist`.
+      Verificación: el test pasa con el README actualizado (7.2) y falla sin él (RED del grupo 7).
+      Evidencia (2026-10-16): `test_documentacion_describe_los_formatos_soportados` actualizado — [1] FLAC en la tabla de formatos admitidos y fuera de la de «No soportado» (queda Speex, WAV, AIFF, APE); [2] cuarta sección de mapeo «Mapeo»+«FLAC» con `--title`/`--artist`; [4] hoja de ruta con `- [x]` para FLAC nativo y Speex como único `- [ ]` pendiente, comprobación `speex_pendiente` sin bucle; [6] descripción de Cargo.toml con FLAC («…comentarios Vorbis en OGG, Opus y FLAC»). Suite completa: **164 unit + 128 integración = 292 tests, todo verde**.
+- [x] 7.2 Actualizar `README.md`: FLAC sale de las tablas «No soportado» y entra en las de soportados (detección `fLaC` por contenido; mapeo Vorbis; degradaciones OGG/FLAC compartidas; hoja de ruta `- [x]`; escudo y desglose de tests al recuento medido; e2e menciona cinco formatos). `AGENTS.md` y `.github/copilot-instructions.md`: FLAC en las listas de formatos y comandos.
+      Verificación: el test 7.1 pasa; `git diff` toca solo docs + tests de coherencia.
+      Evidencia (2026-10-16): `README.md` actualizado — escudo `tests-292%20passing`; tabla con fila «Soportado | FLAC nativo (`fLaC`)» y «No soportado» sin FLAC; título «## Mapeo de tags en OGG y FLAC (comentarios Vorbis)»; degradación FLAC documentada (`remove --all` sin VORBIS_COMMENT/vendor); desglose de tests 292/164/128; e2e con los cinco formatos; hoja de ruta con `- [x] Soporte para FLAC (nativo)` + `- [ ] …dentro del contenedor Ogg` (sigue pendiente). `AGENTS.md` y `.github/copilot-instructions.md` actualizados — recuentos 292/164/128, `sample.flac`/`generate_sample_flac.sh`/`create_temp_flac`, convención FLAC con `read_flac_pictures` y `remove_all_flac`. `Cargo.toml` `description` = «CLI para leer y escribir metadatos ID3v2.4 en MP3, átomos estilo iTunes (ilst) en MP4 y comentarios Vorbis en OGG, Opus y FLAC».
+- [x] 7.3 Formateo final: `cargo fmt --check`, `bash -n` sobre los 6 scripts e2e, y revisión de que no queda material generado versionado.
+      Verificación: limpieza mecánica completa.
+      Evidencia (2026-10-16): `cargo fmt --check` limpio; `bash -n scripts/e2e/*.sh` limpio sobre los 6 scripts; `git status` sin temporales: ningún material generado versionado.
+
+## 8. Verificación final y cierre
+
+- [x] 8.1 Ejecutar las comprobaciones mecánicas completas: `cargo test --no-fail-fast` (recuento final), `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `bash -n scripts/e2e/*.sh`, `just e2e` (cinco formatos, 0 fallidas) y falsabilidad ya demostrada (6.5).
+      Verificación: todo en verde; recuentos nuevos (suite y e2e) anotados como evidencia.
+      Evidencia (2026-10-16): `cargo test --no-fail-fast` → **164 unit + 128 integración = 292 tests, 0 fallos**; `cargo fmt --check` limpio; `cargo clippy --all-targets --all-features -- -D warnings` → **0 warnings** (tras corregir `single_element_loop` en `src/tests.rs:4844`); `bash -n scripts/e2e/*.sh` limpio; `just e2e` → mp3 70, m4a 80, ogg 81, opus 81, flac 80 aserciones, **0 fallidas (392 en total)**; falsabilidad demostrada en 6.5 (corrupto → exit 1; restaurado → exit 0).
+- [x] 8.2 Comprobar el estado del change: `openspec status --change flac-support` → 4/4 artefactos completos y `openspec validate flac-support` → válido.
+      Verificación: 4/4 y válido.
+      Evidencia (2026-10-16): `openspec validate flac-support` → «Change 'flac-support' is valid»; `openspec status --change flac-support` → **4/4 artefactos completos** (proposal, specs, design, tasks).
+- [x] 8.3 Repasar cada escenario de los specs del change y anotar el test que lo cubre (unitario, integración o e2e), igual que se hizo en `opus-support`.
+      Verificación: cobertura escenario→test completa en tasks.md.
+      Cobertura escenario→test (2026-10-16):
+      - flac-tagging / Contrato de tipos (FlacFile materializado): `test_cli_flac_show_existing_tag` (lectura FLAC existente), `test_cli_flac_edit_sets_fields` (edit crea el bloque), `test_detect_format_flac` (detección por contenido), e2e_flac etapa show inicial.
+      - flac-tagging / Mapeo de flags a claves Vorbis: `test_cli_flac_edit_sets_fields`, `test_cli_flac_edit_track_season_totals` (TRACKNUMBER/TRACKTOTAL/DISCNUMBER/DISCTOTAL), e2e_flac etapa edit (18 tags) + `check_ffprobe_tag` (tabla medida: format_tags, `track`/`disc` en minúsculas, TRACKTOTAL/DISCTOTAL en mayúsculas).
+      - flac-tagging / Carátula como bloque PICTURE: `test_cli_flac_edit_cover_jpg_and_png` (MIME + bytes + show «Carátulas»), `test_cli_flac_remove_all_only_cover_clears_pictures` (remove --all borra solo carátula), e2e_flac etapas covers JPG/PNG (roundtrip `check_cover_roundtrip`) y sustitución (`check_cover_not_roundtrip`, «Carátulas: 1 imagen(es)»).
+      - flac-tagging / Borrado sin vendor: `test_cli_flac_remove_field_keeps_rest`, `test_cli_flac_remove_all_leaves_no_metadata_and_still_flac` (sin bloque, fLaC intacto), e2e_flac etapas remove/remove --all (sin vendor verificado, ffprobe reproducible).
+      - format-detection / fLaC → Flac: `test_detect_format_flac`, `test_cli_unsupported_format_message_lists_all_supported_formats` (mensaje con los 5), e2e (detección por contenido).
+      - format-detection / `\x7fFLAC` en Ogg rechazado: `test_detect_format_ogg_other_codecs` (src/tests.rs:1480, caso FLAC en Ogg) y `test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched`.
+      - e2e-tooling / runner + justfile: `just e2e` (5 formatos en serie), `just e2e-flac`, `e2e_lib.sh` (E2E_CODEC[flac], ffprobe_entries_for→format_tags medido), e2e_flac.sh (80 aserciones).
+      - e2e-verification: e2e_flac.sh completo (18 tags + url/original omitidos con aviso + covers + remove --all) y su falsabilidad (6.5).
+- [ ] 8.4 Cerrar con la evidencia fechada de todo lo anterior dentro del change; flujo git: rama `feature/flac-support` desde `development`, commits `feat:`, PR a `development`, CI verde, fusión y `openspec archive flac-support` (Fase 4 del plan director gestiona la release única v0.7.0 con JSON).
+      Verificación: PR fusionado y change archivado con las 8 tareas completadas.
+      (la ejecuta el director tras este cierre: commit feat: → PR → fusión → archive)
