@@ -6400,3 +6400,172 @@ fn test_cli_show_json_pipe_cerrado() {
 
     cleanup_file(&mp3_path);
 }
+
+// ---------------------------------------------------------------------------
+// Generación de completions para shells (`completions <SHELL>`) — change
+// shell-completions, fase RED
+//
+// Fase RED: el subcomando `completions` NO existe todavía, así que clap rechaza
+// la invocación con exit 2 y un error por stderr; todos los tests de esta
+// sección fallan hasta que el GREEN lo implemente. No necesitan fichero de
+// audio: la generación de completions no lee ningún archivo.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_completions_bash() {
+    let output = run_cli(&["completions", "bash"]);
+    assert!(
+        output.status.success(),
+        "`completions bash` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("complete -F _id3cli"),
+        "el script de bash debe registrar _id3cli con complete -F, fue: {stdout}"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr debe quedar vacío en `completions bash`, fue: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_cli_completions_zsh() {
+    let output = run_cli(&["completions", "zsh"]);
+    assert!(
+        output.status.success(),
+        "`completions zsh` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("#compdef id3cli"),
+        "el script de zsh debe declararse con #compdef id3cli, fue: {stdout}"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr debe quedar vacío en `completions zsh`, fue: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_cli_completions_fish() {
+    let output = run_cli(&["completions", "fish"]);
+    assert!(
+        output.status.success(),
+        "`completions fish` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("complete -c id3cli"),
+        "el script de fish debe emitir líneas complete -c id3cli, fue: {stdout}"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr debe quedar vacío en `completions fish`, fue: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_cli_completions_stdout_solo_script() {
+    // El stdout de `completions bash` es SOLO el script de completions: no debe
+    // colarse ninguna de las frases ni la decoración del modo legible de
+    // `show` (p. ej. el aviso de metadatos no encontrados ni el emoji ⚠️).
+    let output = run_cli(&["completions", "bash"]);
+    assert!(
+        output.status.success(),
+        "`completions bash` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("no se encontraron metadatos") && !stdout.contains('⚠'),
+        "el stdout solo debe contener el script de completions, fue: {stdout}"
+    );
+}
+
+#[test]
+fn test_cli_completions_incluye_subcomandos() {
+    // El script de bash debe listar los subcomandos del CLI para completarlos.
+    let output = run_cli(&["completions", "bash"]);
+    assert!(
+        output.status.success(),
+        "`completions bash` debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for subcomando in ["show", "edit", "remove"] {
+        assert!(
+            stdout.contains(subcomando),
+            "el script de bash debe listar el subcomando {subcomando}, fue: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_completions_shell_invalido() {
+    // Un shell no soportado (powershell) se rechaza por stderr con exit ≠ 0 y
+    // stdout vacío; el error en español nombra los tres shells válidos.
+    let output = run_cli(&["completions", "powershell"]);
+    assert!(
+        !output.status.success(),
+        "`completions powershell` debe salir con código distinto de cero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for valido in ["bash", "zsh", "fish"] {
+        assert!(
+            stderr.contains(valido),
+            "el error debe nombrar el shell válido {valido}, fue: {stderr}"
+        );
+    }
+    assert!(
+        output.stdout.is_empty(),
+        "el stdout debe quedar vacío ante un shell inválido, fue: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn test_cli_completions_pipe_cerrado_exit_0() {
+    // Mismo contrato de BrokenPipe que `test_cli_pipe_cerrado_no_es_error`: con
+    // el extremo de lectura del pipe cerrado, `completions bash` termina con
+    // exit 0 sin pánico y sin nada por stderr. No se necesita fichero de audio.
+    let mut child = Command::new("cargo")
+        .args(["run", "--quiet", "--", "completions", "bash"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+
+    drop(child.stdout.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`completions bash` con stdout cerrado debe salir con 0, no {:?}. stderr: {}",
+        output.status.code(),
+        stderr
+    );
+    assert!(
+        stderr.is_empty(),
+        "stderr debe quedar vacío cuando el pipe está cerrado, fue: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("panicked")
+            && !stderr.contains("failed printing to stdout")
+            && !stderr.contains("RUST_BACKTRACE"),
+        "no debe aparecer un pánico al escribir en stdout: {}",
+        stderr
+    );
+}

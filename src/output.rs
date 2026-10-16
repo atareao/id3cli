@@ -8,6 +8,10 @@
 //! cualquier otro fallo de escritura (por ejemplo `ENOSPC`) se informa en
 //! español por stderr con un código distinto de cero.
 //!
+//! Las líneas ([[`print_line`]], vía `outln!`) y los bloques de texto
+//! completos ([`print_block`], p. ej. el script de completions) comparten ese
+//! contrato; `print_block` no añade un salto de línea extra al bloque.
+//!
 //! [`ErrorKind::BrokenPipe`]: std::io::ErrorKind::BrokenPipe
 
 use std::io::{self, Write};
@@ -46,4 +50,27 @@ macro_rules! outln {
     ($($arg:tt)*) => {
         $crate::output::print_line(format_args!($($arg)*))
     };
+}
+
+/// Escribe un bloque de texto completo en la salida estándar, **sin** añadir un
+/// salto de línea extra.
+///
+/// Es la vía de salida del script de completions: el script ya termina en `\n`
+/// y un salto adicional alteraría su contenido. Clasifica el error de escritura
+/// con el mismo contrato que [`print_line`]: un [`ErrorKind::BrokenPipe`]
+/// (consumidor que cierra el pipe) es un final normal con código 0 y sin nada
+/// por stderr, y cualquier otro fallo de escritura se informa en español por
+/// stderr con un código distinto de cero.
+///
+/// [`ErrorKind::BrokenPipe`]: std::io::ErrorKind::BrokenPipe
+pub fn print_block(texto: &str) {
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    if let Err(error) = handle.write_all(texto.as_bytes()) {
+        if error.kind() == io::ErrorKind::BrokenPipe {
+            std::process::exit(0);
+        }
+        eprintln!("Error: no se pudo escribir en la salida estándar: {error}");
+        std::process::exit(1);
+    }
 }
