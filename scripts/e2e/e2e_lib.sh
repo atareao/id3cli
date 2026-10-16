@@ -7,7 +7,7 @@
 #   source "$HERE/e2e_lib.sh"
 #   E2E_BIN=""                 # opcional: vacío = cargo build --locked una vez y target/debug/id3cli
 #   E2E_KEEP=0                 # 1 = conservar el temporal (--keep)
-#   e2e_setup "<ext>"          # ext ∈ {mp3, m4a, ogg, opus}
+#   e2e_setup "<ext>"          # ext ∈ {mp3, m4a, ogg, opus, flac}
 #   e2e_gen_audio [nombre]     # genera $E2E_AUDIO (silencio anullsrc, -map_metadata -1); nombre por defecto «audio»
 #   e2e_gen_covers             # genera $E2E_COVER_JPG y $E2E_COVER_PNG (testsrc)
 #   e2e_run <args...>          # ejecuta el binario: stdout→$E2E_OUT, stderr→$E2E_ERR, código→$E2E_RC
@@ -30,7 +30,8 @@
 #
 # FASE GREEN (2026-10-16): el runner queda completo. La capa 2 consulta ffprobe
 # con el conjunto de tags correcto por formato —format_tags en MP3/MP4 (claves
-# minúsculas) y stream_tags en OGG/Opus (caja Vorbis)— mediante la sintaxis
+# minúsculas), stream_tags en OGG/Opus (caja Vorbis) y format_tags en FLAC
+# (caja Vorbis, medido tarea 6.3)— mediante la sintaxis
 # «-show_entries <formato>=<clave>» verificada con ffmpeg 9.0.2 (la sintaxis con
 # «:» da «No match for section», no se expone la clave), y la carátula se extrae
 # con «ffmpeg -map 0:v:0 -c copy -frames:v 1» (sin -c copy ffmpeg re-codifica y
@@ -42,7 +43,7 @@ set -euo pipefail
 # ── Variables globales (exportadas por e2e_setup / e2e_run / aserciones) ──
 E2E_BIN=""          # binario del CLI ("" = construir con cargo build --locked)
 E2E_DIR=""          # temporal de la ejecución (bajo /tmp/opencode/e2e/<ext>/)
-E2E_EXT=""          # extensión/formato: mp3 | m4a | ogg | opus
+E2E_EXT=""          # extensión/formato: mp3 | m4a | ogg | opus | flac
 E2E_OUT=""          # RUTA al fichero con el stdout del último e2e_run
 E2E_ERR=""          # RUTA al fichero con el stderr del último e2e_run
 E2E_RC=0            # código de salida del último e2e_run
@@ -59,8 +60,8 @@ E2E_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_ROOT="$(cd "$E2E_SCRIPTS_DIR/../.." && pwd)"
 
 # ── Tabla de códec por extensión (medida; spec e2e-verification) ──
-# mp3 → libmp3lame, m4a → aac, ogg → libvorbis, opus → libopus
-declare -A E2E_CODEC=([mp3]=libmp3lame [m4a]=aac [ogg]=libvorbis [opus]=libopus)
+# mp3 → libmp3lame, m4a → aac, ogg → libvorbis, opus → libopus, flac → flac
+declare -A E2E_CODEC=([mp3]=libmp3lame [m4a]=aac [ogg]=libvorbis [opus]=libopus [flac]=flac)
 
 # ── Valores de prueba fijados (spec e2e-verification, «Valores de prueba») ──
 # Elegidos para que ningún valor sea subcadena de otro y el grep sea inequívoco
@@ -99,7 +100,7 @@ e2e_die() {
 # Antes de llamarla, el script por extensión puede fijar E2E_BIN (--bin) y
 # E2E_KEEP (--keep); vacío/0 es el comportamiento por defecto.
 e2e_setup() {
-    local ext="${1:?e2e_setup: falta la extensión (mp3|m4a|ogg|opus)}"
+    local ext="${1:?e2e_setup: falta la extensión (mp3|m4a|ogg|opus|flac)}"
     E2E_EXT="$ext"
 
     # Herramientas obligatorias (spec: ausencia → exit 1 con mensaje en español)
@@ -153,7 +154,7 @@ e2e_cleanup() {
 e2e_gen_audio() {
     local codec="${E2E_CODEC[$E2E_EXT]:-}"
     if [[ -z "$codec" ]]; then
-        e2e_die "e2e_gen_audio: extensión «${E2E_EXT}» sin códec conocido (mp3|m4a|ogg|opus)"
+        e2e_die "e2e_gen_audio: extensión «${E2E_EXT}» sin códec conocido (mp3|m4a|ogg|opus|flac)"
     fi
     local nombre="${1:-audio}"
     E2E_AUDIO="$E2E_DIR/${nombre}.$E2E_EXT"
@@ -163,6 +164,7 @@ e2e_gen_audio() {
         m4a)  extra_args=(-b:a 128k) ;;
         ogg)  extra_args=(-q:a 3) ;;
         opus) extra_args=() ;;
+        flac) extra_args=() ;;
         *)    e2e_die "e2e_gen_audio: extensión «${E2E_EXT}» no soportada" ;;
     esac
     ffmpeg -y -f lavfi -i "anullsrc=r=48000:cl=mono" -t 1.5 -map_metadata -1 \
@@ -257,16 +259,18 @@ check_rc() {
 # El conjunto de tags lo decide la extensión (medido 2026-10-16, ffmpeg 9.0.2):
 # MP3 y MP4 exponen la metadata en format_tags con claves normalizadas a
 # minúsculas; OGG y Opus en stream_tags con la caja Vorbis preservada
-# (format_tags vacío en el contenedor Ogg). La sintaxis de -show_entries para
+# (format_tags vacío en el contenedor Ogg); FLAC en format_tags con la caja
+# Vorbis preservada (medido en la tarea 6.3 del change flac-support, igual que
+# OGG/Opus salvo el conjunto de entradas). La sintaxis de -show_entries para
 # una clave concreta es «format_tags=clave» / «stream_tags=clave» (con «:» la
 # versión 9.0.2 responde «No match for section» y no se expone la clave).
 
 # Devuelve el conjunto de entradas de ffprobe donde expone la metadata un formato.
 ffprobe_entries_for() {
     case "${1:?ffprobe_entries_for: falta la extensión}" in
-        mp3|m4a)  printf 'format_tags' ;;
-        ogg|opus) printf 'stream_tags' ;;
-        *)        e2e_die "ffprobe_entries_for: extensión «$1» sin conjunto de tags conocido (mp3|m4a|ogg|opus)" ;;
+        mp3|m4a|flac)  printf 'format_tags' ;;
+        ogg|opus)      printf 'stream_tags' ;;
+        *)        e2e_die "ffprobe_entries_for: extensión «$1» sin conjunto de tags conocido (mp3|m4a|ogg|opus|flac)" ;;
     esac
 }
 
@@ -337,7 +341,9 @@ check_ffprobe_raw_contains() {
 
 # check_ffprobe_no_user_tags: tras remove --all, ffprobe no expone NINGUNA clave
 # de usuario (sin líneas «CLAVE=valor»). Válido para OGG/Opus, donde el
-# comentario vacío deja stream_tags sin salida; en MP4 quedan claves de formato
+# comentario vacío deja stream_tags sin salida, y para FLAC (medido en la tarea
+# 6.3: format_tags queda vacío porque el bloque VORBIS_COMMENT se elimina
+# completo — vendor no conservado); en MP4 quedan claves de formato
 # (major_brand, …), así que para MP4 se usan check_ffprobe_absent de cada campo.
 check_ffprobe_no_user_tags() {
     local entries

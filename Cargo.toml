@@ -2,7 +2,7 @@
 name = "id3cli"
 version = "0.5.2"
 edition = "2024"
-description = "CLI para leer y escribir metadatos ID3v2.4 en MP3, átomos estilo iTunes (ilst) en MP4 y comentarios Vorbis en OGG"
+description = "CLI para leer y escribir metadatos ID3v2.4 en MP3, átomos estilo iTunes (ilst) en MP4 y comentarios Vorbis en OGG, Opus y FLAC"
 license = "MIT"
 repository = "https://github.com/atareao/id3cli"
 homepage = "https://github.com/atareao/id3cli"

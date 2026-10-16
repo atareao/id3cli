@@ -2917,8 +2917,11 @@ fn test_cli_rejects_unsupported_formats_and_leaves_file_untouched() {
     // mensajes enumeran los formatos soportados y el archivo queda intacto; los
     // casos de «códec no soportado» (Opus, Speex) van aparte, en
     // `test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched`.
-    let cases: [(&str, &str, &[u8]); 4] = [
-        ("flac", "flac", b"fLaC\x00\x00\x00\x22"),
+    //
+    // FLAC ya NO está en la lista: desde el change `flac-support` se reconoce
+    // por contenido (`fLaC`) como formato soportado y se cubre en los tests
+    // nuevos de FLAC (grupo 4.3), no como rechazo.
+    let cases: [(&str, &str, &[u8]); 3] = [
         ("ogg_sin_paquete", "ogg", b"OggS\x00\x02"),
         ("wav", "wav", b"RIFF\x00\x00\x00\x00WAVE"),
         ("aif", "aif", b"FORM\x00\x00\x00\x00AIFF"),
@@ -3094,6 +3097,30 @@ fn fixture_opus_path() -> PathBuf {
 fn create_temp_opus() -> PathBuf {
     let path = unique_temp_path("audio", "opus");
     fs::copy(fixture_opus_path(), &path).expect("Failed to copy OPUS fixture");
+    path
+}
+
+/// Ruta absoluta al fixture FLAC nativo real y sin campos de usuario, versionado
+/// en el repo.
+///
+/// Es un FLAC genuino: patrón `fLaC` en el offset 0, bloque STREAMINFO (tipo 0)
+/// como primer bloque, y un bloque VORBIS_COMMENT (tipo 4) con el vendor
+/// `ffmpeg` y **cero** claves de usuario (`ffmpeg` no escribe `ENCODER` en FLAC
+/// nativo), de modo que `edit` ejercita la creación de campos desde cero.
+fn fixture_flac_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample.flac")
+}
+
+/// Copia el fixture FLAC nativo real a una ruta temporal única.
+///
+/// Réplica de `create_temp_opus`: copia el fixture versionado a una ruta
+/// temporal única; nunca se opera sobre el fixture versionado directamente.
+fn create_temp_flac() -> PathBuf {
+    let path = unique_temp_path("audio", "flac");
+    fs::copy(fixture_flac_path(), &path).expect("Failed to copy FLAC fixture");
     path
 }
 
@@ -3731,6 +3758,386 @@ fn test_cli_ogg_show_without_user_fields_says_no_metadata() {
 }
 
 // ---------------------------------------------------------------------------
+// FLAC (nativo): enrutado del CLI y operaciones completas (grupo 4 del change
+// `flac-support`)
+// ---------------------------------------------------------------------------
+//
+// Fase GREEN (grupo 5): `detect_format` produce `AudioFormat::Flac` por el
+// patrón `fLaC` (offset 0) y el CLI lo enruta a `Backend::Flac`, que reutiliza
+// las funciones de comentarios de Vorbis. La relectura independiente usa
+// `id3cli::read_vorbis_tag` o `lofty::flac::FlacFile`, igual que hicieron los
+// tests de Opus.
+
+/// `show` sobre un `.flac` que ya lleva un comentario escrito con un lector
+/// independiente (lofty) debe mostrarlo por stdout.
+#[test]
+fn test_cli_flac_show_existing_tag() {
+    use lofty::config::WriteOptions;
+    use lofty::ogg::tag::VorbisComments;
+    use lofty::tag::TagExt;
+
+    let path = create_temp_flac();
+
+    // Pre-escritura con `lofty` directamente: independiente del binario y de
+    // `id3cli`. En FLAC nativo las claves viven en el bloque VORBIS_COMMENT.
+    let mut tag = VorbisComments::new();
+    tag.insert("TITLE".to_string(), "Título FLAC".to_string());
+    tag.insert("ARTIST".to_string(), "Artista".to_string());
+    TagExt::save_to_path(&tag, &path, WriteOptions::default())
+        .expect("lofty debe poder pre-escribir el .flac");
+
+    let show = run_cli(&["show", path.to_str().unwrap()]);
+    assert!(
+        show.status.success(),
+        "`show` sobre un .flac con tag debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("Título FLAC"),
+        "`show` debe mostrar el título preexistente, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("Artista"),
+        "`show` debe mostrar el artista preexistente, stdout: {stdout}"
+    );
+
+    cleanup_file(&path);
+}
+
+/// `edit` con título, artista y álbum sobre un `.flac`, releído luego con un
+/// lector independiente.
+#[test]
+fn test_cli_flac_edit_sets_fields() {
+    let path = create_temp_flac();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit",
+        file,
+        "--title",
+        "Título FLAC",
+        "--artist",
+        "Artista",
+        "--album",
+        "Álbum",
+    ]);
+    assert!(
+        edit.status.success(),
+        "`edit` sobre un .flac debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let tag = id3cli::read_vorbis_tag(&path).expect("lofty debe releer el .flac");
+    assert_eq!(tag.get("TITLE"), Some("Título FLAC"));
+    assert_eq!(tag.get("ARTIST"), Some("Artista"));
+    assert_eq!(tag.get("ALBUM"), Some("Álbum"));
+
+    cleanup_file(&path);
+}
+
+/// `edit --track 7/12 --season 1/2` sobre un `.flac` escribe el par
+/// número/total en las claves de Vorbis: `TRACKNUMBER`/`TRACKTOTAL` y
+/// `DISCNUMBER`/`DISCTOTAL` (el total como texto, como en OGG y Opus).
+#[test]
+fn test_cli_flac_edit_track_season_totals() {
+    let path = create_temp_flac();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&["edit", file, "--track", "7/12", "--season", "1/2"]);
+    assert!(
+        edit.status.success(),
+        "`edit --track 7/12 --season 1/2` sobre un .flac debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    let tag = id3cli::read_vorbis_tag(&path).expect("lofty debe releer el .flac");
+    assert_eq!(tag.get("TRACKNUMBER"), Some("7"));
+    assert_eq!(tag.get("TRACKTOTAL"), Some("12"));
+    assert_eq!(tag.get("DISCNUMBER"), Some("1"));
+    assert_eq!(tag.get("DISCTOTAL"), Some("2"));
+
+    cleanup_file(&path);
+}
+
+/// `edit --cover` con las mismas imágenes que los tests OGG/Opus (JPEG y PNG)
+/// sobre un `.flac`, releída con un lector independiente: una carátula frontal
+/// con su MIME y los bytes originales. En FLAC la carátula viaja como
+/// `METADATA_BLOCK_PICTURE` dentro del bloque VORBIS_COMMENT (mismo camino que
+/// OGG/Opus) y lofty la materializa en el archivo como bloque de picture.
+#[test]
+fn test_cli_flac_edit_cover_jpg_and_png() {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    use lofty::flac::FlacFile;
+    use lofty::ogg::OggPictureStorage;
+
+    for (extension, bytes, mime) in [
+        ("jpg", JPEG_BYTES, "image/jpeg"),
+        ("png", PNG_BYTES, "image/png"),
+    ] {
+        let path = create_temp_flac();
+        let image = write_temp_image(&format!("flac_cover_{extension}"), extension, bytes);
+
+        let edit = run_cli(&[
+            "edit",
+            path.to_str().unwrap(),
+            "--cover",
+            image.to_str().unwrap(),
+        ]);
+        assert!(
+            edit.status.success(),
+            "`edit --cover .{extension}` sobre un .flac debe salir con 0, stderr: {}",
+            String::from_utf8_lossy(&edit.stderr)
+        );
+
+        // `show` debe listar la carátula por stdout: en FLAC las imágenes viven
+        // en bloques PICTURE del archivo, no en el comentario, así que la rama
+        // FLAC de `show` las lee aparte y las muestra con el mismo formato que
+        // OGG/Opus («Carátulas: N imagen(es)»).
+        let show = run_cli(&["show", path.to_str().unwrap()]);
+        assert!(
+            show.status.success(),
+            "`show` tras `edit --cover .{extension}` debe salir con 0, stderr: {}",
+            String::from_utf8_lossy(&show.stderr)
+        );
+        let show_stdout = String::from_utf8_lossy(&show.stdout);
+        assert!(
+            show_stdout.contains("Carátulas: 1 imagen(es)"),
+            "{extension}: `show` debe listar la carátula, stdout: {show_stdout}"
+        );
+        assert!(
+            show_stdout.contains(mime),
+            "{extension}: `show` debe mostrar el MIME de la carátula, stdout: {show_stdout}"
+        );
+
+        let mut handle = std::fs::File::open(&path).expect("Failed to open temp file");
+        let flac = FlacFile::read_from(&mut handle, ParseOptions::default())
+            .expect("lofty debe releer el .flac");
+        // En FLAC, lofty guarda los bloques de carátula en el propio `FlacFile`
+        // (`flac.pictures()`, vía `OggPictureStorage`), no dentro del tag que
+        // devuelve `vorbis_comments()`: al escribir, las imágenes del comentario
+        // se materializan como bloques PICTURE del archivo, y al leer vuelven a
+        // `FlacFile::pictures`. De ahí que el roundtrip se verifique contra
+        // `flac.pictures()`.
+        let pictures = flac.pictures();
+        assert_eq!(pictures.len(), 1, "{extension}: debe haber una imagen");
+        assert_eq!(
+            pictures[0].0.mime_type().map(|m| m.as_str()),
+            Some(mime),
+            "{extension}: el MIME debe derivarse de la extensión"
+        );
+        assert_eq!(
+            pictures[0].0.data(),
+            bytes,
+            "{extension}: los bytes de la carátula deben coincidir con los originales"
+        );
+
+        cleanup_file(&path);
+        cleanup_file(&image);
+    }
+}
+
+/// `remove` de un campo concreto sobre un `.flac`: el campo desaparece y los no
+/// mencionados sobreviven. El argumento se nombra en inglés (`title`), igual
+/// que en los tests de Opus.
+#[test]
+fn test_cli_flac_remove_field_keeps_rest() {
+    let path = create_temp_flac();
+    let file = path.to_str().unwrap();
+
+    let edit = run_cli(&[
+        "edit", file, "--title", "T", "--artist", "A", "--album", "Alb",
+    ]);
+    assert!(edit.status.success());
+
+    let remove = run_cli(&["remove", file, "title"]);
+    assert!(
+        remove.status.success(),
+        "`remove title` sobre un .flac debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let tag = id3cli::read_vorbis_tag(&path).expect("el .flac debe seguir legible");
+    assert_eq!(tag.get("TITLE"), None, "el título debe desaparecer");
+    assert_eq!(
+        tag.get("ARTIST"),
+        Some("A"),
+        "el artista no mencionado sobrevive"
+    );
+    assert_eq!(
+        tag.get("ALBUM"),
+        Some("Alb"),
+        "el álbum no mencionado sobrevive"
+    );
+
+    cleanup_file(&path);
+}
+
+/// `remove --all` sobre un `.flac` deja el archivo sin metadatos de usuario ni
+/// carátulas y sigue siendo un FLAC reproducible por contenido.
+///
+/// A diferencia de Ogg/Opus (donde el comentario es obligatorio y se vacía
+/// conservando el vendor), `remove --all` sobre FLAC elimina por completo el
+/// bloque `VORBIS_COMMENT`: `lofty` 0.25.4 no escribe un bloque de comentario
+/// vacío (sin campos de usuario) en un contenedor FLAC, así que el vendor —que
+/// vive dentro de ese bloque— se va con él. El resultado es un FLAC válido sin
+/// ningún metadato, reproducible por contenido.
+#[test]
+fn test_cli_flac_remove_all_leaves_no_metadata_and_still_flac() {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    use lofty::flac::FlacFile;
+    use lofty::ogg::OggPictureStorage;
+
+    let path = create_temp_flac();
+    let file = path.to_str().unwrap();
+    let bytes = fs::read(&path).expect("Failed to read temp file");
+    assert_eq!(
+        &bytes[..4],
+        b"fLaC",
+        "el fixture debe ser un FLAC nativo por contenido"
+    );
+
+    let edit = run_cli(&["edit", file, "--title", "T", "--artist", "A"]);
+    assert!(edit.status.success());
+
+    let remove = run_cli(&["remove", file, "--all"]);
+    assert!(
+        remove.status.success(),
+        "`remove --all` sobre un .flac debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    // No queda ningún campo de usuario ni carátula, y el bloque de comentario
+    // desaparece entero (lofty no conserva un `VORBIS_COMMENT` vacío en FLAC).
+    let mut handle = std::fs::File::open(&path).expect("Failed to open temp file");
+    let flac = FlacFile::read_from(&mut handle, ParseOptions::default())
+        .expect("lofty debe releer el .flac");
+    assert!(
+        flac.vorbis_comments().is_none(),
+        "`remove --all` debe eliminar el bloque VORBIS_COMMENT por completo"
+    );
+    assert!(
+        flac.pictures().is_empty(),
+        "no debe quedar ninguna carátula a nivel de archivo"
+    );
+
+    // Y el archivo sigue siendo FLAC por contenido.
+    let after = fs::read(&path).expect("Failed to read temp file");
+    assert_eq!(&after[..4], b"fLaC", "el patrón `fLaC` debe seguir intacto");
+
+    cleanup_file(&path);
+}
+
+/// `remove --all` sobre un `.flac` que solo tiene carátula (sin campos de
+/// texto) debe borrarla.
+///
+/// Las imágenes de un FLAC viven en bloques `PICTURE` del archivo, no en el
+/// comentario de Vorbis: el cálculo de «tenía metadatos» tiene que contarlas a
+/// nivel de archivo, o `remove --all` diría que no había metadatos y dejaría la
+/// carátula escrita.
+#[test]
+fn test_cli_flac_remove_all_only_cover_clears_pictures() {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    use lofty::flac::FlacFile;
+    use lofty::ogg::OggPictureStorage;
+
+    let path = create_temp_flac();
+    let file = path.to_str().unwrap();
+    let image = write_temp_image("flac_cover_only", "jpg", JPEG_BYTES);
+
+    // `edit --cover` sin ningún campo de texto: el archivo queda con un bloque
+    // PICTURE y un bloque VORBIS_COMMENT sin claves de usuario.
+    let edit = run_cli(&["edit", file, "--cover", image.to_str().unwrap()]);
+    assert!(
+        edit.status.success(),
+        "`edit --cover` sin campos debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // Sanidad: la carátula existe a nivel de archivo antes de borrar.
+    let mut handle = std::fs::File::open(&path).expect("Failed to open temp file");
+    let flac = FlacFile::read_from(&mut handle, ParseOptions::default())
+        .expect("lofty debe releer el .flac");
+    assert_eq!(flac.pictures().len(), 1, "la carátula debe estar presente");
+
+    let remove = run_cli(&["remove", file, "--all"]);
+    assert!(
+        remove.status.success(),
+        "`remove --all` sobre un .flac con solo carátula debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&remove.stdout).contains("no tenía metadatos"),
+        "la carátula cuenta como metadato: no debe decir que no había, stdout: {}",
+        String::from_utf8_lossy(&remove.stdout)
+    );
+
+    // La carátula desaparece por completo del archivo.
+    let mut handle = std::fs::File::open(&path).expect("Failed to open temp file");
+    let flac = FlacFile::read_from(&mut handle, ParseOptions::default())
+        .expect("lofty debe releer el .flac");
+    assert!(
+        flac.pictures().is_empty(),
+        "`remove --all` debe borrar la carátula a nivel de archivo"
+    );
+
+    cleanup_file(&path);
+    cleanup_file(&image);
+}
+
+/// Flujo completo `show`/`edit`/`remove` sobre el mismo archivo `.flac`:
+/// aviso de vacío, escritura, relectura por `show` y borrado final.
+#[test]
+fn test_cli_flac_full_flow() {
+    let path = create_temp_flac();
+    let file = path.to_str().unwrap();
+
+    // `show` sobre un .flac sin campos de usuario: aviso, salida 0.
+    let show_empty = run_cli(&["show", file]);
+    assert!(
+        show_empty.status.success(),
+        "`show` sobre un .flac vacío debe salir con 0, stderr: {}",
+        String::from_utf8_lossy(&show_empty.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&show_empty.stdout).contains("⚠️  No se encontraron metadatos."),
+        "debe avisar de que no hay metadatos, stdout: {}",
+        String::from_utf8_lossy(&show_empty.stdout)
+    );
+
+    // `edit`: escribe y no falla por formato.
+    let edit = run_cli(&["edit", file, "--title", "X"]);
+    assert!(edit.status.success());
+
+    // `show` de nuevo: ya hay metadatos.
+    let show = run_cli(&["show", file]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains('X'),
+        "`show` debe mostrar el título escrito"
+    );
+
+    // `remove --all`: borra todo y el archivo sigue siendo FLAC.
+    let remove = run_cli(&["remove", file, "--all"]);
+    assert!(remove.status.success());
+
+    // `show` otra vez: aviso de vacío.
+    let show_empty_again = run_cli(&["show", file]);
+    assert!(show_empty_again.status.success());
+    assert!(
+        String::from_utf8_lossy(&show_empty_again.stdout)
+            .contains("⚠️  No se encontraron metadatos."),
+        "tras `remove --all` debe avisar de que no hay metadatos, stdout: {}",
+        String::from_utf8_lossy(&show_empty_again.stdout)
+    );
+
+    cleanup_file(&path);
+}
+
+// ---------------------------------------------------------------------------
 // MP4 (M4A): enrutado del CLI y operaciones completas (tareas 4.9–4.11)
 // ---------------------------------------------------------------------------
 
@@ -4115,8 +4522,13 @@ fn test_cli_m4a_remove_all_without_metadata_warns() {
 }
 
 #[test]
-fn test_cli_unsupported_format_message_lists_mp3_mp4_and_ogg() {
-    let path = write_temp_bytes("flac_msg", "flac", b"fLaC\x00\x00\x00\x22");
+fn test_cli_unsupported_format_message_lists_all_supported_formats() {
+    // El ejemplo de formato no soportado es un WAV (magic `RIFF` + `WAVE`), no
+    // un FLAC: desde el change `flac-support`, FLAC es un formato soportado y
+    // el mensaje debe enumerar los cinco formatos.
+    let mut bytes = b"RIFF\x00\x00\x00\x00WAVE".to_vec();
+    bytes.extend_from_slice(&[0u8; 32]);
+    let path = write_temp_bytes("wav_msg", "wav", &bytes);
 
     let output = run_cli(&["edit", path.to_str().unwrap(), "--title", "X"]);
     assert!(!output.status.success());
@@ -4126,8 +4538,9 @@ fn test_cli_unsupported_format_message_lists_mp3_mp4_and_ogg() {
         stderr.contains("MP3")
             && stderr.contains("MP4")
             && stderr.contains("OGG")
-            && stderr.contains("Opus"),
-        "el mensaje de formato no soportado debe enumerar MP3, MP4, OGG y Opus, fue: {stderr}"
+            && stderr.contains("Opus")
+            && stderr.contains("FLAC"),
+        "el mensaje de formato no soportado debe enumerar MP3, MP4, OGG, Opus y FLAC, fue: {stderr}"
     );
 
     cleanup_file(&path);
