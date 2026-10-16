@@ -349,8 +349,8 @@ Cierre con la ejecución real de los cuatro scripts, la falsabilidad demostrada 
       | e2e-verification | Req 8 · esc. «El flujo sin el fallo inyectado termina en verde» | `RED_DEMO_INJECT=0` → exit 0 y resumen con 0 fallidas (evidencia tarea 2.3) |
 
       > [!note] RESUELTO (2026-10-16, fix del `.justfile`): el hallazgo «cargo build ×4» ya no aplica — la recipe `e2e` pre-construye explícitamente UNA vez (`cargo build --locked` como línea propia de la recipe) y pasa `--bin target/debug/id3cli` a los cuatro scripts, por lo que el escenario «El binario se construye una única vez» (e2e-tooling Req 5) se cumple literalmente: una sola invocación de `cargo build` por `just e2e` (medido: 1 línea «cargo build --locked» + 1 «Finished», 0 «Construyendo» en los scripts; ver 4.1). Sin `just`, cada script invocado directamente sin `--bin` sigue construyendo una vez por su cuenta, como exige el escenario Req 2 «Ejecución con el binario por defecto». Sin impacto en aserciones ni en exit codes: `just e2e` sigue en EXIT=0 (mp3: 65, m4a: 68, ogg: 76, opus: 76, 0 fallidas).
-- [ ] 6.2 Commit convencional y PR a `development`.
+- [x] 6.2 Commit convencional y PR a `development` — commit `test(e2e):` (d7a85ef), PR #25 fusionado a development el 2026-10-16, CI pass 36s.
       Verificación: commit con prefijo **`test(e2e): …`** (nunca `feat:`, verificado que `release-prepare.yml:38` hace `grep -q "^feat"` → `--minor`) desde la rama `feature/e2e-local-helpers` creada sobre `development`; PR a `development`; **sin PR a `main`**.
-- [ ] 6.3 Archivar el change al fusionar el PR.
+- [x] 6.3 Archivar el change al fusionar el PR — `openspec archive e2e-local-helpers --yes` ejecutado el 2026-10-16; capabilities consolidades en openspec/specs/ (e2e-tooling, e2e-verification).
       Verificación: `openspec archive e2e-local-helpers --yes` tras la aprobación y el merge; las capabilities `e2e-tooling` y `e2e-verification` quedan en `openspec/specs/`.
       Evidencia: (pendiente) salida de `openspec archive e2e-local-helpers --yes` y `openspec status` mostrando el change archivado.
