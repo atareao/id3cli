@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`) y **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-283%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -332,6 +332,8 @@ id3cli edit cancion.mp3 --cover portada.png
 id3cli edit cancion.mp3 --cover portada.webp
 ```
 
+`--cover` **sustituye** la carátula frontal existente: una segunda edición sobre el mismo archivo deja exactamente **una** carátula, la de la última imagen indicada (no acumula). En MP3, OGG y Opus se conservan las carátulas de otros tipos (p. ej. `BackCover`); en MP4, donde `lofty` relee toda carátula como tipo genérico, se sustituye la lista `covr` completa. Para eliminar la carátula: `id3cli edit cancion.mp3 --remove cover`.
+
 ### 🎶 Añadir letra (lyrics)
 
 ```bash
@@ -595,6 +597,7 @@ Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan docume
 - **La letra pierde el código de idioma.** El átomo `©lyr` no tiene campo de idioma, así que la letra de un MP4 se guarda sin el `spa` que sí lleva el frame `USLT` de MP3. El texto se conserva **íntegro**; lo único que se pierde es la marca de idioma.
 - **`--url` y `--original-artist` se omiten con aviso.** Ninguno de los dos tiene átomo equivalente en `ilst`. Sobre un MP4 el CLI **no falla ni inventa** un átomo *freeform* de reemplazo: avisa por stderr, omite ese campo, escribe el resto con normalidad y termina con código de salida cero. Si son los únicos flags indicados, no hay cambio real que escribir y el archivo **no se reescribe**. En MP3 se comportan con normalidad (`--url` → `WOAR`, `--original-artist` → `TOPE`, sin aviso).
 - **El total de pista y de temporada se limita a 16 bits.** Los átomos `trkn` y `disk` guardan el par número/total en **16 bits**, así que solo admiten valores `1..=65535` y el `0` no es representable. Cuando el **número** de `--track` / `--season` no cabe, el CLI avisa por stderr y **omite el par completo** (número y total) para no dejar un total huérfano; cuando solo es el **total** el que no cabe, escribe el número y omite el total. En MP3 (`TRCK`/`TPOS`) y en OGG (`TRACKNUMBER`/`DISCNUMBER` con `TRACKTOTAL`/`DISCTOTAL`) el par se guarda como **texto**, de modo que allí no existe ese límite y un total `0` se escribe y se muestra tal cual (`7/0`).
+- **La carátula se sustituye por completo en MP4.** El átomo `covr` admite varias imágenes, pero el CLI relee toda carátula MP4 como tipo genérico (`PictureType::Other`), así que una segunda edición de `--cover` sustituye la **lista `covr` completa** (elimina las anteriores y escribe la nueva). En MP3, OGG y Opus solo se sustituye la carátula frontal (`CoverFront`), conservando los demás tipos.
 
 ---
 
@@ -759,12 +762,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **281 tests** (163 unitarios + 118 de integración):
+El proyecto tiene **cobertura completa** con **283 tests** (163 unitarios + 120 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (281)
+cargo test              # Ejecutar todos los tests (283)
 cargo test --lib        # Solo tests unitarios (163)
-cargo test --test '*'   # Solo tests de integración (118)
+cargo test --test '*'   # Solo tests de integración (120)
 ```
 
 **Ejemplos de tests:**

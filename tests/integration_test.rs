@@ -2633,6 +2633,75 @@ fn test_cli_cover_preserves_existing_metadata() {
 }
 
 #[test]
+fn test_cli_mp3_second_cover_replaces_first() {
+    let mp3_path = create_temp_mp3();
+    let cover_a = unique_temp_path("cover_a_red", "png");
+    let cover_b = unique_temp_path("cover_b_red", "png");
+
+    // Dos PNG mínimos pero DISTINTOS: A es la firma PNG mínima y B añade unos
+    // bytes de datos propios, de modo que pueda distinguirse cuál ha quedado.
+    write_minimal_png(&cover_a);
+    let cover_b_bytes = {
+        let mut data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        data.extend_from_slice(b"SEGUNDA_CARATULA");
+        fs::write(&cover_b, &data).expect("Failed to create second PNG");
+        data
+    };
+
+    // Primera carátula...
+    let edit_a = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--cover",
+        cover_a.to_str().unwrap(),
+    ]);
+    assert!(edit_a.status.success());
+
+    // ...y una segunda: la semántica correcta es SUSTITUIR la CoverFront
+    // existente, no acumular.
+    let edit_b = run_cli(&[
+        "edit",
+        mp3_path.to_str().unwrap(),
+        "--cover",
+        cover_b.to_str().unwrap(),
+    ]);
+    assert!(edit_b.status.success());
+
+    // El lector de esta aserción es `lofty` (el mismo que usa `show`), NO `id3`:
+    // al leer, `id3` colapsa los frames APIC del mismo `PictureType`
+    // (`add_frame` + `unique()` comparan solo el tipo de picture) y devolvería
+    // 1 imagen aunque el archivo tenga 2 frames APIC — esa aserción no sería
+    // RED. `lofty` refleja el estado real del archivo, que es el que expone el
+    // bug (`show` reporta «Carátulas: 2 imagen(es)»).
+    let tagged = lofty::read_from_path(&mp3_path).expect("lofty debe leer el MP3");
+    let tag = tagged
+        .primary_tag()
+        .expect("el MP3 debe tener tag primario Id3v2");
+    let pictures = tag.pictures();
+    assert_eq!(
+        pictures.len(),
+        1,
+        "la segunda carátula debe SUSTITUIR a la primera: debe quedar 1 sola \
+         imagen CoverFront; hoy quedan {} (lofty insert_picture acumula)",
+        pictures.len()
+    );
+
+    // La única imagen restante debe ser la de la ÚLTIMA edición (cover_b) y
+    // debe seguir siendo CoverFront.
+    let last = &pictures[pictures.len() - 1];
+    assert_eq!(last.pic_type(), lofty::picture::PictureType::CoverFront);
+    assert_eq!(
+        last.data(),
+        cover_b_bytes.as_slice(),
+        "la imagen restante debe ser la de la última edición (cover_b)"
+    );
+
+    cleanup_file(&mp3_path);
+    cleanup_file(&cover_a);
+    cleanup_file(&cover_b);
+}
+
+#[test]
 fn test_cli_album_artist_separator_not_applied() {
     let mp3_path = create_temp_mp3();
 
@@ -3720,6 +3789,39 @@ fn read_m4a_tag(path: &Path) -> Option<lofty::tag::Tag> {
     tagged.tag(TagType::Mp4Ilst).cloned()
 }
 
+/// Comprueba que el átomo MP4 `meta` del archivo contiene un hijo `hdlr`.
+///
+/// Busca la primera ocurrencia de la secuencia `b"meta"` (el campo *type* del
+/// átomo, big-endian de 32 bits), comprueba que los 4 bytes anteriores forman
+/// un tamaño de átomo válido (> 8) y verifica que `b"hdlr"` aparece dentro del
+/// payload del átomo.
+///
+/// El átomo `meta` (a diferencia de `moov`/`udta`) lleva 4 bytes de
+/// versión+flags antes de sus hijos, así que los hijos empiezan en
+/// `pos + 8` = inicio del átomo + 8 (cabecera) + 4 (versión+flags), donde
+/// `pos` apunta a la secuencia literal `"meta"`.
+///
+/// Devuelve `false` si no encuentra `meta`, si el tamaño es inválido (≤ 8 o
+/// fuera del archivo) o si el payload no contiene el hijo `hdlr`.
+fn mp4_meta_contains_hdlr(bytes: &[u8]) -> bool {
+    let Some(pos) = bytes.windows(4).position(|w| w == b"meta") else {
+        return false;
+    };
+    if pos < 4 {
+        return false;
+    }
+    let size32 = u32::from_be_bytes(bytes[pos - 4..pos].try_into().unwrap());
+    if size32 <= 8 {
+        return false;
+    }
+    let atom_end = (pos - 4) + size32 as usize;
+    if atom_end > bytes.len() {
+        return false;
+    }
+    let children = &bytes[pos + 8..atom_end];
+    contains_bytes(children, b"hdlr")
+}
+
 /// Ejecuta `cargo run -- <args>` y devuelve la salida, fallando con contexto.
 fn run_cli(args: &[&str]) -> std::process::Output {
     let mut full = vec!["run", "--quiet", "--"];
@@ -3934,6 +4036,64 @@ fn test_cli_m4a_remove_all_removes_ilst_and_preserves_audio() {
     );
     // El archivo sigue siendo MP4 por contenido.
     assert_eq!(&after[4..8], b"ftyp", "ftyp debe seguir en el offset 4");
+
+    cleanup_file(&path);
+}
+
+#[test]
+fn test_cli_m4a_remove_all_then_edit_meta_keeps_hdlr() {
+    let path = create_temp_m4a("hdlr_red");
+
+    // Paso A: edición inicial que crea el bloque de metadatos.
+    let edit_a = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Antes",
+        "--album",
+        "AlbumAntes",
+    ]);
+    assert!(edit_a.status.success());
+
+    // Paso B: `remove --all` elimina los metadatos.
+    let remove = run_cli(&["remove", path.to_str().unwrap(), "--all"]);
+    assert!(remove.status.success());
+
+    // Paso C: una nueva edición vuelve a escribir las etiquetas.
+    let edit_b = run_cli(&[
+        "edit",
+        path.to_str().unwrap(),
+        "--title",
+        "Despues",
+        "--album",
+        "AlbumDespues",
+    ]);
+    assert!(edit_b.status.success());
+
+    // Las etiquetas se siguen leyendo con lofty (el bug es estructural: el
+    // átomo `meta` queda SIN su hijo `hdlr`, por lo que los demuxers externos
+    // como ffprobe/ffmpeg no ven las etiquetas aunque `show` sí).
+    let tag = read_m4a_tag(&path).expect("lofty debe leer el tag ilst tras edit");
+    assert_eq!(tag.get_string(ItemKey::TrackTitle), Some("Despues"));
+    assert_eq!(tag.get_string(ItemKey::AlbumTitle), Some("AlbumDespues"));
+
+    // Aserción estructural (reproduce el bug, DEBE fallar hoy): tras
+    // `remove --all` + `edit`, el átomo `meta` se escribe sin su hijo `hdlr`.
+    let bytes = fs::read(&path).expect("leer el M4A tras la secuencia");
+    assert!(
+        mp4_meta_contains_hdlr(&bytes),
+        "el átomo `meta` debe contener su hijo `hdlr` tras `remove --all` + `edit` \
+         (hoy se escribe sin `hdlr` y ffprobe no ve las etiquetas)"
+    );
+
+    // Refuerzo por recuento: el árbol debe conservar 2 átomos `hdlr` (el del
+    // `trak` y el hijo de `meta`). Hoy solo queda 1.
+    let hdlr_count = bytes.windows(4).filter(|w| *w == b"hdlr").count();
+    assert!(
+        hdlr_count >= 2,
+        "el árbol MP4 debe contener al menos 2 átomos `hdlr` (trak + meta); hoy hay {}",
+        hdlr_count
+    );
 
     cleanup_file(&path);
 }

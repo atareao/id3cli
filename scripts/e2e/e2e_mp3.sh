@@ -14,7 +14,9 @@
 #   desaparece físicamente del archivo) → ffprobe final de reproducibilidad
 #   (duración ~1.5 s) → variante de track/season SIN total (sobre audio recién
 #   generado) → carátula JPG y PNG, cada una sobre audio recién generado, con
-#   roundtrip de bytes.
+#   roundtrip de bytes → segunda edición de --cover con imagen DISTINTA:
+#   sustitución en vez de acumulación (1 carátula, roundtrip de la última,
+#   anti-roundtrip de la primera; bug 1.2: antes «Carátulas: 2 imagen(es)»).
 
 set -euo pipefail
 
@@ -199,6 +201,21 @@ main() {
     e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_PNG"
     check_rc 0
     check_cover_roundtrip "$E2E_COVER_PNG"
+
+    # 9) Sustitución de carátula (bug 1.2): una segunda edición de --cover con
+    #    una imagen DISTINTA sustituye en vez de acumular. Antes del fix, este
+    #    bloque habría sido RED: show reportaría «Carátulas: 2 imagen(es)», el
+    #    roundtrip de la PRIMERA imagen (JPG) seguiría pasando y
+    #    check_cover_not_roundtrip del JPG fallaría con exit 1.
+    e2e_gen_audio cover_sust
+    e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_JPG"
+    check_rc 0
+    e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_PNG"
+    check_rc 0
+    e2e_run show "$E2E_AUDIO"
+    check_show_contains "Carátulas: 1 imagen(es)"
+    check_cover_roundtrip "$E2E_COVER_PNG"
+    check_cover_not_roundtrip "$E2E_COVER_JPG"
 
     if e2e_summary "mp3"; then
         exit 0

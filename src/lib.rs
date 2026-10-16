@@ -457,6 +457,13 @@ pub fn detect_cover_mime_type(path: &Path) -> Result<&'static str, String> {
 ///
 /// El tipo MIME se detecta automáticamente desde la extensión del archivo.
 ///
+/// La carátula que se inserta es siempre `CoverFront`, de modo que una nueva
+/// edición **sustituye** la carátula frontal existente en lugar de acumularse:
+/// `lofty` no deduplica (su [`insert_picture`](lofty::id3::v2::tag::Id3v2Tag)
+/// solo reemplaza los tipos `Icon`/`OtherIcon`), así que la carátula anterior
+/// se elimina explícitamente antes de insertar la nueva. Las carátulas de otros
+/// tipos (`BackCover`, etc.) se conservan.
+///
 /// # Errores
 ///
 /// Retorna un error si:
@@ -469,6 +476,9 @@ pub fn add_cover_art(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mime_type = detect_cover_mime_type(cover_path)?;
     let picture = create_picture_frame(cover_data, mime_type);
+    // Sustituye la `CoverFront` previa (si existe) en vez de acumular. Sin
+    // carátula previa es un no-op.
+    tag.remove_picture_type(PictureType::CoverFront);
     let _ = tag.insert_picture(picture);
     Ok(())
 }
@@ -1422,6 +1432,19 @@ pub fn mp4_webp_cover_warning() -> String {
 /// establecer** (lo que la librería mapea al tipo de dato reservado, 0) y es
 /// responsabilidad del llamador avisar de que no se mostrará.
 ///
+/// La carátula se inserta siempre como `CoverFront`; antes de insertarla se
+/// vacía la lista de imágenes, de modo que una segunda edición **sustituye** a
+/// la primera en lugar de acumular: `Tag::push_picture` no deduplica.
+///
+/// A diferencia de MP3 y OGG, aquí **no** se usa `remove_picture_type`:
+/// `lofty` 0.25.4 escribe el átomo `covr` atendiendo solo al MIME
+/// (`mp4/ilst/write.rs`) y al leer lo reconstruye siempre como
+/// `PictureType::Other` (`mp4/ilst/read.rs`), de modo que el tipo no sobrevive
+/// al round-trip disco→memoria y `remove_picture_type(CoverFront)` jamás
+/// encontraría la carátula de una edición anterior. Como el contenedor no puede
+/// distinguir tipos de carátula, «sustituir la carátula» consiste en vaciar
+/// `covr` antes de insertar la nueva (misma operación que `remove_mp4_kind`).
+///
 /// # Retorna
 ///
 /// `true` si la carátula se escribió con el tipo reservado (es decir, si era
@@ -1444,6 +1467,12 @@ fn push_mp4_cover(tag: &mut Tag, data: &[u8], mime: &str) -> bool {
         create_picture_frame(data.to_vec(), mime)
     };
 
+    // Sustituye la carátula previa en vez de acumular (ver doc de la función:
+    // `remove_picture_type` no sirve aquí por el round-trip de `lofty`). Sin
+    // carátula previa es un no-op.
+    for index in (0..tag.pictures().len()).rev() {
+        tag.remove_picture(index);
+    }
     tag.push_picture(picture);
     reserved_type
 }
@@ -1631,6 +1660,10 @@ pub fn read_mp4_tag(path: &Path) -> Result<Option<Tag>, Box<dyn std::error::Erro
 /// tamaños de `moov`/`udta` preservando el resto de átomos (en especial las
 /// pistas de audio).
 ///
+/// Tras la escritura se ejecuta [`ensure_mp4_meta_hdlr`], el post-proceso que
+/// repara el bug de `lofty` 0.25.4 por el que un `meta` heredado se reescribe
+/// sin su hijo `hdlr` (ver la documentación de esa función).
+///
 /// # Errores
 ///
 /// Retorna un error si el archivo no existe, no es escribible o no se puede
@@ -1642,6 +1675,151 @@ pub fn write_mp4_tag(path: &Path, tag: &Tag) -> Result<(), Box<dyn std::error::E
         path,
         WriteOptions::new().parse_options(ParseOptions::new().read_properties(false)),
     )?;
+    // Post-proceso: `lofty` descarta el hijo `hdlr` del `meta` al reescribir
+    // sobre un `meta` heredado; se reinserta aquí si hace falta.
+    ensure_mp4_meta_hdlr(path)?;
+    Ok(())
+}
+
+/// Átomo `hdlr` de 33 bytes que [`ensure_mp4_meta_hdlr`] inserta como hijo del
+/// `meta`, reproducido byte a byte del que `lofty` genera en un `meta` sano
+/// (size `0x21` = 33).
+///
+/// ```text
+/// 00 00 00 21 | 68 64 6c 72 | 00 00 00 00 | 00 00 00 00 |
+/// size=33       type=hdlr     version+flags  pre_defined
+/// 6d 64 69 72 | 61 70 70 6c | 00 00 00 00 00 00 00 00 00
+/// handler=mdir  =appl         9 bytes a cero
+/// ```
+const MP4_META_HDLR: [u8; 33] = [
+    0x00, 0x00, 0x00, 0x21, // size = 33
+    b'h', b'd', b'l', b'r', // type = "hdlr"
+    0x00, 0x00, 0x00, 0x00, // version + flags
+    0x00, 0x00, 0x00, 0x00, // pre_defined
+    b'm', b'd', b'i', b'r', // handler_type = "mdir"
+    b'a', b'p', b'p', b'l', // name = "appl"
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 9 bytes a cero
+];
+
+/// Busca el offset del campo `size` del primer átomo de tipo `buscado` dentro
+/// del rango `[desde, hasta)` de un contenedor MP4.
+///
+/// Recorre los átomos con su cabecera de 32 bits (`size` u32 BE + `type`): lee
+/// el tamaño y salta al siguiente. Un `size` de 0 (atom hasta el final del
+/// contenedor) o de 1 (tamaño de 64 bits) no se da en los MP4 de este proyecto
+/// y aborta la búsqueda devolviendo `None`, dejando el post-proceso sin efecto
+/// en vez de corromper el archivo.
+fn find_mp4_atom(bytes: &[u8], desde: usize, hasta: usize, buscado: &[u8; 4]) -> Option<usize> {
+    let mut pos = desde;
+    while pos + 8 <= hasta {
+        if &bytes[pos + 4..pos + 8] == buscado {
+            return Some(pos);
+        }
+        let size = u32::from_be_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+        if size == 0 || size == 1 || size < 8 {
+            return None;
+        }
+        pos += size;
+    }
+    None
+}
+
+/// Repara el bug de `lofty` 0.25.4 que descarta el hijo `hdlr` del átomo `meta`
+/// al reescribir el tag `ilst` de un MP4.
+///
+/// # El bug
+///
+/// Cuando `lofty` reescribe un `meta` **heredado** (por ejemplo, el que deja un
+/// `remove --all` previo: `moov > udta > meta` vacío de `ilst` pero con su
+/// `hdlr`), reconstruye el `meta` solo con el `ilst` y descarta el `hdlr`.
+/// Cuando el archivo no tenía `udta` previo, `lofty` sí genera
+/// `meta { hdlr, ilst }` correctamente. La causa está en `mp4/write.rs` de
+/// `lofty`: su lista `IMPORTANT_CONTAINERS` incluye `moov`, `udta`, `moof`,
+/// `trak`, `mdia`, `minf` y `stbl`, pero no `meta`, así que el writer
+/// reconstruye el `meta` desde el tag sin conservar los átomos ajenos. El
+/// resultado es un archivo que `show` lee bien, pero cuyas etiquetas no ven los
+/// demuxers externos (ffprobe/ffmpeg), que exigen el `hdlr` en el `meta`.
+///
+/// # Estrategia: post-proceso idempotente
+///
+/// Se releen los bytes finales del archivo, se localiza la ruta
+/// `moov > udta > meta` con un recorrido big-endian de átomos de 32 bits y:
+///
+/// 1. Si la zona de hijos del `meta` ya contiene un `hdlr`, no se toca nada
+///    (idempotencia: una segunda ejecución jamás duplica el átomo).
+/// 2. En caso contrario, se insertan los 33 bytes de [`MP4_META_HDLR`] justo
+///    después de la cabecera + versión/flags del `meta`, donde empiezan sus
+///    hijos (igual que `lofty` los escribe en el caso sano: `hdlr` primero) y
+///    se **suman 33** a los tamaños (u32 BE) de `meta`, `udta` y `moov`.
+/// 3. El archivo se reescribe con los bytes insertados (los átomos posteriores
+///    se desplazan, por eso se reconstruye el `Vec<u8>` completo).
+///
+/// # Por qué no se rompen los offsets del audio
+///
+/// Los offsets de las muestras (`stco`/`co64`) apuntan a posiciones dentro de
+/// `mdat`, que en los MP4 de este proyecto va **antes** de `moov`. Insertar
+/// bytes dentro de `moov` solo desplaza lo que hay después del punto de
+/// inserción (el resto de `moov` y cualquier átomo posterior a él), nunca
+/// `mdat`, así que los `stco`/`co64` siguen apuntando a las mismas posiciones.
+///
+/// # Errores
+///
+/// Retorna un error si el archivo no se puede leer o reescribir. Si la
+/// estructura `moov > udta > meta` no se encuentra o ya está sana, no se
+/// modifica nada y se devuelve `Ok`.
+fn ensure_mp4_meta_hdlr(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut bytes = std::fs::read(path)?;
+    let len = bytes.len();
+
+    // Ruta `moov > udta > meta`, localizada con tamaños de 32 bits.
+    let Some(moov) = find_mp4_atom(&bytes, 0, len, b"moov") else {
+        return Ok(());
+    };
+    let moov_size = u32::from_be_bytes(bytes[moov..moov + 4].try_into().unwrap()) as usize;
+    // El rango de hijos de cada contenedor empieza 8 bytes después de su campo
+    // `size` (cabecera `size`+`type`).
+    let Some(udta) = find_mp4_atom(&bytes, moov + 8, moov + moov_size, b"udta") else {
+        return Ok(());
+    };
+    let udta_size = u32::from_be_bytes(bytes[udta..udta + 4].try_into().unwrap()) as usize;
+    let Some(meta) = find_mp4_atom(&bytes, udta + 8, udta + udta_size, b"meta") else {
+        return Ok(());
+    };
+    let meta_size = u32::from_be_bytes(bytes[meta..meta + 4].try_into().unwrap()) as usize;
+    let meta_end = meta + meta_size;
+    if meta_end > len {
+        // Átomo `meta` con tamaño fuera del archivo: archivo malformado, no se
+        // toca nada.
+        return Ok(());
+    }
+
+    // `meta` es un FullBox: sus hijos empiezan 4 bytes después de la cabecera
+    // (`size`+`type`), tras los 4 bytes de versión+flags.
+    let children_start = meta + 12;
+    if children_start > meta_end {
+        return Ok(());
+    }
+
+    // Idempotencia: si el `meta` ya tiene un hijo `hdlr`, no se toca nada.
+    if find_mp4_atom(&bytes, children_start, meta_end, b"hdlr").is_some() {
+        return Ok(());
+    }
+
+    // Los ancestros se actualizan ANTES de escribir el archivo con los bytes
+    // insertados: `meta`, `udta` y `moov` crecen 33 bytes cada uno.
+    for size_field in [meta, udta, moov] {
+        let nuevo = u32::from_be_bytes(bytes[size_field..size_field + 4].try_into().unwrap()) + 33;
+        bytes[size_field..size_field + 4].copy_from_slice(&nuevo.to_be_bytes());
+    }
+
+    // Inserta el `hdlr` justo donde empiezan los hijos del `meta` (desplaza el
+    // `ilst`, si lo hay, hacia el final del átomo).
+    bytes.splice(
+        children_start..children_start,
+        MP4_META_HDLR.iter().copied(),
+    );
+
+    std::fs::write(path, bytes)?;
     Ok(())
 }
 
@@ -2312,9 +2490,17 @@ pub fn apply_metadata_ogg(tag: &mut VorbisComments, options: &OggEditOptions<'_>
 /// defecto en lugar de abortar: la carátula se escribe igualmente con sus
 /// dimensiones a cero. El MIME **no** se degrada: una carátula WebP se guarda
 /// con `image/webp`.
+///
+/// La carátula se inserta siempre como `CoverFront`; antes de insertarla se
+/// elimina la `CoverFront` previa (si existe), de modo que una segunda edición
+/// **sustituye** a la primera en lugar de acumular (misma semántica que en MP3
+/// y MP4). Las carátulas de otros tipos se conservan.
 fn push_ogg_cover(tag: &mut VorbisComments, data: &[u8], mime: &str) {
     let picture = create_picture_frame(data.to_vec(), mime);
     let information = PictureInformation::from_picture(&picture).unwrap_or_default();
+    // Sustituye la `CoverFront` previa (si existe) en vez de acumular. Sin
+    // carátula previa es un no-op.
+    tag.remove_picture_type(PictureType::CoverFront);
     let _ = tag.insert_picture(picture, Some(information));
 }
 
