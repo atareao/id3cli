@@ -15,7 +15,9 @@
 #   --all (comentario vaciado PRESERVANDO el vendor) → ffprobe final de
 #   reproducibilidad (~1.5 s) → variante de track/season SIN total (sobre audio
 #   recién generado) → carátula JPG y PNG sobre audio recién generado (roundtrip
-#   de bytes).
+#   de bytes) → segunda edición de --cover con imagen DISTINTA: sustitución en
+#   vez de acumulación (1 carátula, roundtrip de la última, anti-roundtrip de la
+#   primera; bug 1.2: antes «Carátulas: 2 imagen(es)»).
 #
 # DEGRADACIONES Opus: idénticas a OGG (--url y --original-artist omitidos con
 #   aviso; nunca clave inventada; ausencia también en los bytes crudos del
@@ -213,6 +215,21 @@ main() {
     e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_PNG"
     check_rc 0
     check_cover_roundtrip "$E2E_COVER_PNG"
+
+    # 9) Sustitución de carátula (bug 1.2): una segunda edición de --cover con
+    #    una imagen DISTINTA sustituye en vez de acumular. Antes del fix, este
+    #    bloque habría sido RED: show reportaría «Carátulas: 2 imagen(es)», el
+    #    roundtrip de la PRIMERA imagen (JPG) seguiría pasando y
+    #    check_cover_not_roundtrip del JPG fallaría con exit 1.
+    e2e_gen_audio cover_sust
+    e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_JPG"
+    check_rc 0
+    e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_PNG"
+    check_rc 0
+    e2e_run show "$E2E_AUDIO"
+    check_show_contains "Carátulas: 1 imagen(es)"
+    check_cover_roundtrip "$E2E_COVER_PNG"
+    check_cover_not_roundtrip "$E2E_COVER_JPG"
 
     if e2e_summary "opus"; then
         exit 0

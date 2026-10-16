@@ -21,6 +21,7 @@
 #   check_ffprobe_raw_contains <patrón> # grep -a del patrón en la salida cruda de ffprobe
 #   check_ffprobe_no_user_tags          # tras remove --all: ffprobe sin ninguna clave
 #   check_cover_roundtrip <imagen>      # roundtrip de bytes de la carátula extraída
+#   check_cover_not_roundtrip <imagen>  # la carátula extraída NO coincide con <imagen> (sustitución)
 #   grep_raw_absent <patrón> <archivo>  # el patrón no aparece en los bytes crudos
 #   grep_raw_contains <patrón> <archivo># el patrón aparece en los bytes crudos (vendor)
 #   check_duration_approx <seg> [tol]   # duración ffprobe ≈ esperada (reproducibilidad)
@@ -378,6 +379,37 @@ check_cover_roundtrip() {
     else
         E2E_FAIL=$((E2E_FAIL + 1))
         printf 'FAIL: aserción '\''check_cover_roundtrip'\'': %s difiere de la extracción (hash original %s, extraído %s)\n' "$imagen" "$(sha256sum "$imagen" | cut -c1-16)" "$(sha256sum "$extraida" | cut -c1-16)" >&2
+    fi
+    return 0
+}
+
+# ── Anti-roundtrip de carátula: la imagen extraída NO debe coincidir ──
+# Mismo mecanismo que check_cover_roundtrip (`ffmpeg -map 0:v:0 -c copy
+# -frames:v 1` + cmp byte a byte) pero con la aserción INVERTIDA: PASA cuando
+# los bytes extraídos DIFIEREN de <imagen> (esa imagen ya no es la carátula del
+# archivo) y FALLA cuando coinciden. Fija la semántica de sustitución del fix
+# 1.2: si un formato acumulara carátulas, la extracción seguiría devolviendo la
+# PRIMERA imagen y esta aserción fallaría con exit 1 (e2e RED sin el fix).
+check_cover_not_roundtrip() {
+    local imagen="${1:?check_cover_not_roundtrip: falta la ruta de la imagen que ya no debe estar}"
+    if [[ ! -f "$imagen" ]]; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_cover_not_roundtrip'\'': la imagen «%s» no existe\n' "$imagen" >&2
+        return 0
+    fi
+    local ext="${imagen##*.}"
+    local extraida="$E2E_DIR/extraida_no_roundtrip.${ext}"
+    if ! ffmpeg -y -i "$E2E_AUDIO" -map 0:v:0 -c copy -frames:v 1 "$extraida" >/dev/null 2>&1; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_cover_not_roundtrip'\'': no se pudo extraer el stream de imagen de %s con ffmpeg\n' "$E2E_AUDIO" >&2
+        return 0
+    fi
+    if cmp -s "$imagen" "$extraida"; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''check_cover_not_roundtrip'\'': %s SIGUE siendo la carátula extraída (acumulación; la extracción coincide byte a byte, %s bytes)\n' "$imagen" "$(wc -c <"$extraida")" >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: check_cover_not_roundtrip: %s ya NO es la carátula (la extracción difiere byte a byte, %s bytes)\n' "$imagen" "$(wc -c <"$extraida")"
     fi
     return 0
 }

@@ -14,7 +14,11 @@
 #   de un campo (genre) → remove --all (ilst vacío) → ffprobe final de
 #   reproducibilidad (~1.5 s) → variante de track/season SIN total (sobre audio
 #   recién generado) → carátula JPG y PNG sobre audio recién generado (roundtrip
-#   de bytes).
+#   de bytes) → secuencia edit → remove --all → edit sobre audio recién generado
+#   con show + ffprobe format_tags de title/artist (bug 1.1: sin el fix, el meta
+#   reescrito queda sin hijo hdlr y ffprobe no expone las etiquetas) → segunda
+#   edición de --cover con imagen DISTINTA: sustitución en vez de acumulación
+#   (1 carátula, roundtrip de la última, anti-roundtrip de la primera; bug 1.2).
 #
 # DEGRADACIONES MP4 (medidas):
 #   - --url y --original-artist se omiten con aviso por stderr y NUNCA se
@@ -204,6 +208,51 @@ main() {
     e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_PNG"
     check_rc 0
     check_cover_roundtrip "$E2E_COVER_PNG"
+
+    # 9) Secuencia edit → remove --all → edit (bug 1.1, hdlr en MP4): sobre un
+    #    audio RECIÉN GENERADO se edita, se eliminan TODOS los metadatos y se
+    #    vuelve a editar con los mismos campos. Es la secuencia exacta que
+    #    destapó el bug: lofty 0.25.4 reconstruye el átomo meta SIN su hijo
+    #    hdlr cuando reescribe un archivo cuyo ilst fue eliminado con remove
+    #    --all, y el demuxer de ffmpeg exige ese hdlr para parsear ilst. Sin el
+    #    fix, ffprobe format_tags NO expondría title/artist (solo los brands
+    #    major_brand/minor_version/compatible_brands) y check_ffprobe_tag
+    #    fallaría con exit 1 (PASS/FAIL > 0 → script RED).
+    e2e_gen_audio reedit
+    e2e_run edit "$E2E_AUDIO" \
+        --title "$E2E_V_TITLE" \
+        --artist "$E2E_V_ARTIST1" --artist "$E2E_V_ARTIST2" \
+        --album "$E2E_V_ALBUM"
+    check_rc 0
+    e2e_run remove --all "$E2E_AUDIO"
+    check_rc 0
+    e2e_run edit "$E2E_AUDIO" \
+        --title "$E2E_V_TITLE" \
+        --artist "$E2E_V_ARTIST1" --artist "$E2E_V_ARTIST2" \
+        --album "$E2E_V_ALBUM"
+    check_rc 0
+    e2e_run show "$E2E_AUDIO"
+    check_show_contains "$E2E_V_TITLE"
+    check_show_contains "$E2E_V_ARTIST_JOINED"
+    # ffprobe format_tags (claves minúsculas en MP4): el metalista title y
+    # artist con el artista multi unido por «; » ($E2E_V_ARTIST_JOINED).
+    check_ffprobe_tag title "$E2E_V_TITLE"
+    check_ffprobe_tag artist "$E2E_V_ARTIST_JOINED"
+
+    # 10) Sustitución de carátula (bug 1.2): una segunda edición de --cover con
+    #     una imagen DISTINTA sustituye en vez de acumular. Antes del fix, este
+    #     bloque habría sido RED: show reportaría «Carátulas: 2 imagen(es)», el
+    #     roundtrip de la PRIMERA imagen (JPG) seguiría pasando y
+    #     check_cover_not_roundtrip del JPG fallaría con exit 1.
+    e2e_gen_audio cover_sust
+    e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_JPG"
+    check_rc 0
+    e2e_run edit "$E2E_AUDIO" --cover "$E2E_COVER_PNG"
+    check_rc 0
+    e2e_run show "$E2E_AUDIO"
+    check_show_contains "Carátulas: 1 imagen(es)"
+    check_cover_roundtrip "$E2E_COVER_PNG"
+    check_cover_not_roundtrip "$E2E_COVER_JPG"
 
     if e2e_summary "m4a"; then
         exit 0
