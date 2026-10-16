@@ -36,11 +36,11 @@ fn report_error(error: Box<dyn Error>) -> ! {
     std::process::exit(1);
 }
 
-/// CLI para añadir metadatos y carátulas a archivos MP3, MP4 y OGG
+/// CLI para añadir metadatos y carátulas a archivos MP3, MP4, OGG y Opus
 #[derive(Parser, Debug)]
 #[command(name = "id3cli")]
 #[command(
-    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4), MP4 (átomos iTunes) y OGG Vorbis (comentarios Vorbis)",
+    about = "Añade tags y carátulas a archivos MP3 (ID3v2.4), MP4 (átomos iTunes) y OGG (comentarios Vorbis; Vorbis y Opus)",
     long_about = None
 )]
 struct Args {
@@ -51,14 +51,14 @@ struct Args {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 enum Command {
-    /// Mostrar todos los metadatos del archivo MP3, MP4 u OGG
+    /// Mostrar todos los metadatos del archivo MP3, MP4, OGG y Opus
     Show {
-        /// Ruta del archivo de audio (MP3, MP4 u OGG)
+        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
         file: PathBuf,
     },
-    /// Editar metadatos del archivo MP3, MP4 u OGG
+    /// Editar metadatos del archivo MP3, MP4, OGG y Opus
     Edit {
-        /// Ruta del archivo de audio (MP3, MP4 u OGG)
+        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
         file: PathBuf,
 
         /// Título de la canción
@@ -141,9 +141,9 @@ enum Command {
         #[arg(long)]
         title_sort: Option<String>,
     },
-    /// Eliminar tags específicos del archivo MP3, MP4 u OGG
+    /// Eliminar tags específicos del archivo MP3, MP4, OGG y Opus
     Remove {
-        /// Ruta del archivo de audio (MP3, MP4 u OGG)
+        /// Ruta del archivo de audio (MP3, MP4, OGG y Opus)
         file: PathBuf,
 
         // Tags a eliminar. La lista se deriva de `id3cli::VALID_TAG_NAMES`, la
@@ -162,14 +162,15 @@ enum Command {
 /// Backend con el que se procesa un archivo ya aceptado.
 ///
 /// El enrutado es la única pieza que decide entre el camino MP3, el MP4 y el
-/// OGG; los subcomandos nunca vuelven a consultar el formato.
+/// OGG; los subcomandos nunca vuelven a consultar el formato. Un único backend
+/// OGG sirve a los dos códecs del contenedor: Vorbis y Opus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
     /// MP3: se usa el backend ID3v2.
     Mp3,
     /// MP4/M4A: se usa el backend `ilst`.
     Mp4,
-    /// OGG Vorbis: se usa el backend de comentarios de Vorbis.
+    /// OGG (Vorbis u Opus): se usa el backend de comentarios de Vorbis.
     Ogg,
 }
 
@@ -177,10 +178,9 @@ enum Backend {
 /// soportado, y devuelve el backend con el que hay que procesarlo.
 ///
 /// La decisión se toma sobre los *magic bytes* del archivo, nunca sobre la
-/// extensión del nombre. Ante un formato no soportado (Opus, Speex, FLAC,
-/// WAV, …) o contenido no reconocible se escribe un mensaje en español en
-/// stderr, se sale con código distinto de cero y **no se escribe ni un byte del
-/// archivo**.
+/// extensión del nombre. Ante un formato no soportado (Speex, FLAC, WAV, …) o
+/// contenido no reconocible se escribe un mensaje en español en stderr, se sale
+/// con código distinto de cero y **no se escribe ni un byte del archivo**.
 ///
 /// Se mantiene el mensaje literal de archivo inexistente que ya usaba el CLI.
 fn detect_supported_format(file: &Path) -> Backend {
@@ -193,10 +193,11 @@ fn detect_supported_format(file: &Path) -> Backend {
         Ok(AudioFormat::Mp3) => Backend::Mp3,
         Ok(AudioFormat::Mp4) => Backend::Mp4,
         Ok(AudioFormat::OggVorbis) => Backend::Ogg,
+        Ok(AudioFormat::OggOpus) => Backend::Ogg,
         Ok(AudioFormat::Unsupported) => {
             eprintln!(
                 "Error: El archivo '{}' está en un formato de audio no soportado. \
-                 Formatos soportados: MP3, MP4 y OGG.",
+                 Formatos soportados: MP3, MP4, OGG y Opus.",
                 file.display()
             );
             std::process::exit(1);
@@ -204,7 +205,7 @@ fn detect_supported_format(file: &Path) -> Backend {
         Ok(AudioFormat::Unknown) => {
             eprintln!(
                 "Error: No se pudo determinar el formato del archivo '{}'. \
-                 Formatos soportados: MP3, MP4 y OGG.",
+                 Formatos soportados: MP3, MP4, OGG y Opus.",
                 file.display()
             );
             std::process::exit(1);
@@ -222,8 +223,8 @@ fn detect_supported_format(file: &Path) -> Backend {
 
 /// Informa de un fallo al procesar un contenedor MP4 y termina con código 1.
 ///
-/// El mensaje enumera los formatos soportados (MP3, MP4 y OGG) además de la
-/// causa, de modo que un archivo con cabecera MP4 pero estructura inválida se
+/// El mensaje enumera los formatos soportados (MP3, MP4, OGG y Opus) además de
+/// la causa, de modo que un archivo con cabecera MP4 pero estructura inválida se
 /// rechaza con un error legible y sin haberlo modificado.
 fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     eprintln!(
@@ -233,17 +234,17 @@ fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
     );
     eprintln!(
         "  El archivo tiene formato MP4/M4A pero no se pudo interpretar. \
-         Formatos soportados: MP3, MP4 y OGG."
+         Formatos soportados: MP3, MP4, OGG y Opus."
     );
     std::process::exit(1);
 }
 
-/// Informa de un fallo al procesar un contenedor Ogg Vorbis y termina con
-/// código 1.
+/// Informa de un fallo al procesar un contenedor Ogg (Vorbis u Opus) y termina
+/// con código 1.
 ///
-/// El mensaje enumera los formatos soportados (MP3, MP4 y OGG) además de la
-/// causa, de modo que un archivo con página Ogg y códec Vorbis pero estructura
-/// inválida se rechaza con un error legible y sin haberlo modificado.
+/// El mensaje enumera los formatos soportados (MP3, MP4, OGG y Opus) además de
+/// la causa, de modo que un archivo con página Ogg y códec Vorbis u Opus pero
+/// estructura inválida se rechaza con un error legible y sin haberlo modificado.
 fn report_ogg_error(file: &Path, error: impl std::fmt::Display) -> ! {
     eprintln!(
         "Error: No se pudo procesar el archivo OGG '{}': {}",
@@ -251,8 +252,8 @@ fn report_ogg_error(file: &Path, error: impl std::fmt::Display) -> ! {
         error
     );
     eprintln!(
-        "  El archivo tiene formato Ogg Vorbis pero no se pudo interpretar. \
-         Formatos soportados: MP3, MP4 y OGG."
+        "  El archivo tiene formato Ogg Vorbis u Opus pero no se pudo interpretar. \
+         Formatos soportados: MP3, MP4, OGG y Opus."
     );
     std::process::exit(1);
 }

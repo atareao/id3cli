@@ -1,16 +1,16 @@
 # id3cli
 
-CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`) y **OGG Vorbis** (comentarios Vorbis).
+CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`) y **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-273%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
 
 ✨ **Completo y fácil de usar**
 
-- 🎧 **MP3, MP4 y OGG:** escribe tags ID3v2.4 en MP3, átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`) y comentarios Vorbis en OGG Vorbis
+- 🎧 **MP3, MP4, OGG y Opus:** escribe tags ID3v2.4 en MP3, átomos `ilst` en MP4 (`.m4a`, `.mp4`, `.m4b`) y comentarios Vorbis en OGG (Vorbis y Opus)
 - 🔍 **Detección de formato por contenido:** el formato se decide por los *magic bytes* del archivo, nunca por su extensión; los formatos que no soporta se rechazan con un mensaje claro y sin tocar el archivo
 - 📝 Añadir/modificar metadatos ID3: título, artista, álbum, año, género, pista, temporada, fecha, copyright
 - 🎙️ **Soporte completo para podcasts:** compositor, subtítulo, artista original, artista del álbum, temporada (TPOS)
@@ -32,17 +32,20 @@ El formato del archivo se determina **por su contenido** (sus *magic bytes* inic
 | **Soportado** | MP3 (con o sin cabecera `ID3`) | `show`, `edit` y `remove` operan sobre él; los tags se escriben como ID3v2.4 |
 | **Soportado** | MP4 / M4A (`.m4a`, `.mp4`, `.m4b`): átomo `ftyp` en el offset 4, con cualquier brand | `show`, `edit` y `remove` operan sobre él; los metadatos se **leen y escriben** como átomos `ilst` estilo iTunes |
 | **Soportado** | OGG Vorbis (`OggS`, versión `0`, primer paquete `\x01vorbis`) | `show`, `edit` y `remove` operan sobre él; los metadatos se escriben como comentarios Vorbis (`CLAVE=valor`) |
-| **No soportado** | Opus (`OpusHead`) y Speex, en contenedor Ogg; FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
+| **Soportado** | OGG Opus (`OggS`, versión `0`, primer paquete `OpusHead`) | `show`, `edit` y `remove` operan sobre él; los metadatos se escriben como comentarios Vorbis (`CLAVE=valor`), con el mismo mapeo que OGG Vorbis |
+| **No soportado** | Speex en contenedor Ogg; FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `), WavPack (`wvpk`) | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 | **Indeterminado** | Contenido no reconocible o archivo demasiado corto | El CLI sale con código distinto de cero, avisa en español y **no modifica el archivo** |
 
-Un contenedor **Ogg** es solo un sobre, así que el formato se decide por el **códec de su primer paquete**, no por la cabecera de página. Solo se acepta si ese primer paquete empieza por `\x01vorbis`; si empieza por `OpusHead` (Opus), por `Speex` o por `\x7fFLAC` (FLAC dentro de un Ogg), o si es el de Theora, el archivo se rechaza como formato fuera de alcance. Una página Ogg **truncada**, **sin primer paquete** o con un paquete **vacío** queda como *formato sin determinar*, y en ese caso tampoco se toca el archivo.
+Un contenedor **Ogg** es solo un sobre, así que el formato se decide por el **códec de su primer paquete**, no por la cabecera de página. Solo se acepta si ese primer paquete empieza por `\x01vorbis` (Vorbis) o por `OpusHead` (Opus).
+
+Si el primer paquete empieza por `Speex`, por `\x7fFLAC` (FLAC dentro de un Ogg) o si es el de Theora, el archivo se rechaza como formato fuera de alcance. Una página Ogg **truncada**, **sin primer paquete** o con un paquete **vacío** queda como *formato sin determinar*, y en ese caso tampoco se toca el archivo.
 
 En todos los casos de error el archivo queda **intacto**: la detección ocurre antes de abrir el archivo para escritura, de modo que un formato no soportado nunca se toca.
 
 **En resumen:**
 
-- **Soportados:** MP3 (ID3v2.4), MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes) y OGG Vorbis (comentarios Vorbis). Los tres admiten `show`, `edit` y `remove` completos.
-- **No soportados:** Opus y Speex (contenedores Ogg cuyo primer paquete no es Vorbis), FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
+- **Soportados:** MP3 (ID3v2.4), MP4 / M4A (`.m4a`, `.mp4`, `.m4b`, átomos `ilst` estilo iTunes), OGG Vorbis y Opus (comentarios de Vorbis). Los cuatro admiten `show`, `edit` y `remove` completos.
+- **No soportados:** Speex (en contenedor Ogg), FLAC (`fLaC`), WAV (`RIFF`), AIFF (`FORM`), APE (`MAC `) y WavPack (`wvpk`). El CLI sale con código de salida distinto de cero, avisa en español y **no modifica el archivo**.
 
 ## Instalación
 
@@ -238,9 +241,9 @@ id3cli show cancion.m4a
 
 > [!tip] El formato se detecta por el **contenido** del archivo, no por su extensión: un MP3 renombrado a `.m4a` se sigue editando como MP3 y viceversa.
 
-### 🎼 Editar un archivo OGG Vorbis (`.ogg`)
+### 🎼 Editar un archivo OGG Vorbis (`.ogg`) u Opus (`.opus`)
 
-En un `.ogg` la edición es igual de directa: los metadatos van a **comentarios Vorbis** (pares `CLAVE=valor`) en lugar de frames ID3 o átomos `ilst`.
+En un `.ogg` (y en un `.opus`) la edición es igual de directa: los metadatos van a **comentarios Vorbis** (pares `CLAVE=valor`) en lugar de frames ID3 o átomos `ilst`. El contenedor Ogg cubre Vorbis y Opus, y **ambos comparten el mismo mapeo** de claves.
 
 ```bash
 id3cli edit cancion.ogg \
@@ -595,9 +598,9 @@ Tres comportamientos se degradan al escribir metadatos en un MP4 y quedan docume
 
 ---
 
-## Mapeo de tags en OGG Vorbis
+## Mapeo de tags en OGG (Vorbis y Opus)
 
-En un `.ogg` los metadatos son **comentarios Vorbis** (`VORBIS_COMMENT`): pares `CLAVE=valor` en texto plano dentro del contenedor Ogg, no frames ID3 ni átomos `ilst`. La siguiente tabla recoge el mapeo entre cada flag del CLI y la clave del comentario que se escribe:
+En un `.ogg` (y en un `.opus`) los metadatos son **comentarios Vorbis** (`VORBIS_COMMENT`): pares `CLAVE=valor` en texto plano dentro del contenedor Ogg, no frames ID3 ni átomos `ilst`. El contenedor Ogg cubre Vorbis y Opus, y **ambos códecs comparten el mismo mapeo** y el mismo tipo de comentario. La siguiente tabla recoge el mapeo entre cada flag del CLI y la clave del comentario que se escribe:
 
 | Flag CLI | Clave de comentario Vorbis |
 | --- | --- |
@@ -629,6 +632,7 @@ En un `.ogg` los metadatos son **comentarios Vorbis** (`VORBIS_COMMENT`): pares 
 - **La letra pierde el código de idioma.** `LYRICS` es un comentario de texto sin campo de idioma, así que la letra de un OGG se guarda sin el `spa` que sí lleva el frame `USLT` de MP3 (igual que ocurre con `©lyr` en MP4). El texto se conserva **íntegro**; lo único que se pierde es la marca de idioma.
 - **`--url` y `--original-artist` se omiten con aviso.** Ninguno de los dos tiene clave equivalente en los comentarios Vorbis. Sobre un OGG el CLI **no falla ni inventa** una clave de reemplazo: avisa por stderr, omite ese campo, escribe el resto con normalidad y termina con código de salida cero. Si son los únicos flags indicados, no hay cambio real que escribir y el archivo **no se reescribe**. En MP3 se comportan con normalidad (`--url` → `WOAR`, `--original-artist` → `TOPE`, sin aviso).
 - **El total de pista y temporada no tiene límite de tamaño.** `TRACKNUMBER`/`DISCNUMBER` con `TRACKTOTAL`/`DISCTOTAL` guardan el par como **texto**, así que admiten cualquier valor, incluido un total `0`, que se escribe y se muestra tal cual (`7/0`). Solo el átomo numérico de MP4 lo restringe a 16 bits (ver [Limitaciones conocidas en MP4](#limitaciones-conocidas-en-mp4)).
+- **Las tres degradaciones aplican igual a Opus.** El contenedor Ogg cubre Vorbis y Opus con el mismo comentario de Vorbis, así que todo lo anterior (carátula WebP con su MIME real, `LYRICS` sin código de idioma y `--url`/`--original-artist` omitidos con aviso) se comporta idéntico en los dos códecs.
 
 ---
 
@@ -674,13 +678,13 @@ cargo clippy -- -D warnings
 ```tree
 id3cli/
 ├── src/
-│   ├── lib.rs                     # Librería (2664 líneas) - lógica de negocio
-│   ├── main.rs                    # CLI (870 líneas) - interfaz de comandos show/edit/remove
+│   ├── lib.rs                     # Librería (2702 líneas) - lógica de negocio
+│   ├── main.rs                    # CLI (871 líneas) - interfaz de comandos show/edit/remove
 │   ├── output.rs                  # Salida estándar (49 líneas) - macro outln! y cierre del pipe
-│   └── tests.rs                   # Tests unitarios (4706 líneas)
+│   └── tests.rs                   # Tests unitarios (4888 líneas)
 ├── tests/
-│   ├── integration_test.rs        # Tests de integración (5111 líneas)
-│   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a y sample.ogg) y sus scripts de regeneración, incluido generate_sample_ogg.sh
+│   ├── integration_test.rs        # Tests de integración (5438 líneas)
+│   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a, sample.ogg y sample.opus) y sus scripts de regeneración, incluidos generate_sample_ogg.sh y generate_sample_opus.sh
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
@@ -753,12 +757,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **273 tests** (162 unitarios + 111 de integración):
+El proyecto tiene **cobertura completa** con **281 tests** (163 unitarios + 118 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (273)
-cargo test --lib        # Solo tests unitarios (162)
-cargo test --test '*'   # Solo tests de integración (111)
+cargo test              # Ejecutar todos los tests (281)
+cargo test --lib        # Solo tests unitarios (163)
+cargo test --test '*'   # Solo tests de integración (118)
 ```
 
 **Ejemplos de tests:**
@@ -776,9 +780,10 @@ cargo test --test '*'   # Solo tests de integración (111)
 - Cierre del pipe como final normal de la salida (código 0 y sin mensajes) y fallo real de escritura como error
 - Validación de los metadatos del paquete (`keywords` y `categories`)
 - Tests end-to-end del CLI completo con podcasts
-- OGG Vorbis: fixture real versionado (`sample.ogg`) y detección del contenedor por el códec de su primer paquete (Vorbis), no por la cabecera `OggS`
+- OGG Vorbis u Opus: fixture real versionado (`sample.ogg` y `sample.opus`) y detección del contenedor por el códec de su primer paquete (Vorbis u Opus), no por la cabecera `OggS`
+- Opus: mismo backend de comentarios Vorbis que OGG, con detección por `OpusHead` y flujo completo `show`/`edit`/`remove` verificado contra el fixture real
 - Total de pista y temporada (`N/T`) en los tres formatos, incluida la conservación del total preexistente y el borrado del par número/total como una unidad
-- Coherencia documental: el recuento real de tests y los tres formatos figuran igual en `README.md` y `Cargo.toml`
+- Coherencia documental: el recuento real de tests y los formatos de `Cargo.toml` (MP3, MP4 y OGG) figuran igual en `README.md` y `Cargo.toml`, y la coherencia del soporte de Opus se verifica contra el código
 
 ---
 
@@ -812,7 +817,7 @@ Desarrollado con 🦀 Rust
 - [ ] Binarios para Windows y macOS
 - [x] Soporte para MP4 / M4A (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`)
 - [x] Soporte para OGG Vorbis (comentarios de Vorbis: `TITLE`, `ARTIST`, `TRACKNUMBER`…)
-- [ ] Soporte para Opus (contenedor Ogg con el códec Opus)
+- [x] Soporte para Opus (contenedor Ogg con el códec Opus; mismas claves de comentario Vorbis que OGG)
 - [ ] Soporte para Speex (contenedor Ogg con el códec Speex)
 - [ ] Soporte para FLAC (nativo y dentro del contenedor Ogg)
 - [ ] Soporte para otros formatos de audio (WAV, AIFF, APE)
