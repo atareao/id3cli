@@ -178,31 +178,14 @@ enum Backend {
     Flac,
 }
 
-/// Comprueba que el archivo existe y que su formato (por contenido) está
-/// soportado, y devuelve el backend con el que hay que procesarlo.
+/// Determina el backend con el que hay que procesar un archivo, y ante un
+/// fallo devuelve el motivo en español en lugar de terminar el proceso.
 ///
 /// La decisión se toma sobre los *magic bytes* del archivo, nunca sobre la
-/// extensión del nombre. Ante un formato no soportado (Speex, WAV, …) o
-/// contenido no reconocible se escribe un mensaje en español en stderr, se sale
-/// con código distinto de cero y **no se escribe ni un byte del archivo**.
-///
-/// Se mantiene el mensaje literal de archivo inexistente que ya usaba el CLI.
-fn detect_supported_format(file: &Path) -> Backend {
-    match detect_supported_format_result(file) {
-        Ok(backend) => backend,
-        Err(motivo) => {
-            eprintln!("Error: {motivo}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Variante de [`detect_supported_format`] que devuelve el motivo del fallo en
-/// español en lugar de terminar el proceso.
-///
-/// Es la que el modo batch usa para acumular los fallos de cada archivo sin
-/// abortar el resto: el despliegue por archivo recoge el `Err` con su ruta y
-/// continúa con el siguiente.
+/// extensión del nombre. Es la vía de detección del modo batch: el despliegue
+/// por archivo recoge el `Err` con su ruta y continúa con el siguiente, y con
+/// un solo archivo los motivos se informan con el mismo formato que el CLI
+/// usaba (incluido el mensaje literal de archivo inexistente).
 fn detect_supported_format_result(file: &Path) -> Result<Backend, String> {
     if !file.exists() {
         return Err(format!("El archivo '{}' no existe", file.display()));
@@ -260,24 +243,6 @@ fn reportar_fallos(fallos: &[(PathBuf, String)], unico_archivo: bool) -> ! {
             eprintln!("Error: {}: {}", ruta.display(), motivo);
         }
     }
-    std::process::exit(1);
-}
-
-/// Informa de un fallo al procesar un contenedor MP4 y termina con código 1.
-///
-/// El mensaje enumera los formatos soportados (MP3, MP4, OGG, Opus y FLAC)
-/// además de la causa, de modo que un archivo con cabecera MP4 pero estructura
-/// inválida se rechaza con un error legible y sin haberlo modificado.
-fn report_mp4_error(file: &Path, error: impl std::fmt::Display) -> ! {
-    eprintln!(
-        "Error: No se pudo procesar el archivo MP4 '{}': {}",
-        file.display(),
-        error
-    );
-    eprintln!(
-        "  El archivo tiene formato MP4/M4A pero no se pudo interpretar. \
-         Formatos soportados: MP3, MP4, OGG, Opus y FLAC."
-    );
     std::process::exit(1);
 }
 
@@ -379,12 +344,23 @@ struct EditArgs<'a> {
 /// «sin tags/metadatos» —que en el flujo con un solo archivo termina con exit
 /// 0— no aborta el lote: el proceso termina con código 0 por el final natural
 /// de `main`.
-fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: bool) {
+fn show_archivo(
+    file: &Path,
+    json: bool,
+    lineas: &mut Vec<String>,
+    cabecera: bool,
+) -> Result<(), String> {
+    // La detección va PRIMERO: con una ruta inexistente o un formato no
+    // soportado se devuelve el motivo sin emitir cabecera ni bloque, y el modo
+    // batch acumula el fallo y continúa con el resto de archivos (sin dejar
+    // cabeceras huérfanas).
+    let backend = detect_supported_format_result(file)?;
+
     if cabecera {
         outln!("{}", batch_show_heading(file));
     }
 
-    match detect_supported_format(file) {
+    match backend {
         Backend::Mp3 => {
             // Leer tag
             let tag = match read_id3v2_tag(file) {
@@ -395,7 +371,7 @@ fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: boo
                     } else {
                         eprintln!("⚠️  No se encontraron tags ID3 en '{}'", file.display());
                     }
-                    return;
+                    return Ok(());
                 }
             };
 
@@ -414,9 +390,11 @@ fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: boo
                     } else {
                         eprintln!("⚠️  No se encontraron metadatos en '{}'", file.display());
                     }
-                    return;
+                    return Ok(());
                 }
-                Err(error) => report_mp4_error(file, error),
+                Err(error) => {
+                    return Err(motivo_mp4(file, error));
+                }
             };
 
             if json {
@@ -432,7 +410,9 @@ fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: boo
             // comentario, así que el tag basta para mostrarlas.
             let tag = match read_vorbis_tag(file) {
                 Ok(tag) => tag,
-                Err(error) => report_vorbis_error(file, error),
+                Err(error) => {
+                    return Err(motivo_vorbis(file, error));
+                }
             };
 
             if json {
@@ -441,7 +421,9 @@ fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: boo
                 // contenido, nunca del backend.
                 let formato = match detect_format(file) {
                     Ok(formato) => format_json_name(formato),
-                    Err(error) => report_vorbis_error(file, error),
+                    Err(error) => {
+                        return Err(motivo_vorbis(file, error));
+                    }
                 };
                 lineas.push(json_from_vorbis(formato, &tag, tag.pictures()));
             } else {
@@ -454,11 +436,15 @@ fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: boo
             // FLAC viven en bloques `PICTURE` del archivo, no en el comentario.
             let tag = match read_vorbis_tag(file) {
                 Ok(tag) => tag,
-                Err(error) => report_vorbis_error(file, error),
+                Err(error) => {
+                    return Err(motivo_vorbis(file, error));
+                }
             };
             let pictures = match read_flac_pictures(file) {
                 Ok(pictures) => pictures,
-                Err(error) => report_vorbis_error(file, error),
+                Err(error) => {
+                    return Err(motivo_vorbis(file, error));
+                }
             };
 
             if json {
@@ -468,6 +454,33 @@ fn show_archivo(file: &Path, json: bool, lineas: &mut Vec<String>, cabecera: boo
             }
         }
     }
+
+    Ok(())
+}
+
+/// Construye el motivo de un fallo del backend MP4 con el mismo texto de dos
+/// líneas que el CLI usaba para MP4: causa y enumera los formatos soportados.
+fn motivo_mp4(file: &Path, error: impl std::fmt::Display) -> String {
+    format!(
+        "no se pudo procesar el archivo MP4 '{}': {}\n  El archivo tiene formato \
+         MP4/M4A pero no se pudo interpretar. Formatos soportados: MP3, MP4, OGG, \
+         Opus y FLAC.",
+        file.display(),
+        error
+    )
+}
+
+/// Construye el motivo de un fallo del backend de comentarios de Vorbis (Ogg
+/// Vorbis, Opus o FLAC nativo) con el mismo texto de dos líneas que
+/// [`report_vorbis_error`] usaba: causa y enumera los formatos soportados.
+fn motivo_vorbis(file: &Path, error: impl std::fmt::Display) -> String {
+    format!(
+        "no se pudo procesar el archivo '{}': {}\n  El archivo tiene un comentario de Vorbis \
+         (Ogg Vorbis, Opus o FLAC nativo) pero no se pudo interpretar. Formatos soportados: \
+         MP3, MP4, OGG, Opus y FLAC.",
+        file.display(),
+        error
+    )
 }
 
 /// Aplica los metadatos indicados a un archivo y devuelve el motivo del fallo
@@ -671,13 +684,7 @@ fn edit_archivo(file: &Path, args: &EditArgs<'_>) -> Result<(), String> {
             let report = match edit_mp4(file, &mp4_options) {
                 Ok(report) => report,
                 Err(error) => {
-                    return Err(format!(
-                        "no se pudo procesar el archivo MP4 '{}': {}\n  El archivo tiene formato \
-                         MP4/M4A pero no se pudo interpretar. Formatos soportados: MP3, MP4, OGG, \
-                         Opus y FLAC.",
-                        file.display(),
-                        error
-                    ));
+                    return Err(motivo_mp4(file, error));
                 }
             };
 
@@ -799,13 +806,7 @@ fn edit_archivo(file: &Path, args: &EditArgs<'_>) -> Result<(), String> {
             let report = match edit_ogg(file, &ogg_options) {
                 Ok(report) => report,
                 Err(error) => {
-                    return Err(format!(
-                        "no se pudo procesar el archivo '{}': {}\n  El archivo tiene un comentario \
-                         de Vorbis (Ogg Vorbis, Opus o FLAC nativo) pero no se pudo interpretar. \
-                         Formatos soportados: MP3, MP4, OGG, Opus y FLAC.",
-                        file.display(),
-                        error
-                    ));
+                    return Err(motivo_vorbis(file, error));
                 }
             };
 
@@ -953,13 +954,7 @@ fn remove_archivo(file: &Path, tags: &[String], all: bool) -> Result<(), String>
                         outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
                     }
                     Err(error) => {
-                        return Err(format!(
-                            "no se pudo procesar el archivo MP4 '{}': {}\n  El archivo tiene formato \
-                             MP4/M4A pero no se pudo interpretar. Formatos soportados: MP3, MP4, OGG, \
-                             Opus y FLAC.",
-                            file.display(),
-                            error
-                        ));
+                        return Err(motivo_mp4(file, error));
                     }
                 }
                 return Ok(());
@@ -980,13 +975,7 @@ fn remove_archivo(file: &Path, tags: &[String], all: bool) -> Result<(), String>
                     ));
                 }
                 Err(error) => {
-                    return Err(format!(
-                        "no se pudo procesar el archivo MP4 '{}': {}\n  El archivo tiene formato \
-                         MP4/M4A pero no se pudo interpretar. Formatos soportados: MP3, MP4, OGG, \
-                         Opus y FLAC.",
-                        file.display(),
-                        error
-                    ));
+                    return Err(motivo_mp4(file, error));
                 }
             };
 
@@ -995,13 +984,7 @@ fn remove_archivo(file: &Path, tags: &[String], all: bool) -> Result<(), String>
 
             if removed {
                 if let Err(e) = write_mp4_tag(file, &tag) {
-                    return Err(format!(
-                        "no se pudo procesar el archivo MP4 '{}': {}\n  El archivo tiene formato \
-                         MP4/M4A pero no se pudo interpretar. Formatos soportados: MP3, MP4, OGG, \
-                         Opus y FLAC.",
-                        file.display(),
-                        e
-                    ));
+                    return Err(motivo_mp4(file, e));
                 }
                 outln!(
                     "\n✅ Metadatos eliminados correctamente de '{}'",
@@ -1022,13 +1005,7 @@ fn remove_archivo(file: &Path, tags: &[String], all: bool) -> Result<(), String>
                         outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
                     }
                     Err(error) => {
-                        return Err(format!(
-                            "no se pudo procesar el archivo '{}': {}\n  El archivo tiene un \
-                             comentario de Vorbis (Ogg Vorbis, Opus o FLAC nativo) pero no se pudo \
-                             interpretar. Formatos soportados: MP3, MP4, OGG, Opus y FLAC.",
-                            file.display(),
-                            error
-                        ));
+                        return Err(motivo_vorbis(file, error));
                     }
                 }
                 return Ok(());
@@ -1053,13 +1030,7 @@ fn remove_archivo(file: &Path, tags: &[String], all: bool) -> Result<(), String>
                         outln!("⚠️  El archivo '{}' no tenía metadatos", file.display());
                     }
                     Err(error) => {
-                        return Err(format!(
-                            "no se pudo procesar el archivo '{}': {}\n  El archivo tiene un \
-                             comentario de Vorbis (Ogg Vorbis, Opus o FLAC nativo) pero no se pudo \
-                             interpretar. Formatos soportados: MP3, MP4, OGG, Opus y FLAC.",
-                            file.display(),
-                            error
-                        ));
+                        return Err(motivo_vorbis(file, error));
                     }
                 }
                 return Ok(());
@@ -1080,14 +1051,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Modo batch: un archivo por invocación mantiene la salida byte a
             // byte igual (sin cabeceras y con la línea JSON única); con varios,
             // el modo legible separa cada bloque con `=== <ruta> ===` y el modo
-            // JSON emite NDJSON (una línea por archivo) al final del lote.
+            // JSON emite NDJSON (una línea por archivo) al final del lote. Un
+            // fallo por archivo (ruta inexistente, formato no soportado) NO
+            // aborta el resto: el fallido no emite cabecera ni línea y el
+            // motivo se informa al final con `reportar_fallos` (exit ≠ 0).
             let mut lineas: Vec<String> = Vec::new();
+            let mut fallos: Vec<(PathBuf, String)> = Vec::new();
             let cabecera = !*json && files.len() > 1;
             for file in files {
-                show_archivo(file, *json, &mut lineas, cabecera);
+                if let Err(motivo) = show_archivo(file, *json, &mut lineas, cabecera) {
+                    fallos.push((file.clone(), motivo));
+                }
             }
-            if *json {
+            if *json && !lineas.is_empty() {
                 print_block(&batch_ndjson(&lineas));
+            }
+            if !fallos.is_empty() {
+                reportar_fallos(&fallos, files.len() == 1);
             }
         }
         Command::Edit {

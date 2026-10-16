@@ -6841,3 +6841,114 @@ fn test_cli_show_sin_archivos_error() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fix MEDIO: `show` batch procesa TODOS los archivos pese a fallos — fase RED
+//
+// El spec del change exige que el batch procese todos los archivos aunque
+// alguno falle (ruta inexistente, formato no soportado) y que informe el fallo
+// al final con exit ≠ 0. Hoy `show` aborta al primer fallo: f2 nunca se
+// procesa y la cabecera del archivo fallido queda huérfana (en `--json` aborta
+// sin emitir NDJSON). Estos tests fijan el comportamiento correcto y FALLAN
+// hasta que el GREEN lo implemente.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_show_batch_archivo_inexistente_no_aborta() {
+    // Dos MP3 con tags en medio de un inexistente: `show` debe procesar TODOS
+    // los archivos válidos (cabecera + bloque de f1 y de f2), no dejar cabecera
+    // huérfana del que falla y terminar con exit ≠ 0 informando el motivo por
+    // stderr.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+    let inexistente = "/ruta/inexistente.mp3";
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "Uno"]);
+    assert!(edit1.status.success());
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "Dos"]);
+    assert!(edit2.status.success());
+
+    let show = run_cli(&[
+        "show",
+        f1.to_str().unwrap(),
+        inexistente,
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        !show.status.success(),
+        "`show` con un archivo inexistente en el lote debe salir con código distinto de cero"
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("Uno") && stdout.contains("Dos"),
+        "el lote debe procesar AMBOS archivos válidos pese al fallo, fue: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("=== {} ===", f1.display()))
+            && stdout.contains(&format!("=== {} ===", f2.display())),
+        "las cabeceras de los archivos válidos deben emitirse, fue: {stdout}"
+    );
+    assert!(
+        !stdout.contains(&format!("=== {inexistente} ===")),
+        "el archivo que falla no debe dejar una cabecera huérfana, fue: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&show.stderr);
+    assert!(
+        stderr.contains(inexistente),
+        "el stderr debe mencionar la ruta inexistente en español, fue: {stderr}"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}
+
+#[test]
+fn test_cli_show_json_batch_archivo_inexistente() {
+    // Mismo escenario en modo `--json`: el NDJSON debe tener UNA línea por
+    // archivo válido (f1 y f2; el inexistente no genera línea), el exit debe
+    // ser ≠ 0 y el motivo debe ir por stderr mencionando la ruta.
+    let f1 = create_temp_mp3();
+    let f2 = create_temp_mp3();
+    let inexistente = "/ruta/inexistente.mp3";
+
+    let edit1 = run_cli(&["edit", f1.to_str().unwrap(), "--title", "Uno"]);
+    assert!(edit1.status.success());
+    let edit2 = run_cli(&["edit", f2.to_str().unwrap(), "--title", "Dos"]);
+    assert!(edit2.status.success());
+
+    let show = run_cli(&[
+        "show",
+        "--json",
+        f1.to_str().unwrap(),
+        inexistente,
+        f2.to_str().unwrap(),
+    ]);
+    assert!(
+        !show.status.success(),
+        "`show --json` con un archivo inexistente debe salir con código distinto de cero"
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    let lineas = stdout
+        .split('\n')
+        .filter(|linea| !linea.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lineas.len(),
+        2,
+        "el NDJSON debe tener exactamente una línea por archivo válido (f1 y f2), fue: {stdout:?}"
+    );
+    for linea in &lineas {
+        assert!(
+            linea.contains("\"formato\":\"mp3\""),
+            "cada línea debe ser el JSON de un MP3 válido, fue: {linea}"
+        );
+    }
+    let stderr = String::from_utf8_lossy(&show.stderr);
+    assert!(
+        stderr.contains(inexistente),
+        "el stderr debe mencionar la ruta inexistente en español, fue: {stderr}"
+    );
+
+    cleanup_file(&f1);
+    cleanup_file(&f2);
+}

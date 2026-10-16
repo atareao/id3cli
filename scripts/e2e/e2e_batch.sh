@@ -17,7 +17,7 @@
 #   e2e_gen_audio, y verifica, por orden:
 #   1. Estado inicial: el MP3 recién generado no tiene campos (sin tags hay una
 #      cabecera ID3v2 vacía de ffmpeg: `tags` es objeto todo-null; el
-#      `tags:null` real se verifica tras remove --all en el punto 7).
+#      `tags:null` real se verifica tras remove --all en el punto 8).
 #   2. `edit --title/--artist` batch sobre f1.mp3 y f2.m4a: exit 0.
 #   3. Verificación por archivo: show legible y show --json de cada uno con los
 #      valores batch escritos.
@@ -27,8 +27,12 @@
 #      como se pasó al CLI (absoluta del temporal).
 #   6. Exit agregado: `edit` batch con un archivo inexistente en medio → exit 1
 #      con el motivo por stderr y los archivos que SÍ existían quedan editados.
-#   7. `remove --all` batch: exit 0 y el MP3 vuelve a `tags: null`.
-#   8. `show` sin archivos: exit 2 (clap exige `<FILES>...`).
+#   7. Show batch con fallo: un archivo inexistente en medio NO aborta el lote;
+#      los válidos emiten cabecera y bloque (legible) o línea JSON, el
+#      inexistente ni cabecera ni línea, y el motivo va por stderr con exit 1
+#      (fix del hallazgo Medio, cubierto además por integración).
+#   8. `remove --all` batch: exit 0 y el MP3 vuelve a `tags: null`.
+#   9. `show` sin archivos: exit 2 (clap exige `<FILES>...`).
 #   Todas las aserciones alimentan el recuento PASS/FAIL de e2e_summary
 #   (e2e_lib.sh) y ninguna aborta: el fallo se mide por el contador.
 
@@ -63,7 +67,7 @@ main() {
     #    recién generado por ffmpeg conserva una cabecera ID3v2 VACÍA («ID3» en
     #    el byte 0 pese a -map_metadata -1, medido), de modo que `.tags` es un
     #    OBJETO con todas las claves null — no el `tags:null` real, que solo
-    #    existe sin bloque ID3 y se verifica tras remove --all en el punto 7—.
+    #    existe sin bloque ID3 y se verifica tras remove --all en el punto 8—.
     #    El «sin campos» se comprueba por la ausencia del título.
     E2E_EXT=mp3
     e2e_gen_audio f1            # $E2E_DIR/f1.mp3
@@ -145,14 +149,49 @@ main() {
     e2e_run show "$E2E_DIR/f2.m4a"
     check_show_contains 'Mixto'          # el lote continuó tras el fallo
 
-    # 7) Remove --all batch: exit 0 y el MP3 vuelve a un estado SIN bloque
+    # 7) Show batch con fallo (fix del hallazgo Medio): un archivo inexistente
+    #    en medio NO aborta el lote. En el modo legible los válidos emiten su
+    #    cabecera `=== <ruta> ===` y bloque, y el inexistente NINGUNA cabecera
+    #    (la detección del formato va primero; sin cabeceras huérfanas, medido);
+    #    en el modo JSON el inexistente no genera línea NDJSON. El motivo va por
+    #    stderr con exit 1. En este punto f1 y f2 ya llevan «Mixto» (etapa 6),
+    #    pero la etapa solo verifica cabeceras y conteo, no valores concretos.
+    e2e_run show "$E2E_DIR/f1.mp3" /ruta/inexistente.mp3 "$E2E_DIR/f2.m4a"
+    check_rc 1
+    check_show_contains "=== $E2E_DIR/f1.mp3 ==="
+    check_show_contains "=== $E2E_DIR/f2.m4a ==="
+    # El archivo inexistente NO emite cabecera (detección primero).
+    if grep -aqF "=== /ruta/inexistente.mp3 ===" "$E2E_OUT"; then
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''sin cabecera del archivo inexistente'\'': aparece en show\n' >&2
+    else
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: sin cabecera del archivo inexistente\n'
+    fi
+    check_stderr_aviso 'no existe'
+    # NDJSON con fallo: una línea por archivo válido (2), el inexistente no
+    # genera línea, exit 1 con el motivo por stderr.
+    e2e_run show --json "$E2E_DIR/f1.mp3" /ruta/inexistente.mp3 "$E2E_DIR/f2.m4a"
+    check_rc 1
+    local n_json_lines
+    n_json_lines="$(grep -c . "$E2E_OUT")"
+    if [[ "$n_json_lines" -eq 2 ]]; then
+        E2E_PASS=$((E2E_PASS + 1))
+        printf 'PASS: NDJSON con 2 líneas pese al fallo\n'
+    else
+        E2E_FAIL=$((E2E_FAIL + 1))
+        printf 'FAIL: aserción '\''NDJSON con fallo'\'': se esperaban 2 líneas y hay %s\n' "$n_json_lines" >&2
+    fi
+    check_stderr_aviso 'no existe'
+
+    # 8) Remove --all batch: exit 0 y el MP3 vuelve a un estado SIN bloque
     #    ID3v2: aquí sí el caso real de `tags: null` (medido).
     e2e_run remove --all "$E2E_DIR/f1.mp3" "$E2E_DIR/f2.m4a"
     check_rc 0
     e2e_run show --json "$E2E_DIR/f1.mp3"
     check_json_null '.tags'
 
-    # 8) Show sin archivos: el batch sigue exigiendo al menos un archivo
+    # 9) Show sin archivos: el batch sigue exigiendo al menos un archivo
     #    (`#[arg(required = true)]`), así que clap falla con exit 2.
     e2e_run show
     check_rc 2

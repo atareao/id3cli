@@ -6,7 +6,7 @@ Single-crate Rust CLI (`edition 2024`, `lofty` + `clap` derive) that reads/write
 
 ```sh
 cargo build                      # debug
-cargo test                       # 329 tests (178 unit + 151 integración)
+cargo test                       # 331 tests (178 unit + 153 integración)
 cargo test --lib                 # unit tests only (src/tests.rs)
 cargo test --test '*'            # integration tests only (tests/integration_test.rs)
 cargo fmt
