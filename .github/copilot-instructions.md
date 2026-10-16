@@ -26,7 +26,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Build debug binary: `cargo build`
   - Run locally with subcommands: `cargo run -- edit song.mp3 --title "X" --artist "Y"`
   - Build optimized release: `cargo build --release`
-  - Run all tests: `cargo test` (318 = 174 unit + 144 integration); use `--no-fail-fast` if more than one suite fails, since `cargo test` stops at the first failing binary
+  - Run all tests: `cargo test` (329 = 178 unit + 151 integration); use `--no-fail-fast` if more than one suite fails, since `cargo test` stops at the first failing binary
   - Run only unit tests: `cargo test --lib`
   - Run only integration tests: `cargo test --test '*'`
   - Format: `cargo fmt`
@@ -42,7 +42,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Rust `edition = "2024"` in `Cargo.toml`
   - Keep the binary small and dependency-light — adding new deps must be justified
   - CLI uses clap's derive macros; the `edit` options are `-t/--title`, `-a/--artist` (repeatable), `--album`, `--year`, `--date`, `--genre`, `--track`, `--season`, `--composer`, `--copyright`, `--subtitle`, `--original-artist`, `--album-artist`, `-L/--lyrics`, `-c/--cover`, `-u/--url`, `--compilation`, `--title-sort`, `--artist-sort`, `--album-sort`; `--track` and `--season` accept the form `N` or `N/T`
-  - `remove <FILE> [--all] [TAGS...]`: `--all` deletes everything; without it, the listed tags are removed by name (English or Spanish names accepted)
+  - `remove <FILE> [--all] [TAGS...]`: `--all` deletes everything; without it, the listed tags are removed by name (English or Spanish names accepted). `show`, `edit` and `remove` all accept multiple files (`<FILE>...`) in a single invocation, applied in order; with `show` + more than one file the readable output is prefixed with a `=== <path> ===` header per file and `show --json` emits NDJSON (one JSON line per file, consumable with `jq -s`)
   - Multiple artists are joined with a `"; "` separator
   - Error messages are in Spanish
   - MP3 tags are always written as ID3v2.4; MP4 metadata is written as iTunes-style `ilst` atoms; OGG is written as Vorbis comments through the concrete `VorbisComments` type (not the generic `Tag`, which drops unmapped keys and normalizes the case of the ones that do map), with `VORBIS_COMMENT_MAP` as the single source of the mapping; the Vorbis comment is mandatory, so its vendor and `ENCODER` are not shown as metadata, `edit` preserves foreign keys (including `ENCODER`) and the vendor, and `remove --all` empties the comment and only preserves the vendor (mandatory, it cannot be removed from the container). FLAC uses the exact same `VorbisComments` mechanism on the native file (`VORBIS_COMMENT` block), but the block is optional: `remove --all` removes the whole comment block, so the vendor is NOT preserved
@@ -79,7 +79,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
 
 - **What an AI helper should do first:**
   1. Run `cargo build` to ensure the toolchain and dependencies are available
-  2. Run `cargo test` to verify all 318 tests pass (174 unit + 144 integration)
+  2. Run `cargo test` to verify all 329 tests pass (178 unit + 151 integration)
   3. Review **src/lib.rs** for all business logic functions
   4. Review **src/main.rs** for CLI structure and argument handling
   5. Test with: `cargo run -- show /tmp/test.mp3`
@@ -94,7 +94,7 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Do not change `edition` or bump deps without mentioning compatibility reasons
   - All new features must include tests (both unit and integration)
   - Keep the CLI user-friendly with clear error messages in Spanish
-  - Preserve existing coverage — currently 318 tests (174 unit + 144 integration)
+  - Preserve existing coverage — currently 329 tests (178 unit + 151 integration)
   - When modifying shared functions (`apply_metadata()`, `add_cover_art()`, `add_lyrics()`, `add_url()`, `add_apple_metadata()`), update ALL tests that call them
   - Use the `"; "` separator for multiple artists
   - Supported image formats: JPG, PNG, WEBP — validate extensions and return helpful errors
