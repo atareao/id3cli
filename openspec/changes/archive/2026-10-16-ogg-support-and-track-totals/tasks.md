@@ -141,15 +141,85 @@ Con tres formatos, la documentación pasa a ser parte del contrato y por eso se 
 
 Cierre con la suite completa, prueba manual sobre los tres formatos y repaso escenario a escenario de los specs del change, con la evidencia fechada dentro del propio change.
 
-- [ ] 7.1 Ejecutar las tres comprobaciones mecánicas completas.
+- [x] 7.1 Ejecutar las tres comprobaciones mecánicas completas.
       Verificación: `cargo test --no-fail-fast` completo, `cargo fmt --check` y `cargo clippy --all-targets --all-features --locked -- -D warnings` limpios, con la salida anotada y el recuento de tests comparado contra los 220 del baseline.
-- [ ] 7.2 Probar el flujo de extremo a extremo con el binario sobre los tres formatos.
+      Evidencia (2026-10-16, rama `development` tras el merge de opus-support #23): la suite completa reporta **281 tests (163 unitarios + 118 de integración), 0 fallos**, frente a los 220 del baseline (125 + 95) —el cambio sumó 61 tests y la suite quedó en verde sin relajar nada—. Salida literal de `cargo test --no-fail-fast` (resumen por binario):
+      ```
+      running 163 tests
+      test result: ok. 163 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      running 118 tests
+      test result: ok. 118 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.23s
+         Doc-tests id3cli
+      test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      ```
+      Salida literal de `cargo fmt --check` (limpia, sin diff): `FMT_OK exit=0`. Salida literal de `cargo clippy --all-targets --all-features --locked -- -D warnings` (limpia, sin warnings):
+      ```
+          Checking id3cli v0.5.2 (/data/rust/id3cli)
+          Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s
+      CLIPPY_EXIT=0
+      ```
+- [x] 7.2 Probar el flujo de extremo a extremo con el binario sobre los tres formatos.
       Verificación: `edit` con metadatos completos, `show`, `remove` de un campo y `remove --all` sobre MP3, MP4 y OGG, comprobando que el audio sigue intacto y reproducible en los tres.
-- [ ] 7.3 Probar la carátula WebP en OGG frente a MP4 con la misma imagen.
+      Evidencia (2026-10-16): con la release que se prepara los formatos probados son **cuatro** —MP3, MP4, OGG y Opus—; aquí quedan anotados los dos del contenedor Ogg con copias temporales en `/tmp/opencode/verificacion-grupo7/` (los fixtures versionados no se tocaron: `sha256sum` de `tests/fixtures/sample.ogg` y `tests/fixtures/sample.opus` idéntico antes y después de la prueba). Flujo completo con `target/debug/id3cli` tras `cargo build`:
+      ```
+      $ id3cli show sample.ogg            → ⚠️  No se encontraron metadatos. exit=0
+      $ id3cli edit sample.ogg --title "X" --track 7/12
+          ✓ Título: X
+          ✓ Pista: 7/12
+          ✅ Metadatos guardados correctamente en '.../sample.ogg' exit=0
+      $ id3cli show sample.ogg            → 🎵 Título: X / #️⃣  Pista: 7/12 / 📦 Total de metadatos: 2 exit=0
+      $ id3cli remove sample.ogg title    → ✓ Eliminado: title / ✅ Metadatos eliminados correctamente exit=0
+      $ id3cli remove sample.ogg --all    → ✅ Metadatos eliminados de '.../sample.ogg' exit=0
+      $ id3cli show sample.ogg            → ⚠️  No se encontraron metadatos. exit=0
+      $ ffprobe sample.ogg                → format_name=ogg duration=0.600000 exit=0
+      ```
+      Nota: la sintaxis de `remove` es posicional (`remove <FILE> [TAGS]...`), no `--title`; el flujo idéntico sobre `sample.opus` (show vacío exit=0 → edit `--title "X" --track 7/12` con `✓ Título: X` y `✓ Pista: 7/12` → show con ambos campos → `remove title` → `remove --all` → show vacío exit=0) termina con `ffprobe` reconociendo `format_name=ogg duration=0.606500` exit=0: el audio queda intacto y reproducible tras `remove --all` en los dos códecs del contenedor.
+- [x] 7.3 Probar la carátula WebP en OGG frente a MP4 con la misma imagen.
       Verificación: en OGG MUST quedar escrita sin degradar; en MP4 MUST quedar degradada con aviso por stderr; ambas ejecuciones con código de salida cero.
-- [ ] 7.4 Comprobar el paquete publicado.
+      Evidencia (2026-10-16): cubierto por tests existentes con la **misma imagen** (`WEBP_BYTES`) en ambos formatos, verificados por grep y en verde dentro de la suite del 7.1. En OGG, `test_ogg_caratula_webp_sin_degradar` (`src/tests.rs:3456`) escribe la carátula, exige `report.warnings.is_empty()` («en OGG el WebP no se degrada y no debe emitir aviso») y relee el MIME real `Some("image/webp")`; el test se complementa con `test_ogg_caratula_en_metadata_block_picture` (`src/tests.rs:3403`) y `test_ogg_caratula_de_imagen_corta_no_aborta` (`src/tests.rs:3493`). En MP4, `test_m4a_webp_cover_uses_reserved_type_warns_and_writes_other_fields` (`src/tests.rs:2593`) exige exactamente un aviso que nombre `WebP`, `iTunes` y `macOS` y comprueba con `data_box_after(&bytes, b"covr")` que el tipo de dato real es el reservado `0`; el mismo comportamiento por el binario lo fija `test_cli_m4a_cover_webp_reserved_type_warns_and_succeeds` (`tests/integration_test.rs:4089`), que exige `out.status.success()` (salida cero) más el aviso por stderr. En MP3 no hay degradación (`test_cli_cover_webp`, `tests/integration_test.rs:788`, y `test_add_cover_art_webp`, `src/tests.rs:670`). No se re-ejecutó manualmente: la cita de los tests en verde dentro de la suite del 7.1 es la evidencia.
+- [x] 7.4 Comprobar el paquete publicado.
       Verificación: `cargo package --list` MUST seguir publicando el paquete sin el andamiaje del repositorio (y los fixtures de `tests/**` sí viajan, incluido `tests/fixtures/sample.ogg`), con el recuento de ficheros anotado.
-- [ ] 7.5 Repasar cada escenario de los specs del change y anotar el test que lo cubre.
+      Evidencia (2026-10-16): **pendiente de la release v0.6.0; el paquete se publicará al fusionar el PR final**. La comprobación local de lo que viajará sí se ejecutó: la lista blanca `include` de `Cargo.toml` no cambió indebidamente (grep literal, líneas 11-19 del manifiesto):
+      ```
+      include = [
+          "/src/**",
+          "/tests/**",
+          "/Cargo.toml",
+          "/Cargo.lock",
+          "/README.md",
+          "/LICENSE",
+          "/CHANGELOG.md",
+      ]
+      ```
+      y `cargo package --list` (sin publicar) lista **19 ficheros**: `tests/fixtures/sample.ogg` viaja (1 coincidencia) y el andamiaje del repositorio está fuera (0 coincidencias de `openspec`). Los patrones de primer nivel van anclados con `/`, de modo que un README ajeno al paquete no puede colarse.
+- [x] 7.5 Repasar cada escenario de los specs del change y anotar el test que lo cubre.
       Verificación: tabla escenario → test en el change; los escenarios sin test MUST quedar marcados como verificados manualmente con su evidencia.
-- [ ] 7.6 Cerrar con la evidencia fechada de todo lo anterior dentro del change.
+      Evidencia (2026-10-16): tabla escenario → test con los nombres comprobados por grep (las líneas son las actuales de `development`); cubre las capabilities `format-detection` (delta OGG), `ogg-tagging` y `track-numbering`:
+
+      | Escenario (spec) | Test que lo cubre |
+      |---|---|
+      | Detección de OGG Vorbis por contenido, con cualquier extensión (format-detection) | `test_detect_format_ogg_vorbis` (`src/tests.rs:1423`), que incluye el caso renombrado a `.mp3`; E2E: `test_cli_ogg_renamed_to_mp3_is_edited_by_content` (`tests/integration_test.rs:3115`) |
+      | Contenedor Ogg con códec no soportado (Opus, Speex, FLAC, Theora): rechazo con archivo intacto (format-detection) | `test_detect_format_ogg_other_codecs` (`src/tests.rs:1447`) y `test_cli_rejects_ogg_other_codecs_and_leaves_file_untouched` (`tests/integration_test.rs:3239`) |
+      | Página Ogg incompleta → formato no determinado (format-detection) | `test_detect_format_ogg_incomplete_page` (`src/tests.rs:1503`) |
+      | `OggS` sale de los magic bytes no soportados (6 → 5) (format-detection) | `test_detect_format_unsupported_magic_bytes` (`src/tests.rs:1338`) |
+      | El mensaje de error enumera MP3, MP4 y OGG (format-detection) | `test_cli_unsupported_format_message_lists_mp3_mp4_and_ogg` (`tests/integration_test.rs:3958`) |
+      | Escritura de las claves del mapeo y serialización cruda `[len][CLAVE=valor]`, sin claves inventadas (ogg-tagging) | `test_ogg_claves_serializadas_en_el_comentario_crudo` (`src/tests.rs:3760`) |
+      | Claves de terceros y vendor conservados al editar (ogg-tagging) | `test_ogg_ida_y_vuelta_conserva_claves_ajenas` (`src/tests.rs:3275`) |
+      | `edit` sin flags no reescribe el archivo (ogg-tagging) | `test_edit_ogg_sin_cambios_no_reescribe` (`src/tests.rs:3319`) |
+      | Omisión avisada de `--url` y `--original-artist` sin abortar el resto (ogg-tagging) | `test_ogg_omite_url_y_artista_original_con_aviso` (`src/tests.rs:3341`) |
+      | Letra en `LYRICS` con ida y vuelta del texto completo (ogg-tagging) | `test_ogg_letra_en_lyrics` (`src/tests.rs:3531`) |
+      | Carátula en `METADATA_BLOCK_PICTURE` y WebP sin degradar (ogg-tagging) | `test_ogg_caratula_en_metadata_block_picture` (`src/tests.rs:3403`) y `test_ogg_caratula_webp_sin_degradar` (`src/tests.rs:3456`) |
+      | `show` de un `.ogg` sin campos de usuario: «no se encontraron metadatos», salida cero, sin vendor ni `ENCODER` (ogg-tagging) | `test_cli_ogg_show_without_user_fields_says_no_metadata` (`tests/integration_test.rs:3608`); ida y vuelta con campos: `test_cli_ogg_edit_then_show_roundtrip` (`tests/integration_test.rs:3062`) |
+      | `remove <campo>` conserva el resto y `remove --all` vacía el comentario preservando vendor (ogg-tagging) | `test_cli_ogg_remove_field_keeps_rest` (`tests/integration_test.rs:3149`) y `test_cli_ogg_remove_all_empties_comment_and_preserves_vendor` (`tests/integration_test.rs:3191`) |
+      | Forma `N/T` aceptada y escrita en los tres formatos (track-numbering) | parseo: `test_number_with_total_acepta_numero_y_total` (`src/tests.rs:3904`); escritura E2E: `test_cli_track_con_total_en_los_tres_formatos` (`tests/integration_test.rs:5093`) y `test_cli_temporada_con_total_en_los_tres_formatos` (`tests/integration_test.rs:5125`); por formato: `test_mp3_escribe_total_de_pista` (3982), `test_mp4_escribe_total_de_pista` (4093), `test_ogg_escribe_total_de_pista` (4318) |
+      | Formas inválidas (`7/`, `/12`, `7/12/3`, `7/x`, vacía) rechazadas antes de tocar el archivo (track-numbering) | `test_cli_track_rechaza_formas_invalidas_sin_tocar_el_archivo` (`tests/integration_test.rs:5017`) y `test_cli_season_rechaza_formas_invalidas_sin_tocar_el_archivo` (`tests/integration_test.rs:5056`) |
+      | La forma sin total sigue comportándose igual que antes del cambio (track-numbering) | `test_cli_numero_sin_total_sigue_funcionando` (`tests/integration_test.rs:5157`) |
+      | Total preexistente conservado al escribir número sin total, en los tres formatos (track-numbering) | `test_cli_conserva_el_total_preexistente_en_los_tres_formatos` (`tests/integration_test.rs:5257`); unitarios: `test_mp3_conserva_total_preexistente` (4034), `test_mp4_conserva_total_preexistente` (4135), `test_ogg_conserva_total_preexistente` (4358) |
+      | Sin total preexistente no se inventa uno (track-numbering) | `test_mp3_sin_total_no_inventa_total` (4062), `test_mp4_sin_total_no_inventa_total` (4164), `test_ogg_sin_total_no_inventa_total` (4394) |
+      | `show` muestra el total cuando existe y no muestra el campo cuando no existe (track-numbering) | `test_cli_show_no_muestra_total_cuando_no_existe` (`tests/integration_test.rs:5221`); sobre los átomos MP4 trkn/disk y el límite de 16 bits: `test_mp4_total_no_representable_avisa_y_no_inventa_total` (4231) y `test_mp4_total_cero_avisa` (4276) |
+      | `remove track` elimina número y total como unidad en los tres formatos (track-numbering) | `test_cli_remove_track_elimina_numero_y_total` (`tests/integration_test.rs:5319`); unitarios: `test_mp3_remove_track_elimina_el_total` (4481) y `test_mp4_remove_track_elimina_el_atomo_completo` (4426) |
+
+      No queda ningún escenario de estas tres capabilities sin test: los del contenedor Ogg que dependen del flujo por binario (rechazo de códecs, `remove --all`, `show` vacío) están cubiertos por los tests de integración citados y además se verificaron manualmente en el 7.2.
+- [x] 7.6 Cerrar con la evidencia fechada de todo lo anterior dentro del change.
       Verificación: todas las casillas de este fichero marcadas y la evidencia fechada registrada, lista para `openspec archive ogg-support-and-track-totals` tras la aprobación del usuario.
+      Evidencia (2026-10-16): nota de cierre. La suite completa queda en **281 tests (163 unitarios + 118 de integración), 0 fallos**, frente a los 220 del baseline; `cargo fmt --check` y `cargo clippy --all-targets --all-features --locked -- -D warnings` quedan limpios. El flujo manual E2E se verificó sobre **cuatro** formatos (MP3, MP4, OGG y Opus; anotados OGG y Opus en 7.2) con el audio intacto y reproducible tras `remove --all`. La carátula WebP quedó verificada por tests en verde para OGG (sin degradar, `src/tests.rs:3456`) y MP4 (tipo reservado 0 con aviso, `src/tests.rs:2593` e `tests/integration_test.rs:4089`). El `include` de `Cargo.toml` no cambió y `cargo package --list` lista 19 ficheros con `tests/fixtures/sample.ogg` y sin andamiaje de `openspec/`; la verificación del paquete publicado queda **pendiente de la release v0.6.0**, que se publicará al fusionar el PR final. La tabla escenario → test del 7.5 cubre las tres capabilities del change sin escenarios huérfanos. Con esta casilla, las **6 casillas del grupo 7 y las 38 del change quedan marcadas** (0 sin marcar), y este change está listo para `openspec archive ogg-support-and-track-totals --yes` como cierre antes del PR final de release.

@@ -27,7 +27,7 @@ Toda escritura de tags sobre un archivo MP3 MUST usar la versión ID3v2.4, del m
 
 ### Requirement: Mapeo de los flags del CLI a los frames ID3v2.4
 
-El CLI SHALL escribir cada flag de `edit` en el frame ID3v2.4 que le corresponde hoy, sin cambiar ningún mapeo: `--title` en `TIT2`, `--artist` en `TPE1`, `--album` en `TALB`, `--album-artist` en `TPE2`, `--genre` en `TCON`, `--track` en `TRCK`, `--season` en `TPOS`, `--composer` en `TCOM`, `--copyright` en `TCOP`, `--subtitle` en `TIT3`, `--original-artist` en `TOPE`, `--url` en `WOAR`, `--compilation` en `TCMP` con el valor `"1"`, `--title-sort` en `TSOT`, `--artist-sort` en `TSOP`, `--album-sort` en `TSOA`, `--lyrics` en `USLT` y `--cover` en `APIC`. En cuanto a las fechas, `--year` SHALL escribirse en el frame `TYER` y `--date` en el frame `TDRC`; son dos frames distintos y NO se sobrescriben entre sí. El CLI MUST NOT omitir ni redirigir a otro frame ninguno de estos campos en MP3.
+El CLI SHALL escribir cada flag de `edit` en el frame ID3v2.4 que le corresponde hoy, sin cambiar ningún mapeo: `--title` en `TIT2`, `--artist` en `TPE1`, `--album` en `TALB`, `--album-artist` en `TPE2`, `--genre` en `TCON`, `--track` en `TRCK`, `--season` en `TPOS`, `--composer` en `TCOM`, `--copyright` en `TCOP`, `--subtitle` en `TIT3`, `--original-artist` en `TOPE`, `--url` en `WOAR`, `--compilation` en `TCMP` con el valor `"1"`, `--title-sort` en `TSOT`, `--artist-sort` en `TSOP`, `--album-sort` en `TSOA`, `--lyrics` en `USLT` y `--cover` en `APIC`. En cuanto a las fechas, `--year` SHALL escribirse en el frame `TYER` y `--date` en el frame `TDRC`; son dos frames distintos y NO se sobrescriben entre sí. Además, `--track` SHALL escribirse en el frame `TRCK` como el número (`n`) cuando no se indique total, o como `n/total` cuando sí se indique; `--season` SHALL escribirse en el frame `TPOS` con la misma forma. El resto del mapeo MUST quedar exactamente como está. El CLI MUST NOT omitir ni redirigir a otro frame ninguno de estos campos en MP3.
 
 #### Scenario: Mapeo de los campos básicos
 - **WHEN** se ejecuta `edit` con `--title`, `--artist`, `--album`, `--album-artist`, `--genre`, `--track` y `--season` sobre un MP3
@@ -60,6 +60,22 @@ El CLI SHALL escribir cada flag de `edit` en el frame ID3v2.4 que le corresponde
 #### Scenario: Campo no indicado no se toca
 - **WHEN** se ejecuta `edit` indicando solo `--title` sobre un MP3 que ya tenía artista y álbum
 - **THEN** los frames de artista y álbum MUST permanecer intactos
+
+#### Scenario: Total de pista en TRCK
+- **WHEN** se ejecuta `edit --track 7/12` sobre un MP3
+- **THEN** el frame `TRCK` MUST contener `7/12` y MUST releerse como número 7 con total 12
+
+#### Scenario: Total de temporada en TPOS
+- **WHEN** se ejecuta `edit --season 1/2` sobre un MP3
+- **THEN** el frame `TPOS` MUST contener `1/2`
+
+#### Scenario: Sin total explícito se conserva el total preexistente
+- **WHEN** un MP3 ya tiene `TRCK` con `3/12` y se ejecuta `edit --track 5`
+- **THEN** el frame `TRCK` MUST quedar en `5/12`, conservando el total que ya estaba
+
+#### Scenario: Número sin total sobre un archivo sin total
+- **WHEN** se ejecuta `edit --track 5` sobre un MP3 cuyo `TRCK` no tiene total
+- **THEN** el frame `TRCK` MUST quedar en `5`
 
 ### Requirement: Múltiples artistas unidos con el separador `"; "`
 
