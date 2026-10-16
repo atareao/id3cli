@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use id3cli::output::print_block;
 use id3cli::*;
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
@@ -161,6 +162,12 @@ enum Command {
         /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4, el bloque de comentarios Vorbis en OGG y Opus preservando el vendor, y el mismo bloque en FLAC eliminado por completo, sin conservar el vendor — degradación documentada)
         #[arg(short, long)]
         all: bool,
+    },
+    /// Generar el script de completions para bash, zsh o fish
+    Completions {
+        /// Shell para el que generar el script (bash, zsh o fish)
+        #[arg(value_parser = clap::value_parser!(GenerationShell))]
+        shell: GenerationShell,
     },
 }
 
@@ -970,6 +977,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 remove_vorbis_tags(file, tags)?;
             }
         },
+        Command::Completions { shell } => {
+            // El script se genera sobre el árbol de comandos real del CLI (el
+            // mismo que `Args::command()` construye con todos los subcomandos y
+            // flags) y se emite como un bloque, sin salto de línea extra.
+            let mut cmd = Args::command();
+            let script = generate_completions(*shell, &mut cmd);
+            print_block(&script);
+        }
     }
 
     Ok(())
