@@ -1,4 +1,17 @@
 # Changelog
+## [0.8.0] - 2026-10-16
+
+### Documentation
+
+- *(plan)* Close Phase 3 (json-output), Phase 4 release v0.8.0 pending
+
+### Features
+
+- Salida JSON de show (--json) — change json-output (#29)
+
+### Miscellaneous Tasks
+
+- *(openspec)* Archive json-output change into specs
 ## [0.7.0] - 2026-10-16
 
 ### Bug Fixes
@@ -12,6 +25,10 @@
 ### Features
 
 - Soporta FLAC nativo (fLaC) con comentarios Vorbis, carátula PICTURE y remove --all
+
+### Miscellaneous Tasks
+
+- Release v0.7.0
 ## [0.6.0] - 2026-10-16
 
 ### Bug Fixes
