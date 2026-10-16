@@ -153,7 +153,7 @@ enum Command {
         #[arg(help = format!("Tags a eliminar, en inglés o en español ({VALID_TAG_NAMES})"))]
         tags: Vec<String>,
 
-        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4 y el bloque de comentarios Vorbis en OGG y FLAC, preservando el vendor)
+        /// Eliminar físicamente todos los tags del archivo (ID3v1/ID3v2 en MP3, metadatos ilst en MP4, el bloque de comentarios Vorbis en OGG y Opus preservando el vendor, y el mismo bloque en FLAC eliminado por completo, sin conservar el vendor — degradación documentada)
         #[arg(short, long)]
         all: bool,
     },

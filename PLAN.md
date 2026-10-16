@@ -2,26 +2,26 @@
 
 ## Estado y regla de oro
 
-> **ESTADO: FASE 1 COMPLETADA (bugs del e2e corregidos y verificados). Pendientes de aprobación/ejecución: Fase 0 (release v0.6.0), Fase 2 (FLAC) y Fase 3 (JSON).**
+> **ESTADO: FASE 1 COMPLETADA, FASE 2 COMPLETADA (FLAC, PR #27 fusionado, change archivado). Pendiente: Fase 3 (salida JSON) y Fase 4 (verificación final + release v0.7.0).**
 
 Este plan consolida, en orden de ejecución:
 
-1. **(0)** la release pendiente v0.6.0
-2. **(1)** los dos bugs que el tooling e2e destapó
-3. **(2)** la feature de soporte de FLAC (nuevo formato) — que **DEBE** ir antes que el JSON porque la salida JSON tiene que cubrir FLAC —
-4. **(3)** la feature de volcado de tags en JSON
+1. **(0)** la release v0.6.0 — **✅ COMPLETADA** (v0.6.0 publicada: PR #24 fusionado, tag y crates.io)
+2. **(1)** los dos bugs que el tooling e2e destapó — **✅ COMPLETADOS** (change OpenSpec `e2e-findings-fixes`, fixes 1.1 y 1.2)
+3. **(2)** la feature de soporte de FLAC (nuevo formato) — **✅ COMPLETADA (2026-10-16)** vía el change OpenSpec `flac-support` (archivado como `2026-10-16-flac-support`; PR #27 fusionado en `development`) — precedió al JSON porque la salida JSON tiene que cubrir FLAC
+4. **(3)** la feature de volcado de tags en JSON — **PENDIENTE** (Fase 3, por arrancar con el flujo OpenSpec: proposal → stop para aprobación del usuario)
 
 El usuario ha pedido explícitamente que este plan se guarde **SIN implementar nada**.
 
 ## Contexto — dónde estamos (todo verificado por el director)
 
-- El e2e por extensión (`scripts/e2e/`, PR #25 fusionado) valida **312 aserciones en verde**: mp3 70, m4a 80, ogg 81, opus 81 (tras la ampliación de la Fase 1: +12 en m4a por la secuencia `edit → remove --all → edit` y +5 por formato por la segunda edición de `--cover`). Suite Rust: **283 tests** (163 unit + 120 integración). fmt/clippy limpios.
-- PR #24 «release: v0.6.0 — OGG Vorbis, totales de pista y Ogg Opus» sigue **ABIERTO** en main (creado, CI en verde, pendiente de decisión/fusión del usuario).
+- El e2e por extensión (`scripts/e2e/`, PR #25 fusionado) valida **392 aserciones en verde** sobre los CINCO formatos: mp3 70, m4a 80, ogg 81, opus 81 y flac 80 (la ampliación de la Fase 2 añadió `e2e_flac.sh`; la Fase 1 aportó +12 en m4a por la secuencia `edit → remove --all → edit` y +5 por formato por la segunda edición de `--cover`). Suite Rust: **292 tests (164 unitarios + 128 integración)**. fmt/clippy limpios.
+- PR #24 «release: v0.6.0 — OGG Vorbis, totales de pista y Ogg Opus» **fusionado**: v0.6.0 publicada (changelog + tag + crates.io) — Fase 0 completada.
 - El change OpenSpec `e2e-local-helpers` está archivado (capabilities `e2e-tooling` y `e2e-verification` en `openspec/specs/`).
 - **lofty 0.25.4 ya soporta FLAC**: `lofty::flac::FlacFile` con `vorbis_comments_tag: Option<VorbisComments>` y `pictures: Vec<(Picture, PictureInformation)>`; implementa `OggPictureStorage` (la MISMA interfaz que ya usa el backend OGG/Opus para carátulas); `flac/mod.rs` línea 58-105 muestra que `write_to` mezcla las pictures del tag y las del propio archivo al guardar; probe.rs mapea `fLaC` → `FileType::Flac` (línea 375). La lectura simétrica: `FlacFile::read_from(&mut file, ParseOptions::default())` + accessor `vorbis_comments()` generado por el derive.
 - El proyecto **NO tiene serde ni serde_json** (`Cargo.toml` solo tiene lofty + clap; dev-dependency `id3` para tests). La feature JSON añadirá dependencias y, por la regla del repo (CI con `--locked`), **Cargo.lock DEBE commitearse en el mismo cambio**.
-- Detección actual: `detect_format_from_bytes` trata `b"fLaC"` como NoSoportado (hay listas en src/lib.rs ~914-916, ~941-942, ~980, ~1003 que nombran FLAC entre los no soportados — habrá que invertirlas como se hizo con OpusHead).
-- El e2e por extensión habrá que ampliarlo con `e2e_flac.sh` cuando exista FLAC (el runner común `e2e_lib.sh` ya es parametrizable por extensión).
+- Detección actual: `detect_format_from_bytes` reconoce `b"fLaC"` (offset 0, `'f'` minúscula) → `AudioFormat::Flac` (las viejas listas de «no soportado» de src/lib.rs se invirtieron como se hizo con OpusHead). `\x7fFLAC` DENTRO del contenedor Ogg sigue siendo NoSoportado (códec FLAC en Ogg ≠ FLAC nativo).
+- El e2e por extensión ya cubre FLAC: `scripts/e2e/e2e_flac.sh` + recipe `e2e-flac` en el justfile; `just e2e` recorre los cinco formatos (el runner común `e2e_lib.sh` es parametrizable por extensión).
 
 ## Fase 0 — Cerrar la release pendiente (decisión del usuario, sin código)
 
@@ -49,6 +49,8 @@ Ambos hallazgos fueron documentados en el PR #25 y en tasks.md 3.5 del change `e
 - **Verificación:** test RED (editar cover dos veces → 1 carátula al final, la última) → fix → verde; ampliar `e2e_mp3.sh` con la aserción «segunda edición de carátula sustituye, no acumula».
 
 ## Fase 2 — Feature: soporte de FLAC (DEBE preceder al JSON)
+
+> **✅ ESTADO: COMPLETADA (2026-10-16)** vía el change OpenSpec `flac-support`, archivado como `2026-10-16-flac-support`: commit `feat:` **ece7bab** → PR **#27** → fusionado en `development` (**9f28232**) → CI en verde → archive + commit `docs(openspec)` (**2fca65f**). Recuentos verificados: suite Rust **292 tests (164 unitarios + 128 integración)**, 0 fallos (`cargo test --no-fail-fast`); `cargo fmt --check` y `cargo clippy --all-targets --all-features -- -D warnings` limpios; e2e **392 aserciones (mp3 70, m4a 80, ogg 81, opus 81, flac 80)**, 0 fallidas, con recipe `e2e-flac` y `just e2e` sobre los 5 formatos. Degradaciones FLAC documentadas (verificadas empíricamente, no supuestas): (1) la carátula viaja como bloque PICTURE separado del archivo (lofty la materializa así; `show` la lee de los bloques vía `read_flac_pictures`/`display_tags_flac`); (2) `remove --all` **ELIMINA** el bloque VORBIS_COMMENT completo — el vendor **NO se conserva** en FLAC, a diferencia de OGG/Opus (lofty no escribe un comentario vacío al vaciarlo). Medición ffprobe (ffprobe n9.0.2): la metadata de FLAC se expone en **`format_tags`** (NO `stream_tags`, a diferencia del contenedor Ogg), con normalizaciones a minúsculas idénticas a OGG (`TRACKNUMBER→track`, `DISCNUMBER→disc`, `ALBUMARTIST→album_artist`) y `TRACKTOTAL`/`DISCTOTAL` en mayúsculas; tras `remove --all` el `format_tags` queda vacío. Todo ello quedó reflejado en el spec archivado, el README, AGENTS.md y copilot-instructions. El resto de la sección queda como registro histórico del diseño e hitos.
 
 Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `VorbisComments` (campo `vorbis_comments_tag` de `FlacFile`) → el pipeline de metadatos se reutiliza; cambian detección, lectura/escritura despachada y enrutado del CLI.
 
@@ -78,6 +80,8 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 
 ## Fase 3 — Feature: volcado de tags en JSON (DESPUÉS de FLAC)
 
+> **Nota (2026-10-16):** con FLAC ya soportado (Fase 2 completada), la cobertura JSON debe incluir los **CINCO formatos: MP3, MP4/M4A, OGG, Opus y FLAC nativo**. El resto del diseño de esta fase queda como está.
+
 ### 3.1 — Diseño de la salida (decidir en el spec, propuesta aquí)
 
 - **Ubicación:** proponer un nuevo flag en `show` (p. ej. `id3cli show --json FILE`) o subcomando dedicado; el spec fija la elección (el director tiende a `show --json`: la salida JSON es la misma información que ya muestra show, en formato máquina).
@@ -101,7 +105,7 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 
 - **Barrido completo:** `cargo test --no-fail-fast` (recuento final), `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`, `bash -n scripts/e2e/*.sh`, `just e2e` (cinco formatos ahora) en verde, `openspec status` 4/4 por change.
 - **Flujo git:** ramas `feature/*` desde development por change (`fixes-mp4-mp3`, `flac-support`, `json-output`); commits convencionales: `fix:` para los bugs (1.1 y 1.2 — fix NO libera minor, pero sube patch: decidir si los dos fixes viajan en la misma release que FLAC/JSON o en una patch v0.6.1 antes — el director propone: un PR de fixes a development y que viajen en la release grande; el spec de release decide), `feat:` para FLAC y JSON (minor).
-- **Release:** FLAC + JSON + fixes en una **ÚNICA** release (precedente del repo: release única para OGG+Opus): bump minor → **v0.7.0** (v0.6.0 salió en la Fase 0). PR development → main.
+- **Release:** FLAC + JSON + fixes en una **ÚNICA** release (precedente del repo: release única para OGG+Opus): bump minor → **v0.7.0** (v0.6.0 salió en la Fase 0). PR development → main. El bump lo gestiona **CI en la rama de release** al completarse la Fase 4 — **no tocar Cargo.toml local** —, igual que se hizo con v0.6.0.
 - **Archive:** un change de OpenSpec por feature (`flac-support`, `json-output`) + uno por los fixes (o un change «e2e-findings-fixes» con dos capabilities según el criterio del director al aprobar); todos archivados al fusionar.
 - **Falsabilidad e2e:** re-demostrar tras ampliar (aserción corrompida → exit 1).
 
@@ -110,14 +114,14 @@ Cambio grande alineado con el patrón ya establecido con Opus: FLAC usa el tag `
 - `--year`/`--date` en FLAC: mismo comportamiento Vorbis (claves separadas YEAR/DATE en el comentario; el e2e debe medir cómo los expone ffprobe — stream_tags, caja original, igual que OGG).
 - FLAC puede llevar ID3v2 además de VorbisComments (assets de lofty: `flac_with_id3v2.flac`): fuera de alcance, documentar que el CLI lee/limpia solo el camino VorbisComments (y verificar qué hace lofty ante un FLAC con ID3v2: prioridad de tags — el spec lo fija; no bloquear).
 - El JSON con carátula: si el spec decidiera incluir bytes (base64), el tamaño puede crecer mucho (una carátula JPG ~9 KB aquí, pero en general MB); por defecto **NO** incluir bytes, solo metadatos de presencia/formato (dar la ruta de cómo extraer con el cliente).
-- El fix 1.1 (hdlr) puede requerir actualizar lofty o post-proceso manual: si lofty ya lo arregló en una versión > 0.25.4, evaluar el bump (implica Cargo.lock + regresión completa de los 281 tests + e2e) — el spec de fixes lo decide con evidencia.
+- El fix 1.1 (hdlr) puede requerir actualizar lofty o post-proceso manual: si lofty ya lo arregló en una versión > 0.25.4, evaluar el bump (implica Cargo.lock + regresión completa de los 292 tests + e2e) — el spec de fixes lo decide con evidencia.
 - El fix 1.2 (cover sustituye) puede tener matices por formato: en MP4/OGG/Opus/FLAC lofty puede ya comportarse distinto (insert vs replace): el e2e ampliará la aserción en **TODOS** los formatos, no solo MP3 — decidir si el fix 1.2 se generaliza a los 5 (propuesta: sí, semántica «sustituir la carátula del tipo indicado» en todos los backends).
 
 ## Definition of Done (todo el plan)
 
-- [ ] **Fase 0:** v0.6.0 publicada (PR #24 fusionado, tag y crates.io).
-- [x] **Fase 1:** fixes 1.1 y 1.2 con tests RED→GREEN, e2e ampliado con las aserciones que hoy fallarían, sin regresiones (283 tests verdes; e2e 312 aserciones).
-- [ ] **Fase 2:** FLAC soportado (detección, backend, CLI, fixture, ~7 tests integración, e2e_flac.sh, docs coherentes, hoja de ruta actualizada).
-- [ ] **Fase 3:** `show --json` (o la ubicación que fije el spec) con estructura estable versionada, serde+serde_json con lock commiteado, tests unitarios + integración + cobertura e2e en los 5 formatos.
+- [x] **Fase 0:** v0.6.0 publicada (PR #24 fusionado, tag y crates.io).
+- [x] **Fase 1:** fixes 1.1 y 1.2 con tests RED→GREEN, e2e ampliado con las aserciones que hoy fallarían, sin regresiones (292 tests verdes = 164 unitarios + 128 integración; e2e 392 aserciones en los cinco formatos).
+- [x] **Fase 2:** FLAC soportado (detección, backend `Backend::Flac` en el CLI, fixture `sample.flac`, tests integración, e2e_flac.sh, docs coherentes, hoja de ruta actualizada; change `flac-support` archivado; suite 292 tests; e2e 392 aserciones: 70+80+81+81+80).
+- [ ] **Fase 3:** `show --json` (o la ubicación que fije el spec) con estructura estable versionada, serde+serde_json con lock commiteado, tests unitarios + integración + cobertura e2e en los 5 formatos (incluido FLAC).
 - [ ] **Fase 4:** suite completa verde, fmt/clippy/bash -n/just e2e (5 formatos) limpios, changes archivados, release v0.7.0 única, README/AGENTS/copilot al día.
 - [ ] Ninguna de las fases 1-3 se toca sin aprobación explícita del usuario (este plan está **GUARDADO**, no en ejecución).
