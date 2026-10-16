@@ -1,4 +1,18 @@
 # Changelog
+## [0.9.0] - 2026-10-16
+
+### Documentation
+
+- *(plan)* Close Phase 4 — release v0.8.0 published (DoD complete)
+- *(plan)* Close Phase 5 — completions bash/zsh/fish shipped, release v0.9.0 pending
+
+### Features
+
+- Completions para bash, zsh y fish (Fase 5) (#31)
+
+### Other
+
+- V0.9.0
 ## [0.8.0] - 2026-10-16
 
 ### Documentation
@@ -12,6 +26,7 @@
 ### Miscellaneous Tasks
 
 - *(openspec)* Archive json-output change into specs
+- Release v0.8.0
 ## [0.7.0] - 2026-10-16
 
 ### Bug Fixes
