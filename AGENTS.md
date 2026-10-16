@@ -6,7 +6,7 @@ Single-crate Rust CLI (`edition 2024`, `lofty` + `clap` derive) that reads/write
 
 ```sh
 cargo build                      # debug
-cargo test                       # 306 tests (169 unit + 137 integración)
+cargo test                       # 318 tests (174 unit + 144 integración)
 cargo test --lib                 # unit tests only (src/tests.rs)
 cargo test --test '*'            # integration tests only (tests/integration_test.rs)
 cargo fmt
@@ -29,6 +29,7 @@ Nota: `cargo test` se detiene en el primer binario que falla — añade `--no-fa
 - **`src/output.rs`** — capa de escritura de la salida estándar: contiene el macro `outln!` (equivalente a `println!`) que trata el cierre del pipe como un final normal de la salida, y es el único sitio por el que se escribe en stdout
 - **`src/tests.rs`** — unit tests (module of lib.rs via `#[cfg(test)]`)
 - **`tests/integration_test.rs`** — integration tests spawning the binary via `Command`
+- **Completions** — subcomando `completions <bash|zsh|fish>` en `src/main.rs`, enum `GenerationShell` + `generate_completions()` en `src/lib.rs` (clap_complete 4.5, salida nativa del generador), `print_block()` en `src/output.rs` (bloques multilínea con el mismo contrato de pipe cerrado)
 - **`tests/fixtures/`** — `sample.mp3`, `sample.m4a`, `sample.ogg`, `sample.opus` y `sample.flac` reales, más `generate_sample_m4a.sh`, `generate_sample_ogg.sh`, `generate_sample_opus.sh` y `generate_sample_flac.sh`
 
 ## Key conventions

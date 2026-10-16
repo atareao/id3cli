@@ -3,7 +3,7 @@
 CLI en Rust para añadir tags y carátulas a archivos **MP3** (tags ID3v2.4), **MP4** (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`), **OGG** (comentarios Vorbis: Vorbis y Opus en el contenedor Ogg) y **FLAC** (comentarios Vorbis, `fLaC` nativo).
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-306%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
+[![Tests](https://img.shields.io/badge/tests-318%20passing-brightgreen.svg)](https://github.com/atareao/id3cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Características
@@ -95,6 +95,9 @@ id3cli remove <FILE> --all
 
 # Eliminar tags específicos del archivo
 id3cli remove <FILE> [TAGS...]
+
+# Generar el script de completions para el shell indicado (bash, zsh o fish)
+id3cli completions <bash|zsh|fish>
 ```
 
 ### Opciones para el comando remove
@@ -119,6 +122,28 @@ También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`,
 **Contrato del JSON** (claves estables): el objeto tiene la forma `{ "formato": "...", "tags": {...} }`. `formato` es el códec real detectado por contenido —`mp3`, `mp4`, `ogg`, `opus` o `flac`— y en el contenedor Ogg se distingue `ogg` (Vorbis) de `opus` (OpusHead). `tags` es un objeto con **todas** las claves siempre presentes (`null` si el campo está ausente): `title`, `artists`, `album`, `year`, `date`, `genre`, `track`, `season`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `url`, `lyrics`, `compilation`, `album_sort`, `artist_sort`, `title_sort`, `pictures`. `artists` y `pictures` son siempre arrays (nunca `null`); `compilation` es siempre booleana; `track` y `season` son objetos `{ "number": N, "total": N|null }` o `null`; `year` es número o `null`; `lyrics` es el texto completo sin recorte; cada `pictures[i]` es `{ "type": "...", "mime": "...|null", "size_bytes": N }`.
 
 **Sin tags:** si el contenedor no tiene tag (MP3 sin ID3v2, MP4 sin `ilst`), `tags` vale `null` con exit 0 y **stderr vacío** (el aviso ⚠️ del modo legible queda suprimido: el consumidor es una máquina). En OGG/Opus/FLAC el comentario de Vorbis siempre existe, así que un comentario vacío se emite como objeto `tags` con todas las claves `null`/vacías. Los errores (formato no soportado, archivo inexistente) siguen yendo por stderr en español con exit ≠ 0 y **nada** en stdout. El cierre de pipe por el consumidor termina con exit 0 sin pánico, igual que el modo legible.
+
+### Compleciones para bash, zsh y fish
+
+El subcomando `completions` emite el script de completions del CLI en la salida
+estándar, generado automáticamente desde la definición real del parser
+(`clap_complete`), de modo que siempre refleja los subcomandos y opciones
+actuales de `show`, `edit`, `remove` y el propio `completions`.
+
+```bash
+# bash: guardar el script y cargarlo desde .bashrc (o .bash_completion.d)
+id3cli completions bash > ~/.bash_completion.d/id3cli
+# zsh: con compinit activo
+id3cli completions zsh > ~/.zsh/completions/_id3cli
+# fish:
+id3cli completions fish > ~/.config/fish/completions/id3cli.fish
+```
+
+El script generado es la salida nativa del generador (`bash -n` lo valida): su
+línea de registro para bash es `complete -F _id3cli -o nosort -o bashdefault -o
+default id3cli`. Un shell no soportado (p. ej. `powershell`) falla con un error
+en español por stderr que nombra los shells válidos, y si el consumidor cierra
+el pipe la escritura termina como final normal (exit 0).
 
 ### Opciones para el comando edit
 
@@ -779,12 +804,12 @@ id3cli/
 
 ## Tests
 
-El proyecto tiene **cobertura completa** con **306 tests** (169 unitarios + 137 de integración):
+El proyecto tiene **cobertura completa** con **318 tests** (174 unitarios + 144 de integración):
 
 ```bash
-cargo test              # Ejecutar todos los tests (306)
-cargo test --lib        # Solo tests unitarios (169)
-cargo test --test '*'   # Solo tests de integración (137)
+cargo test              # Ejecutar todos los tests (318)
+cargo test --lib        # Solo tests unitarios (174)
+cargo test --test '*'   # Solo tests de integración (144)
 ```
 
 **Ejemplos de tests:**
@@ -826,8 +851,8 @@ Además de la suite de Rust, el repositorio incluye un tooling de **verificació
 **Cómo se ejecuta** (desde la raíz del repositorio):
 
 ```bash
-just e2e            # los 5 formatos en serie; se detiene con el exit code del primero que falle
-just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus | e2e-flac
+just e2e            # los 5 formatos + completions en serie; se detiene con el exit code del primero que falle
+just e2e-mp3        # un formato concreto: e2e-mp3 | e2e-m4a | e2e-ogg | e2e-opus | e2e-flac | e2e-completions
 ```
 
 O directamente, sin `just`:
@@ -844,7 +869,7 @@ scripts/e2e/e2e_mp3.sh
 | `--keep`   | Conserva el directorio temporal al terminar, para depurar                                                                  |
 
 ```bash
-just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 5 formatos
+just e2e                                              # pre-construye una vez (cargo build --locked) y verifica los 5 formatos + completions
 just e2e --keep                                       # lo mismo conservando los temporales
 just e2e-opus --bin target/release/id3cli --keep      # opus con binario custom, conservando el temporal
 scripts/e2e/e2e_m4a.sh --keep
@@ -887,6 +912,7 @@ Desarrollado con 🦀 Rust
 - [x] Temporada (season/TPOS) para organizar podcasts por temporadas
 - [x] Arquitectura modular (lib.rs separado del CLI)
 - [x] Salida JSON de `show` (`--json`, para scripts y consumidores tipo máquina)
+- [x] Compleciones para bash, zsh y fish (subcomando `completions`)
 - [ ] Modo batch para procesar múltiples archivos
 - [ ] Binarios para Windows y macOS
 - [x] Soporte para MP4 / M4A (átomos `ilst` estilo iTunes: `.m4a`, `.mp4`, `.m4b`)
