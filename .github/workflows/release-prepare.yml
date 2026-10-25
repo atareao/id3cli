@@ -8,6 +8,13 @@ permissions:
   contents: write
   actions: write
 
+# Serializa las ejecuciones: dos pushes rapidos a main NO deben calcular el
+# bump en paralelo ni crear dos tags. No se cancela en curso: cancelar entre el
+# tag y gh workflow run dejaria la release a medias.
+concurrency:
+  group: release-prepare
+  cancel-in-progress: false
+
 jobs:
   release:
     if: "!startsWith(github.event.head_commit.message, 'chore: release')"
@@ -17,7 +24,42 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine bump type from commits
+        id: bump
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          SUBJECTS=$(git log "$LAST_TAG"..HEAD --format="%s")
+          BODIES=$(git log "$LAST_TAG"..HEAD --format="%B")
+          # Clasifica TODO el rango por tipo conventional; el mayor decide. Un
+          # rango sin commits publicables —solo docs/chore/style/test/ci/build o
+          # merge commits— NO publica: el job termina con exito sin tag ni
+          # release. Antes cualquier push caia en --patch y publicaba una
+          # version vacia (v0.11.2, 2026-10-25, por un merge de solo
+          # documentacion).
+          # El breaking se detecta en el ASUNTO (!:) y en el CUERPO
+          # (BREAKING CHANGE), porque la convencion lo pone en el footer.
+          # Los patrones exigen el ":" del tipo (o "!:"), para no confundir
+          # "feature:" con "feat:".
+          if echo "$BODIES" | grep -qE "BREAKING[ -]CHANGE" || echo "$SUBJECTS" | grep -qE "^[a-zA-Z]+(\([^)]*\))?!:"; then
+            tipo="--major"
+          elif echo "$SUBJECTS" | grep -qE "^feat(\([^)]*\))?:"; then
+            tipo="--minor"
+          elif echo "$SUBJECTS" | grep -qE "^(fix|perf|refactor)(\([^)]*\))?:"; then
+            tipo="--patch"
+          else
+            tipo=""
+          fi
+          if [ -z "$tipo" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Sin commits que justifiquen release (solo docs/chore/style/test/ci/build o merges); no se publica."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "type=$tipo" >> "$GITHUB_OUTPUT"
+            echo "Bump decidido: $tipo"
+          fi
+
       - name: Install git-cliff
+        if: steps.bump.outputs.release == 'true'
         uses: taiki-e/install-action@v2
         with:
           tool: git-cliff
@@ -26,37 +68,30 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Install vampus
+        if: steps.bump.outputs.release == 'true'
         run: cargo install vampus --git https://github.com/atareao/vampus
 
-      - name: Determine bump type from commits
-        id: bump
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
-          COMMITS=$(git log "$LAST_TAG"..HEAD --format="%s")
-          if echo "$COMMITS" | grep -q "BREAKING CHANGE\|!:"; then
-            echo "type=--major" >> "$GITHUB_OUTPUT"
-          elif echo "$COMMITS" | grep -q "^feat"; then
-            echo "type=--minor" >> "$GITHUB_OUTPUT"
-          else
-            echo "type=--patch" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Bump version with vampus
+        if: steps.bump.outputs.release == 'true'
         run: vampus upgrade ${{ steps.bump.outputs.type }}
 
       - name: Get new version
+        if: steps.bump.outputs.release == 'true'
         id: version
         run: |
           V=$(grep '^current_version' .vampus.yml | sed 's/.*: *//')
           echo "value=$V" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
+        if: steps.bump.outputs.release == 'true'
         run: git-cliff -o CHANGELOG.md --tag "v${{ steps.version.outputs.value }}"
 
       - name: Refresh Cargo.lock
+        if: steps.bump.outputs.release == 'true'
         run: cargo metadata --format-version 1 > /dev/null
 
       - name: Commit, tag and push
+        if: steps.bump.outputs.release == 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ github.token }}
@@ -92,6 +127,7 @@ jobs:
           gh workflow run release.yml --ref "v${V}"
 
       - name: Sync development with main
+        if: steps.bump.outputs.release == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
