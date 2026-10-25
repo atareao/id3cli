@@ -4942,13 +4942,13 @@ fn test_documentacion_describe_los_formatos_soportados() {
 }
 
 // ---------------------------------------------------------------------------
-// Salida JSON de `show` (`--json`) — change json-output, grupo 2 (fase RED)
+// Salida JSON de `show` (`--json`) — change json-output, grupo 2
 //
-// Fase RED: los símbolos de serialización (`json_from_mp3`, `json_from_mp4`,
-// `json_from_vorbis`, `json_empty` y `format_json_name`) NO existen todavía, así
-// que estos tests no compilan hasta el GREEN. La verificación es por
-// subcadenas del JSON compacto de serde (`serde_json::to_string` no escribe
-// espacios); el GREEN puede reforzarlos parseando con `serde_json::Value`.
+// La verificación es ESTRUCTURAL: los tests parsean el documento con
+// `serde_json::from_str::<serde_json::Value>` y comprueban los TIPOS y valores
+// sobre el valor parseado, además del CONJUNTO EXACTO de las 20 claves
+// canónicas del objeto `tags` (ni faltan ni sobran). Así no dependen del
+// espaciado concreto de `serde_json::to_string` ni de subcadenas del texto.
 // ---------------------------------------------------------------------------
 
 /// Las 20 claves canónicas del objeto `tags`, todas presentes siempre (null si
@@ -4976,17 +4976,30 @@ const CLAVES_CANONICAS: [&str; 20] = [
     "pictures",
 ];
 
-/// Verifica que `json` contenga las 20 claves canónicas del objeto `tags`.
+/// Devuelve las discrepancias del CONJUNTO EXACTO de claves del objeto `tags`.
 ///
-/// Cada clave se busca como `"clave":` (con su dos puntos), la forma compacta
-/// de `serde_json::to_string`, de modo que no colisione con valores que
-/// contengan el mismo texto.
-fn contiene_todas_las_claves(json: &str) -> Vec<String> {
-    CLAVES_CANONICAS
-        .iter()
-        .filter(|clave| !json.contains(&format!("\"{clave}\":")))
-        .map(|clave| format!("falta la clave {clave:?} en: {json}"))
-        .collect()
+/// Parsea el documento con `serde_json::Value` y compara las claves del objeto
+/// `tags` con las 20 canónicas: informa tanto de las que faltan como de las que
+/// sobran. Si el documento no parsea —o `tags` no es un objeto— devuelve esa
+/// única discrepancia.
+fn discrepancias_de_claves_canonicas(json: &str) -> Vec<String> {
+    let valor: serde_json::Value = match serde_json::from_str(json) {
+        Ok(valor) => valor,
+        Err(error) => return vec![format!("el documento no parsea: {error}")],
+    };
+    let Some(tags) = valor.get("tags").and_then(|tags| tags.as_object()) else {
+        return vec!["`tags` no es un objeto".to_string()];
+    };
+    let presentes: std::collections::BTreeSet<&str> = tags.keys().map(String::as_str).collect();
+    let canonicas: std::collections::BTreeSet<&str> = CLAVES_CANONICAS.iter().copied().collect();
+    let mut fallos = Vec::new();
+    for clave in canonicas.difference(&presentes) {
+        fallos.push(format!("falta la clave {clave:?}"));
+    }
+    for clave in presentes.difference(&canonicas) {
+        fallos.push(format!("sobra la clave {clave:?}"));
+    }
+    fallos
 }
 
 #[test]
@@ -5006,54 +5019,125 @@ fn test_json_mp3_serializacion_completa() {
     );
     let _ = tag.insert_picture(picture);
 
-    // TODO(GREEN): verificar parseando con serde_json::Value cuando esté
-    // disponible; ahora se comprueba la serialización por subcadenas.
     let json = crate::json_from_mp3(&tag);
 
     assert!(
-        json.starts_with("{\"formato\":\"mp3\""),
-        "el JSON debe abrir el objeto con el formato mp3, fue: {json}"
-    );
-    assert!(
-        json.contains("\"title\":\"Canción de Prueba\""),
-        "el JSON debe contener el título, fue: {json}"
-    );
-    assert!(
-        json.contains("\"album\":\"Álbum de Prueba\""),
-        "el JSON debe contener el álbum, fue: {json}"
-    );
-    assert!(
-        json.contains("\"year\":2026"),
-        "el JSON debe contener el año como número, fue: {json}"
-    );
-    assert!(
-        json.contains("\"artists\":[\"Artista Uno\",\"Artista Dos\"]"),
-        "los artistas deben dividirse por \"; \" en un array, fue: {json}"
-    );
-    assert!(
-        json.contains("\"track\":{\"number\":7,\"total\":12}"),
-        "la pista debe serializarse como objeto number/total, fue: {json}"
-    );
-    assert!(
-        json.contains("\"compilation\":false"),
-        "sin TCMP la compilación debe ser false, fue: {json}"
-    );
-    assert!(
-        json.contains(
-            "\"pictures\":[{\"type\":\"CoverFront\",\"mime\":\"image/jpeg\",\"size_bytes\":8}]"
-        ),
-        "la carátula debe serializarse como type/mime/size_bytes sin bytes, fue: {json}"
-    );
-    assert!(
-        json.trim_end().ends_with('}'),
-        "el JSON debe terminar en el cierre del objeto, fue: {json}"
+        !json.trim().contains('\n'),
+        "el JSON de `--json` debe ser una sola línea, fue: {json:?}"
     );
 
-    let fallos = contiene_todas_las_claves(&json);
+    let valor: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(valor) => valor,
+        Err(error) => panic!("el documento JSON no parsea ({error}), fue: {json}"),
+    };
+
+    assert_eq!(
+        valor["formato"], "mp3",
+        "`formato` debe ser el string \"mp3\", fue: {}",
+        valor["formato"]
+    );
+
+    let tags = valor["tags"]
+        .as_object()
+        .unwrap_or_else(|| panic!("`tags` debe ser un objeto, fue: {}", valor["tags"]));
+
+    assert_eq!(
+        tags["title"], "Canción de Prueba",
+        "`tags.title` debe ser el string del título, fue: {}",
+        tags["title"]
+    );
+    assert_eq!(
+        tags["album"], "Álbum de Prueba",
+        "`tags.album` debe ser el string del álbum, fue: {}",
+        tags["album"]
+    );
+    assert_eq!(
+        tags["year"].as_u64(),
+        Some(2026),
+        "`tags.year` debe ser el número entero 2026 (no 2026.0 ni string), fue: {}",
+        tags["year"]
+    );
+
+    let artistas = tags["artists"]
+        .as_array()
+        .unwrap_or_else(|| panic!("`tags.artists` debe ser un array, fue: {}", tags["artists"]));
+    assert_eq!(
+        artistas.len(),
+        2,
+        "`tags.artists` debe tener exactamente 2 elementos, fue: {}",
+        tags["artists"]
+    );
+    assert_eq!(
+        artistas[0], "Artista Uno",
+        "el primer artista debe ser \"Artista Uno\", fue: {}",
+        artistas[0]
+    );
+    assert_eq!(
+        artistas[1], "Artista Dos",
+        "el segundo artista debe ser \"Artista Dos\", fue: {}",
+        artistas[1]
+    );
+
+    let pista = tags["track"]
+        .as_object()
+        .unwrap_or_else(|| panic!("`tags.track` debe ser un objeto, fue: {}", tags["track"]));
+    assert_eq!(
+        pista["number"].as_u64(),
+        Some(7),
+        "`tags.track.number` debe ser el número 7, fue: {}",
+        pista["number"]
+    );
+    assert_eq!(
+        pista["total"].as_u64(),
+        Some(12),
+        "`tags.track.total` debe ser el número 12, fue: {}",
+        pista["total"]
+    );
+
+    assert_eq!(
+        tags["compilation"].as_bool(),
+        Some(false),
+        "sin TCMP `tags.compilation` debe ser la booleana false, fue: {}",
+        tags["compilation"]
+    );
+
+    let caratulas = tags["pictures"].as_array().unwrap_or_else(|| {
+        panic!(
+            "`tags.pictures` debe ser un array, fue: {}",
+            tags["pictures"]
+        )
+    });
+    assert_eq!(
+        caratulas.len(),
+        1,
+        "`tags.pictures` debe tener exactamente 1 elemento, fue: {}",
+        tags["pictures"]
+    );
+    let caratula = caratulas[0]
+        .as_object()
+        .unwrap_or_else(|| panic!("la carátula debe ser un objeto, fue: {}", caratulas[0]));
+    assert_eq!(
+        caratula["type"], "CoverFront",
+        "el tipo de carátula debe ser \"CoverFront\", fue: {}",
+        caratula["type"]
+    );
+    assert_eq!(
+        caratula["mime"], "image/jpeg",
+        "el MIME de la carátula debe ser \"image/jpeg\", fue: {}",
+        caratula["mime"]
+    );
+    assert_eq!(
+        caratula["size_bytes"].as_u64(),
+        Some(8),
+        "`size_bytes` debe ser el número 8 (sin bytes embebidos), fue: {}",
+        caratula["size_bytes"]
+    );
+
+    let discrepancias = discrepancias_de_claves_canonicas(&json);
     assert!(
-        fallos.is_empty(),
-        "el objeto `tags` debe tener todas las claves canónicas: {}",
-        fallos.join("\n- ")
+        discrepancias.is_empty(),
+        "el objeto `tags` debe tener EXACTAMENTE las 20 claves canónicas: {}",
+        discrepancias.join("\n- ")
     );
 }
 
@@ -5066,43 +5150,54 @@ fn test_json_tags_claves_ausentes_son_null() {
 
     let json = crate::json_from_mp3(&tag);
 
-    assert!(
-        json.contains("\"album\":\"Solo Álbum\""),
-        "el álbum presente debe serializarse con su valor, fue: {json}"
+    let valor: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(valor) => valor,
+        Err(error) => panic!("el documento JSON no parsea ({error}), fue: {json}"),
+    };
+
+    let tags = valor["tags"]
+        .as_object()
+        .unwrap_or_else(|| panic!("`tags` debe ser un objeto, fue: {}", valor["tags"]));
+
+    assert_eq!(
+        tags["album"], "Solo Álbum",
+        "`tags.album` debe ser el string del álbum presente, fue: {}",
+        tags["album"]
     );
-    for (clave, valor) in [
-        ("title", "null"),
-        ("year", "null"),
-        ("date", "null"),
-        ("genre", "null"),
-        ("track", "null"),
-        ("season", "null"),
-        ("url", "null"),
-        ("lyrics", "null"),
+    for clave in [
+        "title", "year", "date", "genre", "track", "season", "url", "lyrics",
     ] {
-        assert!(
-            json.contains(&format!("\"{clave}\":{valor}")),
-            "el campo ausente {clave:?} debe emitirse como {valor}, fue: {json}"
+        assert_eq!(
+            tags[clave],
+            serde_json::Value::Null,
+            "el campo ausente {clave:?} debe emitirse como null, fue: {}",
+            tags[clave]
         );
     }
-    assert!(
-        json.contains("\"artists\":[]"),
-        "sin artistas el array debe estar vacío, fue: {json}"
+    assert_eq!(
+        tags["artists"].as_array().map(Vec::len),
+        Some(0),
+        "sin artistas `tags.artists` debe ser un array vacío, fue: {}",
+        tags["artists"]
     );
-    assert!(
-        json.contains("\"pictures\":[]"),
-        "sin carátulas el array debe estar vacío, fue: {json}"
+    assert_eq!(
+        tags["pictures"].as_array().map(Vec::len),
+        Some(0),
+        "sin carátulas `tags.pictures` debe ser un array vacío, fue: {}",
+        tags["pictures"]
     );
-    assert!(
-        json.contains("\"compilation\":false"),
-        "sin TCMP la compilación debe ser false, fue: {json}"
+    assert_eq!(
+        tags["compilation"].as_bool(),
+        Some(false),
+        "sin TCMP `tags.compilation` debe ser la booleana false, fue: {}",
+        tags["compilation"]
     );
 
-    let fallos = contiene_todas_las_claves(&json);
+    let discrepancias = discrepancias_de_claves_canonicas(&json);
     assert!(
-        fallos.is_empty(),
-        "aunque los campos estén ausentes, todas las claves deben estar presentes: {}",
-        fallos.join("\n- ")
+        discrepancias.is_empty(),
+        "aunque los campos estén ausentes, el conjunto de claves debe ser el exacto: {}",
+        discrepancias.join("\n- ")
     );
 }
 
@@ -5144,19 +5239,34 @@ fn test_json_vorbis_track_total_y_lyrics_completos() {
 
     let json = crate::json_from_vorbis("ogg", &tag, &[]);
 
-    assert!(
-        json.contains("\"track\":{\"number\":7,\"total\":12}"),
-        "el track debe componerse de TRACKNUMBER/TRACKTOTAL, fue: {json}"
+    let valor: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(valor) => valor,
+        Err(error) => panic!("el documento JSON no parsea ({error}), fue: {json}"),
+    };
+    let tags = valor["tags"]
+        .as_object()
+        .unwrap_or_else(|| panic!("`tags` debe ser un objeto, fue: {}", valor["tags"]));
+
+    let pista = tags["track"]
+        .as_object()
+        .unwrap_or_else(|| panic!("`tags.track` debe ser un objeto, fue: {}", tags["track"]));
+    assert_eq!(
+        pista["number"].as_u64(),
+        Some(7),
+        "`tags.track.number` debe componerse de TRACKNUMBER como 7, fue: {}",
+        pista["number"]
     );
-    assert!(
-        json.contains(
-            "\"lyrics\":\"Primera línea\\nSegunda línea\\nTercera línea\\nCuarta línea\""
-        ),
-        "la letra debe emitirse COMPLETA con sus saltos de línea escapados, fue: {json}"
+    assert_eq!(
+        pista["total"].as_u64(),
+        Some(12),
+        "`tags.track.total` debe componerse de TRACKTOTAL como 12, fue: {}",
+        pista["total"]
     );
-    assert!(
-        json.contains("Cuarta línea"),
-        "la última línea de la letra no debe truncarse como en el preview, fue: {json}"
+
+    assert_eq!(
+        tags["lyrics"], letra,
+        "`tags.lyrics` debe ser la letra COMPLETA con sus saltos de línea, fue: {}",
+        tags["lyrics"]
     );
 }
 
