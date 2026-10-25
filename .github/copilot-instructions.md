@@ -34,9 +34,9 @@ Purpose: help an AI coding agent become productive quickly in this Rust CLI that
   - Debug with backtraces: `RUST_BACKTRACE=1 cargo run -- show song.mp3`
 
 - **CI/CD workflows:**
-  - `ci.yml` — runs on every `pull_request` to `main`/`development` and every `push` to `development`. Steps: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo build`, `cargo test`.
+  - `ci.yml` — runs on every `pull_request` to `main`/`development` and every `push` to `development`. Steps: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo build`, `cargo test`. A second job (`musl`) builds `x86_64-unknown-linux-musl` with `--locked`, asserts the binary is static (`readelf -d` without `NEEDED`, `objdump -T` without `GLIBC_*`) and runs `cargo test --locked --target x86_64-unknown-linux-musl`.
   - `release-prepare.yml` — runs on every `push` to `main` (skipped when the commit already starts with `chore: release`). It derives the bump from the commits (`BREAKING CHANGE`/`!:` → major; any `^feat` → minor; otherwise patch), runs `vampus upgrade`, regenerates `CHANGELOG.md` with `git-cliff`, commits `chore: release vX.Y.Z`, creates the tag, pushes it, triggers `release.yml`, and syncs `development` with `main`.
-  - `release.yml` — runs on pushing a `v*` tag (or manually via `workflow_dispatch`). It builds the binary for `x86_64-unknown-linux-gnu`, packages `id3cli-x86_64-unknown-linux-gnu.tar.gz` with its `.sha256`, creates the GitHub Release with the attached binaries, and publishes the crate to crates.io with `cargo publish`.
+  - `release.yml` — runs on pushing a `v*` tag (or manually via `workflow_dispatch`). It builds the static binary for `x86_64-unknown-linux-musl` with `--locked`, verifies it is static (failing the job otherwise), packages `id3cli-x86_64-unknown-linux-musl.tar.gz` with its `.sha256`, attaches the bare binary `id3cli-linux-x86_64` (the path the README documents), creates the GitHub Release and publishes the crate to crates.io with `cargo publish`.
 
 - **Project conventions & patterns discovered here:**
   - Rust `edition = "2024"` in `Cargo.toml`

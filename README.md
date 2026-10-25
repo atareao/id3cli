@@ -52,11 +52,23 @@ En todos los casos de error el archivo queda **intacto**: la detección ocurre a
 
 ### Desde binario (Linux)
 
+El binario precompilado es **estático** (se compila para `x86_64-unknown-linux-musl`), así que no depende de la `glibc` del sistema y funciona en cualquier Linux x86_64, por antigua que sea la distribución. El binario anterior se enlazaba contra la `glibc` del sistema y exigía **2.34** o superior, de modo que no arrancaba en Ubuntu 20.04, Debian 11, RHEL 8 ni CentOS 7.
+
 Descarga la última release:
 
 ```bash
 wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-linux-x86_64
 chmod +x id3cli-linux-x86_64
+sudo mv id3cli-linux-x86_64 /usr/local/bin/id3cli
+```
+
+Si prefieres una descarga auditable, la release publica también el binario empaquetado junto a su suma SHA256:
+
+```bash
+wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-x86_64-unknown-linux-musl.tar.gz
+wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-x86_64-unknown-linux-musl.tar.gz.sha256
+sha256sum -c id3cli-x86_64-unknown-linux-musl.tar.gz.sha256
+tar xzf id3cli-x86_64-unknown-linux-musl.tar.gz
 sudo mv id3cli-linux-x86_64 /usr/local/bin/id3cli
 ```
 
@@ -766,7 +778,7 @@ id3cli/
 │   └── workflows/
 │       ├── ci.yml                 # CI: tests, formato y linter en cada push a development y pull request
 │       ├── release-prepare.yml    # Prepare Release: prepara la release al fusionar en main
-│       └── release.yml            # release: publica la release y los binarios al crear un tag v*
+│       └── release.yml            # release: publica la release, el binario estático (musl) y su archivo al crear un tag v*
 ├── Cargo.toml                     # Dependencias y metadata
 ├── README.md                      # Esta documentación
 └── RELEASE.md                     # Proceso de release
