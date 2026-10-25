@@ -11,23 +11,50 @@ permissions:
 
 jobs:
   build:
-    name: x86_64-unknown-linux-gnu
+    name: x86_64-unknown-linux-musl
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        run: rustup target add x86_64-unknown-linux-gnu
+        # El target musl del toolchain trae su propia libc.a estatica y sus
+        # objetos de arranque, y enlaza sin musl-gcc (medido el 2026-10-25:
+        # build en verde sin instalar musl-tools). El resultado es un PIE
+        # estatico, ejecutable en cualquier Linux x86_64 sin depender de la
+        # libc del sistema.
+        run: rustup target add x86_64-unknown-linux-musl
 
       - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Verify static linking
+        # Gate: si el binario dejara de ser estatico, la publicacion no sale.
+        # Medido el 2026-10-25 sobre el artefacto gnu anterior: 4 entradas
+        # NEEDED y GLIBC_2.34 como version mas alta (por eso no arrancaba en
+        # Ubuntu 20.04, Debian 11, RHEL 8 ni CentOS 7).
+        run: |
+          BIN="target/x86_64-unknown-linux-musl/release/id3cli"
+          if readelf -d "$BIN" | grep -q 'NEEDED'; then
+            echo "::error::$BIN declara dependencias dinamicas (NEEDED): no es estatico"
+            readelf -d "$BIN" | grep 'NEEDED'
+            exit 1
+          fi
+          if objdump -T "$BIN" 2>/dev/null | grep -q 'GLIBC_'; then
+            echo "::error::$BIN referencia simbolos versionados GLIBC_*: no es estatico"
+            objdump -T "$BIN" | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -5
+            exit 1
+          fi
+          file "$BIN"
+          ldd "$BIN" || true
+          echo "OK: $BIN es estatico (sin NEEDED, sin simbolos GLIBC_*)"
 
       - name: Prepare archive
         run: |
-          BIN="target/x86_64-unknown-linux-gnu/release/id3cli"
+          BIN="target/x86_64-unknown-linux-musl/release/id3cli"
           ARCHIVE_NAME="id3cli-linux-x86_64"
           cp "$BIN" "$ARCHIVE_NAME"
-          PKG="id3cli-x86_64-unknown-linux-gnu"
+          chmod +x "$ARCHIVE_NAME"
+          PKG="id3cli-x86_64-unknown-linux-musl"
           tar czf "$PKG.tar.gz" "$ARCHIVE_NAME"
           sha256sum "$PKG.tar.gz" > "$PKG.tar.gz.sha256"
           echo "ARCHIVE=$PKG.tar.gz" >> $GITHUB_ENV
@@ -40,6 +67,7 @@ jobs:
           path: |
             ${{ env.ARCHIVE }}
             ${{ env.CHECKSUM }}
+            id3cli-linux-x86_64
 
   release:
     needs: [build]
@@ -59,13 +87,14 @@ jobs:
           | Architecture | File |
           |---|---|
           EOF
-          for f in *.*; do
-            [[ "$f" == *.md ]] && continue
-            [[ "$f" == *.sha256 ]] && continue
+          for f in *.tar.gz; do
             [ -f "$f" ] || continue
             arch=$(echo "$f" | sed 's/^id3cli-//; s/\.tar\.gz$//')
             echo "| \`$arch\` | \`$f\` |" >> notes.md
           done
+          if [ -f id3cli-linux-x86_64 ]; then
+            echo "| \`linux-x86_64\` (binario directo) | \`id3cli-linux-x86_64\` |" >> notes.md
+          fi
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -75,6 +104,7 @@ jobs:
           files: |
             *.tar.gz
             *.sha256
+            id3cli-linux-x86_64
           generate_release_notes: true
 
   publish:

@@ -141,7 +141,7 @@ Detecta bump type, ejecuta vampus, genera changelog, crea tag, sincroniza `devel
 
 ### `release.yml` (push tag v*)
 
-Compila `x86_64-unknown-linux-gnu`, genera `.tar.gz` + SHA256, crea GitHub Release, publica en crates.io.
+Compila `x86_64-unknown-linux-musl` (estático: sin dependencia de la glibc del sistema), verifica el enlazado estático, genera `.tar.gz` + SHA256 y adjunta el binario desnudo `id3cli-linux-x86_64`, crea GitHub Release y publica en crates.io.
 
 ## Resumen visual
 
