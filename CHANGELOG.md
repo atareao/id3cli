@@ -1,4 +1,14 @@
 # Changelog
+## [0.11.3] - 2026-10-25
+
+### Bug Fixes
+
+- *(ci)* Publica release solo cuando los commits lo justifican (#38)
+- *(ci)* Publica release solo cuando los commits lo justifican — fusiona development en main
+
+### Miscellaneous Tasks
+
+- *(openspec)* Archiva el change release-commit-gating
 ## [0.11.2] - 2026-10-25
 
 ### Documentation
@@ -8,6 +18,7 @@
 ### Miscellaneous Tasks
 
 - Sincroniza development en main — cierre documental del change json-test-oracle
+- Release v0.11.2
 ## [0.11.1] - 2026-10-25
 
 ### Documentation
