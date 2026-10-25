@@ -1,9 +1,22 @@
 # Changelog
+## [0.11.0] - 2026-10-25
+
+### Documentation
+
+- Actualiza árbol e2e (7 scripts), descripción --json y comentario ejemplo para NDJSON batch
+
+### Features
+
+- Binario precompilado estático (musl) y descarga del binario desnudo (#35)
 ## [0.10.0] - 2026-10-16
 
 ### Features
 
 - Modo batch — <FILE>... en show/edit/remove (Fase 6) (#33)
+
+### Miscellaneous Tasks
+
+- Release v0.10.0
 
 ### Other
 
