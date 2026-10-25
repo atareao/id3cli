@@ -6,7 +6,7 @@ Este proyecto sigue **Git Flow** con versionado semántico automático.
 
 | Rama | Propósito | Base |
 |---|---|---|
-| `main` | Producción. Cada merge aquí dispara una release automática. | — |
+| `main` | Producción. Un merge aquí publica una release **solo si los commits lo justifican** (ver la tabla de Conventional Commits). | — |
 | `development` | Integración de features en curso. | `main` |
 | `feature/*` | Nuevas funcionalidades. | `development` |
 | `hotfix/*` | Correcciones urgentes a producción. | `main` |
@@ -83,11 +83,13 @@ El formato de los mensajes determina el bump automático:
 | `feat: ...` | **minor** (0.Y.0) | `feat: add image viewer support` |
 | `feat(scope): ...` | **minor** (0.Y.0) | `feat(cli): add --season flag` |
 | `fix: ...` | **patch** (0.0.Z) | `fix: crash on empty input` |
+| `perf: ...` | **patch** (0.0.Z) | `perf: avoid double parse` |
 | `refactor: ...` | **patch** (0.0.Z) | `refactor: extract parser` |
-| `chore: ...` | **patch** (0.0.Z) | `chore: update dependencies` |
-| `docs: ...` | **patch** (0.0.Z) | `docs: fix typos` |
-| `feat!: ...` | **major** (X.0.0) | `feat!: redesign API` |
-| `BREAKING CHANGE` | **major** (X.0.0) | any commit with `BREAKING CHANGE:` in body |
+| `feat!: ...` o `!:` en el asunto | **major** (X.0.0) | `feat!: redesign API` |
+| `BREAKING CHANGE` en el cuerpo | **major** (X.0.0) | cualquier commit con `BREAKING CHANGE:` en el body |
+| `docs` / `chore` / `style` / `test` / `ci` / `build` | **ninguno** | `docs: fix typos` (no publica) |
+
+Un rango desde el último tag que solo contenga filas «ninguno» (documentación, andamiaje, openspec o merge commits) **no publica**: el pipeline termina sin tag ni commit de release.
 
 ### Prefijos válidos
 
@@ -137,7 +139,7 @@ Config: `cliff.toml`
 
 ### `release-prepare.yml` (push a main)
 
-Detecta bump type, ejecuta vampus, genera changelog, crea tag, sincroniza `development`.
+Detecta el bump por tipo de commit; **si no hay ninguno publicable** (`docs`/`chore`/`style`/`test`/`ci`/`build`), termina sin publicar; si lo hay, ejecuta vampus, genera changelog, crea tag y sincroniza `development`.
 
 ### `release.yml` (push tag v*)
 
