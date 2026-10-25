@@ -23,3 +23,35 @@ jobs:
         run: cargo build --locked
       - name: Test
         run: cargo test --locked
+
+  musl:
+    # El artefacto que se publica es estatico musl: se construye y se prueba
+    # aqui para que una perdida del estatico o una regresion del binario musl
+    # falle en la pull request, no al publicar el tag.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+      - name: Build (static musl)
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Verify static linking
+        run: |
+          BIN="target/x86_64-unknown-linux-musl/release/id3cli"
+          if readelf -d "$BIN" | grep -q 'NEEDED'; then
+            echo "::error::$BIN declara dependencias dinamicas (NEEDED): no es estatico"
+            readelf -d "$BIN" | grep 'NEEDED'
+            exit 1
+          fi
+          if objdump -T "$BIN" 2>/dev/null | grep -q 'GLIBC_'; then
+            echo "::error::$BIN referencia simbolos versionados GLIBC_*: no es estatico"
+            exit 1
+          fi
+          file "$BIN"
+          echo "OK: $BIN es estatico"
+      - name: Test (musl target)
+        run: cargo test --locked --target x86_64-unknown-linux-musl
