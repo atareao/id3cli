@@ -1,4 +1,13 @@
 # Changelog
+## [0.11.2] - 2026-10-25
+
+### Documentation
+
+- *(openspec)* Registra la release v0.11.1 en el change json-test-oracle
+
+### Miscellaneous Tasks
+
+- Sincroniza development en main — cierre documental del change json-test-oracle
 ## [0.11.1] - 2026-10-25
 
 ### Documentation
@@ -9,6 +18,7 @@
 
 - *(openspec)* Archiva el change musl-static-release
 - *(openspec)* Archiva el change json-test-oracle
+- Release v0.11.1
 
 ### Refactor
 
