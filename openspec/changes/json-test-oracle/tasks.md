@@ -4,12 +4,12 @@ El change refuerza el oráculo de los tests unitarios de la serialización `show
 
 ## 1. Artefactos de especificación (OpenSpec)
 
-- [ ] 1.1 Redactar `proposal.md` con Why/What Changes/Capabilities/Impact (oráculo estructural, conjunto exacto de claves; no-goals: contrato del producto, recuento de tests, tests de integración).
-- [ ] 1.2 Redactar `design.md` con las cuatro decisiones y los riesgos.
-- [ ] 1.3 Redactar el delta `specs/json-output/spec.md` (ADDED) con el requisito del oráculo estructural y sus cinco escenarios, incluida la falsabilidad.
-- [ ] 1.4 Redactar `tasks.md` con este checklist.
-- [ ] 1.5 STOP: presentar la especificación al usuario y esperar aprobación explícita antes de tocar `src/tests.rs`.
-- [ ] 1.6 Validar el change: `openspec validate json-test-oracle --strict` sin advertencias.
+- [x] 1.1 Redactar `proposal.md` con Why/What Changes/Capabilities/Impact (oráculo estructural, conjunto exacto de claves; no-goals: contrato del producto, recuento de tests, tests de integración). — `proposal.md` redactado con Why (subcadenas no pueden expresar el conjunto exacto ni tipos), What Changes, Capabilities (`json-output` modificada) e Impact
+- [x] 1.2 Redactar `design.md` con las cuatro decisiones y los riesgos. — `design.md` redactado con las cuatro decisiones (parsear con `serde_json::Value`, conjunto exacto, alcance a `src/tests.rs`, falsabilidad) y los riesgos
+- [x] 1.3 Redactar el delta `specs/json-output/spec.md` (ADDED) con el requisito del oráculo estructural y sus cinco escenarios, incluida la falsabilidad. — delta `specs/json-output/spec.md` redactado: 1 requisito ADDED y 5 escenarios, incluida la falsabilidad; matizado tras la auditoría para distinguir estructura (prohibida por subcadenas) de compactitud (una línea, conservada)
+- [x] 1.4 Redactar `tasks.md` con este checklist. — `tasks.md` redactado: 5 grupos
+- [x] 1.5 STOP: presentar la especificación al usuario y esperar aprobación explícita antes de tocar `src/tests.rs`. — presentado al usuario y aprobado explícitamente («Aprobado — arranca TDD RED») antes de tocar `src/tests.rs`
+- [x] 1.6 Validar el change: `openspec validate json-test-oracle --strict` sin advertencias. — `openspec validate json-test-oracle --strict` → «Change 'json-test-oracle' is valid», exit 0
 
 ## 2. Fase RED — aserciones estructurales y falsabilidad
 
@@ -41,7 +41,7 @@ El change refuerza el oráculo de los tests unitarios de la serialización `show
 
 ## 5. Verificación final y cierre
 
-- [ ] 5.1 Barrido completo: `cargo test` (unit + integración), `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `bash -n scripts/e2e/*.sh`, falsabilidad ya demostrada (2.5).
+- [x] 5.1 Barrido completo: `cargo test` (unit + integración), `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `bash -n scripts/e2e/*.sh`, falsabilidad ya demostrada (2.5). — barrido medido 2026-10-25: `cargo test --locked --no-fail-fast` → 178 unit + 153 integración = 331, 0 fallos; `cargo fmt --check` limpio; `cargo clippy --locked --all-targets --all-features -- -D warnings` 0 warnings; `bash -n scripts/e2e/*.sh` limpio; falsabilidad demostrada en 2.5; CI del PR #37 verde (jobs `musl` y `test`)
       Verificación: todo en verde; recuentos anotados como evidencia.
 - [ ] 5.2 Cierre git: commits convencionales en `feature/json-test-oracle` (chore(openspec) → refactor(test)), PR a `development`, CI verde, fusión y `openspec archive json-test-oracle` con las tareas marcadas.
 - [ ] 5.3 Release patch (`refactor(test):` → v0.11.1) mediante el flujo estándar del repo.
