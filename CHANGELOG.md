@@ -1,4 +1,18 @@
 # Changelog
+## [0.11.1] - 2026-10-25
+
+### Documentation
+
+- *(openspec)* Marca las 20 tareas hechas del change flac-support y añade sample.flac al árbol del README
+
+### Miscellaneous Tasks
+
+- *(openspec)* Archiva el change musl-static-release
+- *(openspec)* Archiva el change json-test-oracle
+
+### Refactor
+
+- *(test)* Verifica la estructura JSON parseada en vez de subcadenas (#37)
 ## [0.11.0] - 2026-10-25
 
 ### Documentation
@@ -8,6 +22,10 @@
 ### Features
 
 - Binario precompilado estático (musl) y descarga del binario desnudo (#35)
+
+### Miscellaneous Tasks
+
+- Release v0.11.0
 ## [0.10.0] - 2026-10-16
 
 ### Features
