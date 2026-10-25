@@ -40,5 +40,5 @@ El change corrige el pipeline de release para que solo publique cuando los commi
 ## 6. Verificación final y cierre
 
 - [x] 6.1 Barrido: YAML válido, `cargo test` sin cambios (331), `cargo fmt --check`, `cargo clippy -- -D warnings`, `openspec validate --specs` y `openspec validate --archived`. — barrido 2026-10-25: 3 workflows YAML válidos; `cargo test` 331 (178 + 153) sin cambios; `cargo fmt --check` limpio; `cargo clippy -- -D warnings` 0 warnings; `openspec validate --specs` 16 passed y 0 failed; `openspec validate --archived` 14 passed y 0 failed
-- [ ] 6.2 Cierre git: commits convencionales en `feature/release-commit-gating` (chore(openspec) → fix(ci)), PR a `development`, CI verde, fusión y `openspec archive release-commit-gating` con las tareas marcadas.
+- [x] 6.2 Cierre git: commits convencionales en `feature/release-commit-gating` (chore(openspec) → fix(ci)), PR a `development`, CI verde, fusión y `openspec archive release-commit-gating` con las tareas marcadas. — PR #38 fusionado en `development` vía squash (`ae97972`) con CI verde (jobs `musl` y `test`); commits convencionales en `feature/release-commit-gating` (`chore(openspec)` → `fix(ci)`); change archivado
 - [ ] 6.3 Release del propio change (`fix(ci):` → patch → v0.11.3) por el flujo estándar; verificar que tras este change un push de solo documentación a `main` NO publica.
