@@ -770,7 +770,7 @@ id3cli/
 │   └── tests.rs                   # Tests unitarios (4888 líneas)
 ├── tests/
 │   ├── integration_test.rs        # Tests de integración (5438 líneas)
-│   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a, sample.ogg y sample.opus) y sus scripts de regeneración, incluidos generate_sample_ogg.sh y generate_sample_opus.sh
+│   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a, sample.ogg, sample.opus y sample.flac) y sus scripts de regeneración, incluidos generate_sample_ogg.sh, generate_sample_opus.sh y generate_sample_flac.sh
 ├── scripts/
 │   └── e2e/                       # Verificación e2e local: runner común (e2e_lib.sh) y 7 scripts (e2e_mp3.sh, e2e_m4a.sh, e2e_ogg.sh, e2e_opus.sh, e2e_flac.sh, e2e_completions.sh, e2e_batch.sh)
 ├── .github/
