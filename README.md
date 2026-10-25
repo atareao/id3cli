@@ -52,11 +52,23 @@ En todos los casos de error el archivo queda **intacto**: la detección ocurre a
 
 ### Desde binario (Linux)
 
+El binario precompilado es **estático** (se compila para `x86_64-unknown-linux-musl`), así que no depende de la `glibc` del sistema y funciona en cualquier Linux x86_64, por antigua que sea la distribución. El binario anterior se enlazaba contra la `glibc` del sistema y exigía **2.34** o superior, de modo que no arrancaba en Ubuntu 20.04, Debian 11, RHEL 8 ni CentOS 7.
+
 Descarga la última release:
 
 ```bash
 wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-linux-x86_64
 chmod +x id3cli-linux-x86_64
+sudo mv id3cli-linux-x86_64 /usr/local/bin/id3cli
+```
+
+Si prefieres una descarga auditable, la release publica también el binario empaquetado junto a su suma SHA256:
+
+```bash
+wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-x86_64-unknown-linux-musl.tar.gz
+wget https://github.com/atareao/id3cli/releases/latest/download/id3cli-x86_64-unknown-linux-musl.tar.gz.sha256
+sha256sum -c id3cli-x86_64-unknown-linux-musl.tar.gz.sha256
+tar xzf id3cli-x86_64-unknown-linux-musl.tar.gz
 sudo mv id3cli-linux-x86_64 /usr/local/bin/id3cli
 ```
 
@@ -84,7 +96,7 @@ cargo install id3cli
 ```bash
 # Mostrar los tags de uno o más archivos
 id3cli show <FILE>...
-# Mostrar todos los tags del archivo en JSON (una línea, para scripts y jq)
+# Mostrar todos los tags en JSON (un archivo: objeto único; varios: NDJSON)
 id3cli show <FILE> --json
 
 # Editar tags del archivo
@@ -117,7 +129,7 @@ También acepta nombres en **español**: `título`, `artista`, `álbum`, `año`,
 | Opción     | Descripción                                                                                                   |
 | ---------- | ------------------------------------------------------------------------------------------------------------- |
 | `<FILE>`   | Ruta del archivo de audio MP3, MP4, OGG, Opus o FLAC (argumento posicional, requerido)                        |
-| `-j, --json` | Emite los metadatos como **un único objeto JSON compacto en una línea** con salto de línea final, adecuado para `jq` y scripts |
+| `-j, --json` | Emite los metadatos como JSON (con un archivo: **un único objeto en una línea**; con varios: **NDJSON**, una línea por archivo) con salto de línea final adecuado para `jq` y scripts |
 
 **Contrato del JSON** (claves estables): el objeto tiene la forma `{ "formato": "...", "tags": {...} }`. `formato` es el códec real detectado por contenido —`mp3`, `mp4`, `ogg`, `opus` o `flac`— y en el contenedor Ogg se distingue `ogg` (Vorbis) de `opus` (OpusHead). `tags` es un objeto con **todas** las claves siempre presentes (`null` si el campo está ausente): `title`, `artists`, `album`, `year`, `date`, `genre`, `track`, `season`, `copyright`, `composer`, `subtitle`, `original_artist`, `album_artist`, `url`, `lyrics`, `compilation`, `album_sort`, `artist_sort`, `title_sort`, `pictures`. `artists` y `pictures` son siempre arrays (nunca `null`); `compilation` es siempre booleana; `track` y `season` son objetos `{ "number": N, "total": N|null }` o `null`; `year` es número o `null`; `lyrics` es el texto completo sin recorte; cada `pictures[i]` es `{ "type": "...", "mime": "...|null", "size_bytes": N }`.
 
@@ -760,13 +772,13 @@ id3cli/
 │   ├── integration_test.rs        # Tests de integración (5438 líneas)
 │   └── fixtures/                  # Muestras reales (sample.mp3, sample.m4a, sample.ogg y sample.opus) y sus scripts de regeneración, incluidos generate_sample_ogg.sh y generate_sample_opus.sh
 ├── scripts/
-│   └── e2e/                       # Verificación e2e local: runner común (e2e_lib.sh) y un script por formato (e2e_mp3.sh, e2e_m4a.sh, e2e_ogg.sh, e2e_opus.sh)
+│   └── e2e/                       # Verificación e2e local: runner común (e2e_lib.sh) y 7 scripts (e2e_mp3.sh, e2e_m4a.sh, e2e_ogg.sh, e2e_opus.sh, e2e_flac.sh, e2e_completions.sh, e2e_batch.sh)
 ├── .github/
 │   ├── copilot-instructions.md    # Guía para AI coding agents
 │   └── workflows/
 │       ├── ci.yml                 # CI: tests, formato y linter en cada push a development y pull request
 │       ├── release-prepare.yml    # Prepare Release: prepara la release al fusionar en main
-│       └── release.yml            # release: publica la release y los binarios al crear un tag v*
+│       └── release.yml            # release: publica la release, el binario estático (musl) y su archivo al crear un tag v*
 ├── Cargo.toml                     # Dependencias y metadata
 ├── README.md                      # Esta documentación
 └── RELEASE.md                     # Proceso de release

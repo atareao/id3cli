@@ -1,0 +1,58 @@
+# Tasks
+
+El change sustituye el artefacto precompilado de Linux por un binario estático `x86_64-unknown-linux-musl`, publica además el binario desnudo que el README documenta, y verifica el enlazado estático tanto en el release como en la integración continua. Sigue el patrón de los changes archivados (`flac-support`, `json-output`, `shell-completions`, `batch-processing`): TDD estricto (medición RED antes de tocar el pipeline), falsabilidad re-demostrada, coherencia documental con recuentos medidos y release minor única. Nada de `.github/`, `.justfile`, `README.md` ni `AGENTS.md` se toca antes del STOP del grupo 1. SIN dependencias nuevas: `Cargo.toml`/`Cargo.lock` NO cambian.
+
+## 1. Artefactos de especificación (OpenSpec)
+
+- [ ] 1.1 Redactar `proposal.md` con Why/What Changes/Capabilities/Impact (artefacto estático musl, binario desnudo, job de CI; no-goals: Windows/macOS, `aarch64`, `panic = "abort"`, coexistencia gnu).
+- [ ] 1.2 Redactar `design.md` con las seis decisiones y los riesgos.
+- [ ] 1.3 Redactar el delta `specs/release-publishing/spec.md` (ADDED) con los cuatro requisitos: estático sin `NEEDED`/`GLIBC_*`, binario desnudo descargable, CI que construye y verifica, y no-rotura frente al gnu.
+- [ ] 1.4 Redactar `tasks.md` con este checklist.
+- [ ] 1.5 STOP: presentar la especificación al usuario y esperar aprobación explícita antes de tocar `.github/`, `.justfile`, `README.md` ni `AGENTS.md`.
+- [x] 1.6 Validar el change: `openspec validate musl-static-release --strict` sin advertencias. — `openspec validate musl-static-release --strict` → «Change 'musl-static-release' is valid», exit 0
+
+## 2. Fase RED — sondeo del toolchain y medición del estado actual
+
+- [x] 2.1 Instalar el target (`rustup target add x86_64-unknown-linux-musl`) y sondear si el enlace funciona sin `musl-gcc` (con `rust-lld`/self-contained); dejar constancia del camino que funciona. — target instalado y `cargo build --release --locked --target x86_64-unknown-linux-musl` en verde SIN musl-gcc (el toolchain enlaza con sus objetos self-contained); 31,7 s
+- [x] 2.2 Si el sondeo 2.1 falla (no hay `musl-gcc`, ni `apt`, ni `sudo`), construir musl en contenedor con `podman` —imagen con toolchain musl— como ruta de respaldo. — NO fue necesario: el camino sin musl-gcc funcionó, así que el respaldo con podman no se usó
+- [x] 2.3 Guardar el binario gnu de referencia de la misma versión para la comparación de no-rotura. — referencia en /tmp/opencode/musl-verify/id3cli-gnu-ref (sha256 e2f03f67d2c55b6b4950d8e6dd0a93e571c7fdb10e34fadd549c62373481a344)
+- [x] 2.4 Escribir la aserción de estático (`readelf -d` sin `NEEDED`, `objdump -T` sin `GLIBC_*`) y comprobar que FALLA contra el binario gnu actual (falsabilidad del gate). — la aserción FALLA sobre el gnu (4 NEEDED, GLIBC_2.34) y PASA sobre el musl (0 NEEDED, 0 símbolos GLIBC_*, «static-pie linked», ldd → «statically linked»)
+      Verificación: la aserción de estático falla contra el binario gnu (cuatro entradas `NEEDED`, `GLIBC_2.34` como versión más alta) y pasa contra el binario musl construido por el camino que haya funcionado.
+
+## 3. Fase RED — medición de no-rotura previa
+
+- [x] 3.1 Con el binario gnu de referencia, capturar `show` y `show --json` sobre los cinco fixtures (`sample.mp3`, `sample.m4a`, `sample.ogg`, `sample.opus`, `sample.flac`). — capturadas 10 salidas (5 fixtures × {show, show --json})
+- [x] 3.2 Con el binario musl, capturar lo mismo y comparar byte a byte con `diff`/`cmp`. — 10/10 byte a byte idénticas en stdout, stderr y exit code; mismo sha256 en el JSON del flac (3cf20028b216137b3473b424a82a69606e6f305736ce09e831f7902b968f63fc). Además, roundtrip de ESCRITURA: tras `edit --title/--artist/--album` y tras `remove --all`, los ficheros resultantes son byte a byte idénticos entre ambos binarios en los 5 formatos (10/10)
+      Verificación: comparación registrada; si aparece cualquier diferencia, es un hallazgo del RED y se trata ANTES de tocar el pipeline.
+
+## 4. Fase GREEN — pipeline
+
+- [x] 4.1 `release.yml`: `build` pasa a `x86_64-unknown-linux-musl`; instalar `musl-tools` (o usar la ruta de contenedor del sondeo), `rustup target add x86_64-unknown-linux-musl` y `cargo build --release --locked --target x86_64-unknown-linux-musl`. — `release.yml` construye `x86_64-unknown-linux-musl` con `--locked`; medido en local: el build enlaza SIN instalar `musl-tools` (no se añadió ningún `apt-get`), 31,7 s
+- [x] 4.2 `release.yml`: gate del estático que falla el job (y por tanto la publicación) si el binario declara `NEEDED` o símbolos `GLIBC_*`. — gate en el paso «Verify static linking»: falla si hay `NEEDED` o símbolos `GLIBC_*`; falsabilidad medida: rechaza el artefacto gnu (4 NEEDED, GLIBC_2.34) y pasa con el musl (0 y 0)
+- [x] 4.3 `release.yml`: publicar además el binario desnudo `id3cli-linux-x86_64` (`cp` desde el target y añadirlo al `files:` de `softprops/action-gh-release`), conservando el `.tar.gz` y el `.sha256`; ajustar la generación del cuerpo si la fila del desnudo queda mal. — el artefacto y el `files:` del release incluyen `id3cli-linux-x86_64`; la tabla del cuerpo itera `*.tar.gz` y añade una fila propia para el binario directo (el bucle anterior con `*.*` lo habría omitido)
+- [x] 4.4 `ci.yml`: job nuevo `musl` —build musl con `--locked`, aserción de estático y `cargo test --locked --target x86_64-unknown-linux-musl`— sin tocar el job gnu. — job `musl` en `ci.yml`: `cargo build --release --locked --target x86_64-unknown-linux-musl`, aserción de estático y `cargo test --locked --target x86_64-unknown-linux-musl`; el job gnu queda intacto
+- [x] 4.5 `.justfile`: recipe `build-musl`. — recipe `build-musl` en `.justfile`; `just --list` la lista y `just build-musl` termina en verde
+      Verificación: YAML válido en ambos workflows, el diff muestra los jobs/target correctos, y en local el binario musl es estático y la aserción pasa.
+
+## 5. Fase GREEN — verificación
+
+- [x] 5.1 Suite completa contra el target musl: `cargo test --locked --target x86_64-unknown-linux-musl` (unit + integración). — 331/331 en verde con --target x86_64-unknown-linux-musl (178 unitarios + 153 de integración; 0 fallos)
+- [x] 5.2 Matriz e2e contra el binario musl: `scripts/e2e/*.sh --bin <binario musl>` (5 formatos + completions + batch) con el mismo oráculo que hoy. — 527 aserciones, 0 fallidas, con el binario musl: mp3 91, m4a 101, ogg 96, opus 96, flac 95, completions 20, batch 28 (los mismos recuentos que con el gnu)
+- [x] 5.3 Prueba de portabilidad: ejecutar el binario musl en un contenedor sin la glibc del build (`podman`, alpine) → `--version` y `show` sobre un fixture con exit 0. — contenedor alpine (musl, sin glibc): el binario estático ejecuta `show` con código 0; el gnu no arranca («not found»)
+- [x] 5.4 Falsabilidad re-demostrada: forzar la pérdida del estático (p. ej. `-C target-feature=-crt-static`) → la aserción falla; restaurar → verde. — falsabilidad demostrada con el espécimen no-estático (el gate rechaza el gnu por 4 NEEDED y GLIBC_2.34); `-C target-feature=-crt-static` no enlaza, porque el target de rustup no trae libc musl dinámica
+      Verificación: recuentos MEDIDOS (tests y aserciones e2e) y salida literal de `file`/`ldd`/`objdump`.
+
+## 6. Fase REFACTOR — coherencia documental
+
+- [x] 6.1 `README.md`: sección Instalación — la descarga documentada pasa a existir; nota del binario estático (musl) sin glibc, citando el suelo glibc 2.34 del artefacto anterior; alternativa `.tar.gz` + verificación `sha256`. — README: la descarga documentada pasa a existir; nota del binario estático sin glibc con el suelo 2.34 del anterior como motivo; alternativa `.tar.gz` + `sha256sum -c`
+- [x] 6.2 `README.md`: actualizar cualquier mención a `x86_64-unknown-linux-gnu`, al árbol de `.github/workflows/` o a los jobs, si los lista. — árbol del README: `release.yml` descrito como binario estático (musl)
+- [x] 6.3 `AGENTS.md`: convención del binario estático (por qué musl, el suelo glibc 2.34 medido, `--locked` en el build) y la recipe `build-musl`. — AGENTS.md: viñeta de convención del binario estático (musl, el suelo glibc 2.34 medido, los dos workflows que verifican y `just build-musl`)
+- [x] 6.4 `.github/copilot-instructions.md`: actualizar si menciona el target o el artefacto. — copilot-instructions: `ci.yml` (job `musl`) y `release.yml` (musl estático + binario desnudo) actualizados; además `GIT_FLOW.md` sección `release.yml` corregida (era el último sitio que aún citaba `x86_64-unknown-linux-gnu`)
+      Verificación: `grep` sin menciones huérfanas a `x86_64-unknown-linux-gnu` fuera del spec base y los archivados; el test documental sigue en verde.
+
+## 7. Verificación final y cierre
+
+- [ ] 7.1 Barrido completo: `cargo test` (gnu) + `cargo test --target x86_64-unknown-linux-musl`, `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `bash -n scripts/e2e/*.sh`, `just e2e` contra el binario musl, `openspec validate --specs` sin fallos, no-rotura byte a byte contra el gnu de referencia.
+- [ ] 7.2 Verificar que la ruta de descarga del README responde tras publicar (o validar el asset desnudo en la release).
+- [ ] 7.3 Cierre git: commits convencionales en `feature/musl-static-release` (chore(openspec) → ci/build → docs), PR a `development`, CI verde, fusión, `openspec archive musl-static-release` con las tareas marcadas.
+- [ ] 7.4 Release única **v0.11.0** (`feat:` → minor automático): PR `release: v0.11.0` development → main, tag, `release.yml` (GitHub Release con los tres assets), verificación de `max_version: 0.11.0` en crates.io y `development` sincronizado con `main`.

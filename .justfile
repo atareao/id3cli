@@ -8,6 +8,11 @@ list:
 install:
     cargo install --path .
 
+# Binario estatico para cualquier Linux x86_64, sin dependencia de glibc.
+# El target musl del toolchain enlaza solo (no hace falta musl-gcc).
+build-musl:
+    cargo build --release --locked --target x86_64-unknown-linux-musl
+
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
 
