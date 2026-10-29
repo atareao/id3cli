@@ -1,3 +1,6 @@
 /target
 .codegraph/
 .opencode/
+
+# Informe de cobertura que genera cargo llvm-cov para Sonar
+lcov.info

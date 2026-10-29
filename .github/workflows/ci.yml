@@ -9,8 +9,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # El token se declara a nivel de job porque `secrets` no se puede usar en `if`.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Sonar necesita la historia completa para el blame y el código nuevo.
+          fetch-depth: 0
       - name: Install Rust toolchain
         run: rustup show
       - name: Cache cargo
@@ -21,8 +27,16 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Build
         run: cargo build --locked
-      - name: Test
-        run: cargo test --locked
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Test + coverage
+        run: cargo llvm-cov --locked --all-features --lcov --output-path lcov.info
+      - name: SonarQube scan
+        # Sin token (PR desde un fork) el escaneo se omite y el CI no rompe.
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v8
 
   musl:
     # El artefacto que se publica es estatico musl: se construye y se prueba
