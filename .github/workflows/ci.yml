@@ -3,8 +3,10 @@ name: CI
 on:
   pull_request:
     branches: [main, development]
+  # SonarQube calcula el dashboard sobre la rama principal (`main`), y esa rama
+  # no recibe PRs: necesita su propio análisis en cada push.
   push:
-    branches: [development]
+    branches: [development, main]
 
 jobs:
   test:
