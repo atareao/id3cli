@@ -41,6 +41,14 @@ Nota: `cargo test` para en el primer binario que falla; usa `--no-fail-fast` si 
 
 `.github/copilot-instructions.md`: ID3 frames, átomos MP4, testing patterns.
 
+## Git Flow
+
+Este proyecto sigue **Git Flow** estricto. Ver [GIT_FLOW.md](./GIT_FLOW.md):
+
+- Estructura de ramas: `main`, `development`, `feature/*`, `hotfix/*`.
+- Conventional commits con **gitmoji**.
+- Cómo crear features, hotfixes y releases.
+
 ## Dónde está el resto
 
 | Tema | Fichero |
