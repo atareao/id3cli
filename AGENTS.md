@@ -1,6 +1,6 @@
 # id3cli — AGENTS.md
 
-Single-crate Rust CLI (`edition 2024`, `lofty` + `clap` derive) that reads/writes metadata on **MP3** (tags ID3v2.4), **MP4 / M4A** (átomos `ilst` estilo iTunes), **OGG** (comentarios de Vorbis, pares `CLAVE=valor`; el contenedor Ogg cubre Vorbis y Opus) y **FLAC** (comentarios de Vorbis, `fLaC` nativo).
+CLI Rust (`edition 2024`, `lofty` + `clap`) para MP3 (ID3v2.4), MP4/M4A (`ilst`), OGG (Vorbis/Opus) y FLAC (`fLaC`). Detalle literal en `docs/`.
 
 ## Commands
 
@@ -15,62 +15,48 @@ cargo run -- edit <file> --title "X"    # run CLI with args
 RUST_BACKTRACE=1 cargo run -- ...       # debug with backtrace
 ```
 
-Nota: `cargo test` se detiene en el primer binario que falla — añade `--no-fail-fast` cuando falle más de una suite.
+Nota: `cargo test` para en el primer binario que falla; usa `--no-fail-fast` si fallan varias suites.
 
-## Architecture
+## Reglas clave
 
-- **`src/lib.rs`** — all business logic, separada por formato:
-  - **MP3** (`lofty::tag::Id3v2Tag`): `apply_metadata()`, `add_lyrics()`, `add_url()`, `add_cover_art()`, `add_apple_metadata()`, `remove_tags()`, `remove_all_id3()`, `display_tags()`
-  - **MP4** (`lofty::tag::Tag` + `ItemKey`): `edit_mp4()`, `apply_metadata_mp4()`, `read_mp4_tag()`, `write_mp4_tag()`, `remove_tags_mp4()`, `remove_all_mp4()`, `display_tags_mp4()`
-  - **OGG** (Vorbis y Opus; `lofty::ogg::tag::VorbisComments` + `VorbisFile`/`OpusFile`): `edit_ogg()`, `apply_metadata_ogg()`, `read_vorbis_tag()`, `write_vorbis_tag()`, `remove_tags_ogg()`, `remove_all_ogg()`, `display_tags_ogg()`
-  - **FLAC** (`lofty::flac::FlacFile` + `VorbisComments`): `read_vorbis_tag` (despacha `Flac`), `display_tags_flac()`, `remove_all_flac()`, `read_flac_pictures()`
-  - **Común**: `detect_format()`, `detect_format_from_bytes()`, `detect_mime_type()`, `detect_cover_mime_type()`, `MP4_ATOM_MAP`, `VORBIS_COMMENT_MAP`
-- **`src/main.rs`** — thin CLI wrapper with clap subcommands: `show`, `edit`, `remove`
-- **`src/output.rs`** — capa de escritura de la salida estándar: contiene el macro `outln!` (equivalente a `println!`) que trata el cierre del pipe como un final normal de la salida, y es el único sitio por el que se escribe en stdout
-- **`src/tests.rs`** — unit tests (module of lib.rs via `#[cfg(test)]`)
-- **`tests/integration_test.rs`** — integration tests spawning the binary via `Command`
-- **Completions** — subcomando `completions <bash|zsh|fish>` en `src/main.rs`, enum `GenerationShell` + `generate_completions()` en `src/lib.rs` (clap_complete 4.5, salida nativa del generador), `print_block()` en `src/output.rs` (bloques multilínea con el mismo contrato de pipe cerrado)
-- **Modo batch** — `show`/`edit`/`remove` aceptan `<FILE>...` (`Vec<PathBuf>`, `num_args = 1..`); cabecera `=== <ruta> ===` en `show` legible con N>1, NDJSON en `show --json` con N>1 (`batch_ndjson`), despacho por archivo con acumulación de fallos (`batch_dispatch`/`BatchOutcome`) y exit agregado (0 solo si todos OK)
-- **`tests/fixtures/`** — `sample.mp3`, `sample.m4a`, `sample.ogg`, `sample.opus` y `sample.flac` reales, más `generate_sample_m4a.sh`, `generate_sample_ogg.sh`, `generate_sample_opus.sh` y `generate_sample_flac.sh`
-
-## Key conventions
-
-- Multiple artists joined with `"; "` separator
-- Apple metadata via `.set_text()` frames: TCMP (`"1"`), TSOA, TSOP, TSOT
-- Lyrics stored in USLT frame, language code `"spa"`
-- Cover art MIME auto-detected from file extension: `.jpg`/`.jpeg` → `image/jpeg`, `.png` → `image/png`, `.webp` → `image/webp`
-- `remove_tags()` accepts both English and Spanish names (title/título, cover/carátula, etc.)
-- Error messages in Spanish
-- Integration tests use `create_temp_mp3()`, `create_temp_m4a()`, `create_temp_ogg()`, `create_temp_opus()`, `create_temp_flac()` y `create_temp_fixture()` helpers + `cleanup_file()`
-- El formato se decide por **contenido** (magic bytes), nunca por la extensión: `detect_format()` / `detect_format_from_bytes()`, y las lecturas de `lofty` vía `read_from()`, nunca `read_from_path()`. El contenedor Ogg se decide por el **códec de su primer paquete**, no por la cabecera de página: Vorbis y Opus están soportados
-- Formatos no soportados (Speex, WAV, AIFF, APE y WavPack): salida distinta de cero, mensaje en español y archivo intacto. El contenedor Ogg **no** se rechaza por ser Ogg: se rechaza cuando el primer paquete de su códec no es de un códec soportado del contenedor (Speex, FLAC, Theora…)
-- MP3 tags are always written as ID3v2.4 through `lofty`; MP4 metadata is written as iTunes-style `ilst` atoms y OGG como comentarios de Vorbis (tabla de mapeo de cada formato en README.md)
-- OGG se escribe con el tipo concreto `VorbisComments`, no con el `Tag` genérico —que descarta las claves sin mapeo y normaliza la caja de las que sí mapean—; `VORBIS_COMMENT_MAP` es la única fuente del mapeo. El comentario es obligatorio en el contenedor: el *vendor* y `ENCODER` no se muestran como metadatos, `edit` conserva las claves ajenas (incluida `ENCODER`) y el vendor, y `remove --all` vacía el comentario y solo preserva el vendor (obligatorio, no se puede eliminar del contenedor)
-- En MP4, `--year` y `--date` comparten el átomo `©day`: si se indican ambos gana `--date` y se avisa por stderr; `--subtitle` va a un átomo *freeform* (`----:com.apple.iTunes:SUBTITLE`)
-- Degradaciones documentadas en MP4: carátula WebP en `covr` con tipo de dato reservado (0) más aviso por stderr; `©lyr` sin código de idioma; `--url` y `--original-artist` se omiten con aviso y nunca se escriben como átomo *freeform*
-- Degradaciones documentadas en OGG: la carátula WebP **no** se degrada (se escribe en `METADATA_BLOCK_PICTURE` con su MIME real y sin aviso, a diferencia de `covr` en MP4); `LYRICS` pierde el código de idioma, igual que `©lyr` en MP4; `--url` y `--original-artist` se omiten con aviso por stderr y nunca se escribe una clave inventada. En MP3 no ocurre ninguna de las tres
-- FLAC nativo se soporta por `fLaC` (offset 0); el códec `\x7fFLAC` dentro del contenedor Ogg NO: se rechaza como los demás códecs Ogg no soportados. La carátula de FLAC viaja como bloque PICTURE del archivo (`read_flac_pictures`), `remove --all` elimina el bloque VORBIS_COMMENT completo (vendor no conservado — degradación documentada), y `--url`/`--original-artist` se omiten con aviso igual que en OGG
-- `--track` y `--season` aceptan `N` o `N/T`. En MP3 y OGG el total se guarda como **texto** (`TRCK`/`TPOS` como `n/total`; `TRACKTOTAL`/`DISCTOTAL` como claves) y admite el cero, mientras que en MP4 el átomo guarda el par en 16 bits y el CLI avisa por stderr cuando el número o el total no son representables (`1..=65535`)
-- Las escrituras pasan por `tag.save_to_path(file, WriteOptions::default())`
-- `id3` es **solo dev-dependency**: los tests de integración releen con esa librería lo que escribe `lofty`, de modo que la verificación es entre librerías distintas. Producción no la usa
-- Al eliminar el último campo restante, el bloque ID3v2 no se conserva vacío: desaparece del archivo, igual que con `remove --all`
-- La salida normal se escribe con `outln!` y **nunca** con `println!`, porque `println!` entra en pánico si el consumidor cierra el pipe; los avisos y errores van con `eprintln!` y no se tocan
-- La integración continua ejecuta `cargo` con `--locked`, de modo que si `Cargo.toml` y `Cargo.lock` no coinciden la CI falla en lugar de actualizar el lock en silencio; por eso, al añadir o cambiar dependencias, el lock MUST commitearse en el mismo cambio
-- El binario precompilado se construye para `x86_64-unknown-linux-musl` y sale **estático** (sin `NEEDED`, sin símbolos `GLIBC_*`), de modo que no depende de la libc del sistema; antes se construía para `x86_64-unknown-linux-gnu` y exigía glibc ≥ 2.34 (medido el 2026-10-25: 4 entradas `NEEDED` y `GLIBC_2.34` como versión más alta), así que no arrancaba en Ubuntu 20.04, Debian 11, RHEL 8 ni CentOS 7. El release publica además el binario desnudo `id3cli-linux-x86_64`, que es la ruta que documenta el README; `release.yml` y `ci.yml` verifican el enlazado estático antes de publicar, y `just build-musl` lo construye en local
-- El pipeline de release empuja la rama y el tag en un **único** `git push --atomic` con reintentos: si no lo consigue, falla de forma explícita antes de publicar, de modo que un fallo deja `main` sin commit de release y sin tag en lugar de a medias (con dos push separados, el servidor llegó a rechazar el tag con `missing necessary objects` mientras la rama ya se había actualizado)
-- El paquete publicado se limita a la lista blanca `include` de `Cargo.toml`, y los patrones de primer nivel van anclados con `/` porque `include` usa la semántica de gitignore: sin la barra inicial, `"README.md"` habría arrastrado al paquete un README del andamiaje de `openspec/`
+- Formato por **contenido** (magic bytes), nunca extensión; `read_from()`, no `read_from_path()`; Ogg por códec del 1er paquete.
+- Salida normal **solo** con `outln!` (`src/output.rs`); **nunca** `println!` (pánico al cerrar el pipe). Errores con `eprintln!`.
+- MP3 siempre ID3v2.4; escrituras vía `tag.save_to_path(file, WriteOptions::default())`.
+- OGG con `VorbisComments` (no `Tag` genérico); `VORBIS_COMMENT_MAP` única fuente; `remove --all` deja el vendor (Ogg), borra el bloque (FLAC).
+- `id3` **solo dev-dependency**; errores en español; `remove_tags()` acepta inglés y español.
+- Varios artistas con `"; "`; lyrics USLT `"spa"`; carátula MIME por extensión.
+- Apple metadata con `.set_text()` (TCMP/TSOA/TSOP/TSOT).
+- `--track`/`--season` aceptan `N` o `N/T` (MP4 avisa fuera de `1..=65535`).
+- FLAC por `fLaC`; `\x7fFLAC` en Ogg **no**; no soportados (Speex, WAV, AIFF, APE, WavPack): exit≠0, archivo intacto.
+- MP4: `--year`/`--date` comparten `©day` (gana `--date`); `--subtitle` a freeform; degradaciones en docs.
+- Al eliminar el último campo, el bloque ID3v2 desaparece del archivo.
+- CI `--locked`: commitear `Cargo.lock` al cambiar dependencias.
+- Binario `x86_64-unknown-linux-musl` **estático**; release con un **único** `git push --atomic`.
 
 ## Git workflow
 
-Git Flow — see [GIT_FLOW.md](GIT_FLOW.md) for full branching model, auto-release pipeline, and conventional commit conventions. La recuperación de un release a medias está en [RELEASE.md](RELEASE.md).
-
-- `main` — production (un merge aquí publica release **solo si** los commits lo justifican: `feat`→minor, `fix`/`perf`/`refactor`→patch, ruptura→major; solo `docs`/`chore`/`style`/`test`/`ci`/`build` o merges no publican)
-- `development` — feature integration
-- `feature/*` — work branches
-- `hotfix/*` — urgent fixes from `main`
-
-Commits: conventional-commit style (`feat:`, `fix:`, `refactor:`, `chore:`, etc.). CI determines version bump automatically — never bump manually.
+- `main` publica release al mergear **solo si** los commits lo justifican; `development` integra; `feature/*`; `hotfix/*` desde `main`; conventional commits (el bump lo calcula CI).
 
 ## Existing instructions
 
-`.github/copilot-instructions.md` has additional detail (ID3 frame mappings, átomos MP4, testing patterns) — consult if deeper context is needed.
+`.github/copilot-instructions.md`: ID3 frames, átomos MP4, testing patterns.
+
+## Git Flow
+
+Este proyecto sigue **Git Flow** estricto. Ver [GIT_FLOW.md](./GIT_FLOW.md):
+
+- Estructura de ramas: `main`, `development`, `feature/*`, `hotfix/*`.
+- Conventional commits con **gitmoji**.
+- Cómo crear features, hotfixes y releases.
+
+## Dónde está el resto
+
+| Tema | Fichero |
+|---|---|
+| Arquitectura y módulos (`src/*`, completions, batch, fixtures) | `docs/agentes-id3cli-arquitectura.md` |
+| Convenciones (formatos, degradaciones, tests, CI, musl, release) | `docs/agentes-id3cli-convenciones.md` |
+| Git Flow: ramas, comandos y releases | `docs/agentes-id3cli-gitflow.md` |
+| Ramas y auto-release | `GIT_FLOW.md` |
+| Recuperar release a medias | `RELEASE.md` |
+| Mapeo de metadatos | `README.md` |
+| ID3 frames, átomos MP4, tests | `.github/copilot-instructions.md` |
